@@ -1765,11 +1765,17 @@ def generate_report(
     pri = {"FAIL": 0, "WARN": 1, "PASS": 2, "N/A": 3}
     overall = min(verdicts, key=lambda x: pri.get(x[1], 3))[1]
 
-    # Filter redundant issues: ECC counter query failures are irrelevant
-    # when DCGM stress test actually validated ECC health
+    # Filter redundant/false-positive issues:
+    # - ECC counter query failures are irrelevant when DCGM stress test validated ECC health
+    # - PCIe "link degradation" from inventory is a false positive: GPUs drop gen at idle
+    #   (Gen4 -> Gen2) to save power. Only width degradation is a real hardware issue,
+    #   and the inventory script (v2.0.3+) no longer flags gen-only differences.
+    #   Filter it here to handle reports generated from older inventory data.
     if stress:
         all_issues = [i for i in all_issues
                       if "counters unavailable" not in i.get("issue", "").lower()]
+    all_issues = [i for i in all_issues
+                  if "pcie link degradation" not in i.get("issue", "").lower()]
 
     # Script metadata
     script_meta = []
