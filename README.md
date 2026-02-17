@@ -111,7 +111,9 @@ The generated report includes:
 
 ## Example Report
 
-See [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/EXAMPLE-GPU-001-MAAS-validation.html) for a sample commissioning report output. Open in any browser.
+**[View live example report](https://luis15pt.github.io/Nexgen-MAAS-validation/examples/EXAMPLE-GPU-001-MAAS-validation.html)**
+
+Or see the source at [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/EXAMPLE-GPU-001-MAAS-validation.html).
 
 ## Adding Scripts to MAAS
 
