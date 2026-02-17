@@ -1747,23 +1747,15 @@ def generate_report(
             url = f"{base}/MAAS/r/machine/{system_id}/commissioning"
         maas_link = f'<a href="{url}" class="maas-link" target="_blank">View in MAAS &rarr;</a>'
 
-    # Verdicts
+    # Verdicts — collect issues first, filter false positives, then derive verdicts
     stages = [("Install", install), ("Inventory", inventory), ("Stress Test", stress)]
-    verdicts = []
     all_issues = []
     for label, data in stages:
         if data:
-            vd = data.get("verdict", {})
-            verdicts.append((label, vd.get("overall", "N/A")))
-            for iss in vd.get("issues", []):
+            for iss in data.get("verdict", {}).get("issues", []):
                 c = dict(iss)
                 c["source"] = label
                 all_issues.append(c)
-        else:
-            verdicts.append((label, "N/A"))
-
-    pri = {"FAIL": 0, "WARN": 1, "PASS": 2, "N/A": 3}
-    overall = min(verdicts, key=lambda x: pri.get(x[1], 3))[1]
 
     # Filter redundant/false-positive issues:
     # - ECC counter query failures are irrelevant when DCGM stress test validated ECC health
@@ -1776,6 +1768,22 @@ def generate_report(
                       if "counters unavailable" not in i.get("issue", "").lower()]
     all_issues = [i for i in all_issues
                   if "pcie link degradation" not in i.get("issue", "").lower()]
+
+    # Derive per-stage verdicts: if all issues for a stage were filtered out,
+    # upgrade from WARN to PASS (FAIL stays as-is since those are real failures)
+    remaining_sources = {i["source"] for i in all_issues}
+    verdicts = []
+    for label, data in stages:
+        if data:
+            raw = data.get("verdict", {}).get("overall", "N/A")
+            if raw == "WARN" and label not in remaining_sources:
+                raw = "PASS"
+            verdicts.append((label, raw))
+        else:
+            verdicts.append((label, "N/A"))
+
+    pri = {"FAIL": 0, "WARN": 1, "PASS": 2, "N/A": 3}
+    overall = min(verdicts, key=lambda x: pri.get(x[1], 3))[1]
 
     # Script metadata
     script_meta = []
