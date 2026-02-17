@@ -1293,10 +1293,13 @@ def ecc_summary(ecc: dict) -> str:
 
 def pcie_str(g: dict) -> str:
     gen = g.get("pcie_gen_max", g.get("pcie_gen_current", "?"))
-    w = g.get("pcie_width_max", g.get("pcie_width_current", "?"))
-    s = f"Gen{gen} x{w}"
-    if g.get("pcie_degraded"):
-        return f'<span class="alert">{s} (degraded)</span>'
+    w_max = g.get("pcie_width_max", g.get("pcie_width_current", "?"))
+    w_cur = g.get("pcie_width_current", w_max)
+    s = f"Gen{gen} x{w_max}"
+    # Only flag width degradation (real hardware issue: bad slot/riser/cable).
+    # Gen dropping at idle (Gen4 -> Gen2) is normal GPU power saving.
+    if str(w_cur) != str(w_max):
+        return f'<span class="alert">{s} (width x{w_cur})</span>'
     return s
 
 

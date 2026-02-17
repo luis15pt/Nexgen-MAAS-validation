@@ -289,11 +289,12 @@ collect_gpu_data() {
             fi
         done
 
-        # PCIe degradation (nvidia-smi gen/width comparison)
+        # PCIe degradation — only flag width mismatch (real hardware issue).
+        # Gen dropping at idle (e.g. Gen4 -> Gen2) is normal power saving.
         local pdeg="false"
-        if [[ "$f_pg_c" != "$f_pg_m" || "$f_pw_c" != "$f_pw_m" ]]; then
+        if [[ "$f_pw_c" != "$f_pw_m" ]]; then
             pdeg="true"; pcie_ok="false"
-            warn "  GPU $f_idx: PCIe degraded Gen${f_pg_c}x${f_pw_c} (max Gen${f_pg_m}x${f_pw_m})"
+            warn "  GPU $f_idx: PCIe width degraded x${f_pw_c} (max x${f_pw_m})"
         fi
 
         # NUMA node
