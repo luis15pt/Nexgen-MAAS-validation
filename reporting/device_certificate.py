@@ -2613,14 +2613,16 @@ Examples:
     else:
         p.error("Provide --host for MAAS API mode, or --install/--inventory/--stress for file mode")
 
-    # Write output
+    # Write output — default to reports/ directory relative to repo root
     output_path = args.output
     if not output_path and args.host:
-        # Auto-generate: <hostname>-MAAS-validation.html
-        output_path = f"{args.host}-MAAS-validation.html"
+        reports_dir = Path(__file__).resolve().parent.parent / "reports"
+        reports_dir.mkdir(exist_ok=True)
+        output_path = str(reports_dir / f"{args.host}-MAAS-validation.html")
 
     if output_path:
         out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(html, encoding="utf-8")
         log(f"Report written: {out}")
     else:
