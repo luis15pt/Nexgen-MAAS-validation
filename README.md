@@ -8,6 +8,7 @@ Automated GPU commissioning, validation, and certification pipeline for bare-met
 Nexgen-MAAS-validation/
 ├── README.md
 ├── .gitignore
+├── .env.example                             # MAAS credentials template
 ├── commissioning-scripts/        # MAAS commissioning scripts (run in order)
 │   ├── 97-nexgen-gpu-install-580-12.8.sh   # Step 1: Driver + CUDA + DCGM install
 │   ├── 98-nexgen-gpu-inventory.sh          # Step 2: GPU inventory & health check
@@ -81,14 +82,29 @@ Override with: `DCGM_DIAG_LEVEL=4`
 pip install requests-oauthlib
 ```
 
+### Configuration
+
+Copy the example env file and fill in your MAAS credentials:
+
+```bash
+cp .env.example .env
+```
+
+```ini
+# .env
+MAAS_URL=http://your-maas-server:5240/MAAS
+MAAS_API_KEY=consumer:token:secret
+```
+
+The `.env` file is git-ignored and will never be committed. The script loads it automatically — no need to export variables manually.
+
+You can also use env vars or CLI flags (`--maas-url`, `--api-key`) which take priority over `.env`.
+
 ### Usage
 
 **From MAAS API (recommended):**
 
 ```bash
-export MAAS_URL=http://maas.example.com:5240/MAAS
-export MAAS_API_KEY=consumer:token:secret
-
 python3 reporting/device_certificate.py --host EXAMPLE-GPU-001 -o reports/EXAMPLE-GPU-001-MAAS-validation.html
 ```
 

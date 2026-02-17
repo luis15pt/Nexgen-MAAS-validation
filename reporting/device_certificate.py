@@ -10,7 +10,10 @@ lshw DIMM inventory, and network/storage info, then generates a
 consolidated HTML certification report.
 
 Usage:
-  # Set credentials once
+  # Set credentials via .env file (recommended)
+  cp .env.example .env   # then edit with your MAAS_URL and MAAS_API_KEY
+
+  # Or export manually
   export MAAS_URL=http://maas.example.com:5240/MAAS
   export MAAS_API_KEY=consumer:token:secret
 
@@ -42,7 +45,27 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
-__version__ = "3.2.0"
+__version__ = "3.2.1"
+
+# ---------------------------------------------------------------------------
+# .env file support — load key=value pairs into os.environ
+# ---------------------------------------------------------------------------
+def _load_dotenv() -> None:
+    """Load .env file from the repo root (parent of reporting/) if it exists."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+    with env_path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip("\"'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+_load_dotenv()
 
 # ---------------------------------------------------------------------------
 # MAAS API CLIENT
