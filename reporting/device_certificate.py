@@ -1818,7 +1818,16 @@ def generate_report(
     # --- Hardware and Software tables (split into two-col layout) ---
     # Merge MAAS machine data with script data for a richer view
     cpu_str = hw.get("cpu_model", sys_info.get("cpu_model", "--"))
-    cpu_count = mach.get("cpu_count", sys_info.get("cpu_total_threads", "?"))
+    total_threads = mach.get("cpu_count", sys_info.get("cpu_total_threads", 0))
+    # Derive socket count and cores from NUMA topology
+    num_sockets = len(numa_nodes_maas) if numa_nodes_maas else 0
+    total_cores = sum(len(n.get("cores", [])) for n in numa_nodes_maas) if numa_nodes_maas else 0
+    if num_sockets > 1 and total_cores:
+        cpu_label = f'{num_sockets}&times; {escape(str(cpu_str))} &mdash; {total_cores} cores / {total_threads} threads'
+    elif total_cores:
+        cpu_label = f'{escape(str(cpu_str))} &mdash; {total_cores} cores / {total_threads} threads'
+    else:
+        cpu_label = f'{escape(str(cpu_str))} &mdash; {total_threads} threads'
     ram_mb = mach.get("memory", 0)
     ram_gb = round(ram_mb / 1024, 1) if ram_mb else sys_info.get("ram_total_gb", "?")
     motherboard = hw.get("mainboard_product", sys_info.get("motherboard", "--"))
@@ -1836,7 +1845,7 @@ def generate_report(
         ("Platform", escape(product) or "--"),
         ("Motherboard", escape(motherboard)),
         ("BIOS", escape(bios_str)),
-        ("CPU", f'{escape(str(cpu_str))} &mdash; {cpu_count} threads'),
+        ("CPU", cpu_label),
         ("RAM", f'{ram_gb} GB'),
     ]
 
