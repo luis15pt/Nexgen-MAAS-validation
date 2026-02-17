@@ -1,0 +1,3 @@
+# Generated reports — keep the folder, ignore the contents
+reports/*
+!reports/.gitkeep
