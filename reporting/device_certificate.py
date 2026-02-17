@@ -1292,11 +1292,11 @@ def ecc_summary(ecc: dict) -> str:
 
 
 def pcie_str(g: dict) -> str:
-    gen = g.get("pcie_gen_current", "?")
-    w = g.get("pcie_width_current", "?")
+    gen = g.get("pcie_gen_max", g.get("pcie_gen_current", "?"))
+    w = g.get("pcie_width_max", g.get("pcie_width_current", "?"))
     s = f"Gen{gen} x{w}"
     if g.get("pcie_degraded"):
-        return f'<span class="alert">{s}</span>'
+        return f'<span class="alert">{s} (degraded)</span>'
     return s
 
 
