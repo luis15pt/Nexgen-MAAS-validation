@@ -172,3 +172,17 @@ Commission Machine in MAAS
          ▼
    device_certificate.py ─► reports/<hostname>-MAAS-validation.html
 ```
+
+## Design Decisions
+
+**Three scripts, not one** -- Splitting install/inventory/stress into separate scripts means MAAS shows granular pass/fail per phase. If the driver install fails, you see that immediately without wading through inventory output.
+
+**Pinned driver versions** -- After hitting `nvidia-smi` field incompatibilities with driver 590 (removed `cuda_version` query field, changed `memory.type` behavior), we pinned to driver 580 + CUDA 12.8 and encoded versions in the filename.
+
+**ASCII-only script output** -- MAAS terminal rendering mangles UTF-8 box-drawing characters and emoji. All script output uses plain ASCII formatting.
+
+**Resilient nvidia-smi queries** -- Every field query has a fallback. If a field doesn't exist in the driver version (e.g., `retired_pages` on consumer GPUs), it degrades gracefully to "N/A" rather than crashing.
+
+**DCGM optional** -- DCGM packages aren't always available for every driver version. The stress test detects DCGM availability and exits cleanly if absent, rather than failing the commissioning run.
+
+**Dual mode report generator** -- Supports both MAAS API mode (pulls data directly, recommended) and file-based mode (offline, self-contained) for environments without API access at report time.
