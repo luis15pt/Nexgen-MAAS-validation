@@ -4,7 +4,7 @@
 # title: NexGen GPU Inventory & Health Check
 # description: Collects GPU inventory (serials, UUIDs, VRAM, ECC counters,
 #   PCIe link status, NUMA topology) using a single bulk nvidia-smi query.
-#   No packages installed -- requires 97-nexgen-gpu-install to run first.
+#   No packages installed -- requires 90-nexgen-gpu-install to run first.
 #   Designed to run every commissioning cycle. Outputs structured JSON.
 #   Resilient to nvidia-smi field changes across driver versions.
 # script_type: commissioning
@@ -21,7 +21,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 WORK_DIR="/tmp/gpu-inventory-$$"
-SCRIPT_VERSION="2.0.2"
+SCRIPT_VERSION="2.0.3"
 
 ###############################################################################
 # LOGGING
@@ -92,7 +92,7 @@ preflight() {
     command -v dmidecode   &>/dev/null || missing+=" dmidecode"
 
     if [[ -n "$missing" ]]; then
-        err "Missing required tools:$missing -- run 97-nexgen-gpu-install first"
+        err "Missing required tools:$missing -- run 90-nexgen-gpu-install first"
         jq -n --arg v "$SCRIPT_VERSION" --arg m "Missing:$missing" '{
             report_metadata:{script_version:$v, script_name:"gpu-inventory"},
             verdict:{overall:"FAIL", issues:[{"issue":$m}]}
@@ -101,7 +101,7 @@ preflight() {
     fi
 
     if ! nvidia-smi &>/dev/null; then
-        err "nvidia-smi not functional -- run 97-nexgen-gpu-install first"
+        err "nvidia-smi not functional -- run 90-nexgen-gpu-install first"
         jq -n --arg v "$SCRIPT_VERSION" '{
             report_metadata:{script_version:$v, script_name:"gpu-inventory"},
             verdict:{overall:"FAIL", issues:[{"issue":"nvidia-smi not functional"}]}
@@ -429,6 +429,9 @@ assemble_report() {
         }'
 
     log "=== INVENTORY COMPLETE -- Verdict: $overall ==="
+
+    [[ "$overall" == "FAIL" ]] && return 1
+    return 0
 }
 
 ###############################################################################
@@ -444,13 +447,20 @@ main() {
     preflight
     collect_system_context
     collect_gpu_data
-    assemble_report
+    local inventory_ok=true
+    if ! assemble_report; then
+        inventory_ok=false
+    fi
 
     rm -rf "$WORK_DIR"
 
     log "=========================================="
     log "Inventory complete. Total time: $(( $(date +%s) - SCRIPT_START ))s"
     log "=========================================="
+
+    if [[ "$inventory_ok" == "false" ]]; then
+        exit 1
+    fi
 }
 
 main "$@"

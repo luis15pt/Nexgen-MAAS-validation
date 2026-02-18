@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- Start MAAS Metadata ---
-# name: 97-nexgen-gpu-install-580-12.8
+# name: 90-nexgen-gpu-install-580-12.8
 # title: NexGen GPU Driver 580 + CUDA 12.8 + DCGM 4.x Installation
 # description: Installs nvidia-driver-580-server-open, cuda-toolkit-12-8,
 #   DCGM 4.x (datacenter-gpu-manager-4-cuda13), and support tools.
@@ -24,7 +24,7 @@ NVIDIA_DRIVER="${NVIDIA_DRIVER:-nvidia-driver-580-server-open}"
 CUDA_TOOLKIT="${CUDA_TOOLKIT:-cuda-toolkit-12-8}"
 DCGM_CUDA_MAJOR="${DCGM_CUDA_MAJOR:-13}"
 WORK_DIR="/tmp/gpu-install-$$"
-SCRIPT_VERSION="2.1.1"
+SCRIPT_VERSION="2.1.2"
 
 ###############################################################################
 # LOGGING
@@ -164,6 +164,12 @@ load_and_verify() {
         err "Failed to load nvidia kernel module"
         dkms status >&2 2>&1 || true
         tail -30 /var/lib/dkms/nvidia/*/build/make.log 2>/dev/null >&2 || true
+        log "--- PCIe diagnostics ---"
+        lspci -nn | grep -i "10de" >&2 2>&1 || warn "No NVIDIA devices in lspci"
+        lspci -vvs "$(lspci -n | grep '10de:' | head -1 | awk '{print $1}')" >&2 2>&1 || true
+        log "Secure Boot status:"
+        mokutil --sb-state >&2 2>&1 || true
+        log "--- end PCIe diagnostics ---"
         return 1
     }
     modprobe nvidia-uvm >&2 2>&1 || warn "nvidia-uvm failed to load"
@@ -277,6 +283,15 @@ output_report() {
     test_end=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     local duration=$(( $(date +%s) - SCRIPT_START ))
 
+    if [[ ! -f "$WORK_DIR/install_result.json" ]]; then
+        warn "install_result.json missing -- module load likely failed"
+        jq -n '{
+            nvidia_driver_version:"unknown",cuda_version:"unknown",
+            gpu_count:0,driver_package:"unknown",cuda_package:"unknown",
+            dcgm_available:false,dcgm_version:"not installed",dcgm_gpu_count:0
+        }' > "$WORK_DIR/install_result.json"
+    fi
+
     local overall="PASS"
     local issues="[]"
 
@@ -353,8 +368,16 @@ main() {
     }
 
     install_packages
-    load_and_verify
+    local load_ok=true
+    if ! load_and_verify; then
+        load_ok=false
+        warn "load_and_verify failed -- generating FAIL report"
+    fi
     output_report
+
+    if [[ "$load_ok" == "false" ]]; then
+        exit 1
+    fi
 
     rm -rf "$WORK_DIR"
 

@@ -3,7 +3,7 @@
 # name: 99-nexgen-gpu-stress-test
 # title: NexGen GPU Stress Test (DCGM Diagnostics)
 # description: Runs DCGM diagnostics at configurable levels (1-4).
-#   Requires 97-nexgen-gpu-install to have installed DCGM 4.x.
+#   Requires 90-nexgen-gpu-install to have installed DCGM 4.x.
 #   Level 1: ~1 min quick check. Level 4: ~90 min full validation.
 #   Override level: DCGM_DIAG_LEVEL=4
 # script_type: commissioning
@@ -21,7 +21,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 ###############################################################################
 DCGM_DIAG_LEVEL="${DCGM_DIAG_LEVEL:-3}"
 WORK_DIR="/tmp/gpu-stress-$$"
-SCRIPT_VERSION="2.1.2"
+SCRIPT_VERSION="2.1.3"
 
 ###############################################################################
 # LOGGING
@@ -84,7 +84,7 @@ preflight() {
     command -v nvidia-smi &>/dev/null || missing+=" nvidia-smi"
     command -v jq         &>/dev/null || missing+=" jq"
 
-    [[ -n "$missing" ]] && fail_json "Missing required tools:$missing -- run 97-nexgen-gpu-install first"
+    [[ -n "$missing" ]] && fail_json "Missing required tools:$missing -- run 90-nexgen-gpu-install first"
 
     # Ensure DCGM service running (4.x: systemd, 3.x: nv-hostengine)
     if systemctl is-active nvidia-dcgm &>/dev/null 2>&1; then
@@ -333,6 +333,9 @@ run_diagnostics() {
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus},
             dcgm_diagnostics:{run_level:$level, exit_code:$exit_code, duration_seconds:$diag_dur, test_results:$results}
         }'
+
+    [[ "$overall" == "FAIL" ]] && return 1
+    return 0
 }
 
 ###############################################################################
@@ -347,13 +350,20 @@ main() {
     log "=========================================="
 
     preflight
-    run_diagnostics
+    local stress_ok=true
+    if ! run_diagnostics; then
+        stress_ok=false
+    fi
 
     rm -rf "$WORK_DIR"
 
     log "=========================================="
     log "Stress test complete. Total time: $(( $(date +%s) - SCRIPT_START ))s"
     log "=========================================="
+
+    if [[ "$stress_ok" == "false" ]]; then
+        exit 1
+    fi
 }
 
 main "$@"
