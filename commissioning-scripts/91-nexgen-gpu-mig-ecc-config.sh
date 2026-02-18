@@ -3,15 +3,14 @@
 # name: 91-nexgen-gpu-mig-ecc-config
 # title: NexGen GPU MIG Disable & ECC Enable
 # description: Disables MIG mode and enables ECC on all NVIDIA GPUs.
-#   Both changes require a reboot to take effect. On first run, if changes
-#   are needed, the script configures GPUs and reboots. On second run
-#   (after reboot), it verifies the config is correct and exits cleanly.
+#   Changes are written to GPU NVRAM, then activated via nvidia-smi --gpu-reset
+#   (no full reboot needed). Falls back to "pending reboot" if reset fails.
 #   Requires 90-nexgen-gpu-install to run first.
 # script_type: commissioning
 # hardware_type: gpu
 # timeout: 00:05:00
 # destructive: false
-# may_reboot: true
+# may_reboot: false
 # --- End MAAS Metadata ---
 
 set -o pipefail
@@ -21,7 +20,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 WORK_DIR="/tmp/gpu-mig-ecc-$$"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 
 ###############################################################################
 # LOGGING
@@ -92,10 +91,10 @@ query_gpu_field() {
 }
 
 ###############################################################################
-# CONFIGURE GPUS (first run)
+# CONFIGURE GPUS -- write NVRAM changes
 ###############################################################################
 configure_gpus() {
-    log "=== Configuring GPUs (first run) ==="
+    log "=== Configuring GPU NVRAM ==="
 
     local needs_reboot="false"
     local gpu_configs="[]"
@@ -170,49 +169,96 @@ configure_gpus() {
 }
 
 ###############################################################################
-# VERIFY GPUS (post-reboot)
+# RESET GPUs & VERIFY -- activate NVRAM changes without full reboot
 ###############################################################################
-verify_gpus() {
-    log "=== Post-reboot verification (HAS_STARTED=True) ==="
+reset_and_verify() {
+    log "=== GPU reset to activate NVRAM changes ==="
 
-    local gpu_configs="[]"
-    local overall="PASS"
-    local issues="[]"
+    local gpu_configs overall issues
+    gpu_configs=$(cat "$WORK_DIR/gpu_configs.json" 2>/dev/null || echo "[]")
+    overall=$(cat "$WORK_DIR/overall.txt" 2>/dev/null || echo "PASS")
+    issues=$(cat "$WORK_DIR/issues.json" 2>/dev/null || echo "[]")
 
-    local gpu
-    for (( gpu=0; gpu<SMI_GPU_COUNT; gpu++ )); do
-        local mig_now ecc_now
+    # Collect GPU indices that had changes
+    local gpus_to_reset
+    gpus_to_reset=$(echo "$gpu_configs" | jq -r \
+        '.[] | select(.mig_changed==true or .ecc_changed==true) | .gpu_index')
 
-        mig_now=$(query_gpu_field "$gpu" "mig.mode.current")
-        ecc_now=$(query_gpu_field "$gpu" "ecc.mode.current")
-        log "  GPU $gpu: MIG=$mig_now, ECC=$ecc_now"
+    if [[ -z "$gpus_to_reset" ]]; then
+        log "No GPUs need reset"
+        return
+    fi
 
-        # Warn if MIG is still enabled after reboot
-        if [[ "$mig_now" == "Enabled" ]]; then
-            warn "  GPU $gpu: MIG still enabled after reboot"
-            [[ "$overall" == "PASS" ]] && overall="WARN"
-            issues=$(echo "$issues" | jq --argjson g "$gpu" \
-                '. + [{"issue":"GPU \($g): MIG still enabled after reboot","severity":"warning"}]')
+    # Reset each changed GPU
+    local gpu reset_failed="false"
+    for gpu in $gpus_to_reset; do
+        log "  Resetting GPU $gpu..."
+        if nvidia-smi --gpu-reset -i "$gpu" >&2 2>&1; then
+            log "  GPU $gpu: reset OK"
+        else
+            warn "  GPU $gpu: reset failed"
+            reset_failed="true"
         fi
-
-        # Warn if ECC is still disabled after reboot
-        if [[ "$ecc_now" == "Disabled" ]]; then
-            warn "  GPU $gpu: ECC still disabled after reboot"
-            [[ "$overall" == "PASS" ]] && overall="WARN"
-            issues=$(echo "$issues" | jq --argjson g "$gpu" \
-                '. + [{"issue":"GPU \($g): ECC still disabled after reboot","severity":"warning"}]')
-        fi
-
-        gpu_configs=$(echo "$gpu_configs" | jq \
-            --argjson idx "$gpu" \
-            --arg mig "$mig_now" --arg ecc "$ecc_now" \
-            '. + [{gpu_index:$idx, mig_status:$mig, ecc_status:$ecc}]')
     done
 
-    echo "$gpu_configs" > "$WORK_DIR/gpu_configs.json"
-    echo "false" > "$WORK_DIR/needs_reboot.txt"
+    # Wait for GPUs to recover
+    log "  Waiting for GPUs to recover..."
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        sleep 3
+        if nvidia-smi &>/dev/null; then
+            log "  GPUs available after $((attempt * 3))s"
+            break
+        fi
+        [[ "$attempt" -eq 5 ]] && warn "  nvidia-smi still not responding after 15s"
+    done
+
+    # Verify each GPU that had changes
+    local still_pending="false"
+    for gpu in $gpus_to_reset; do
+        local mig_changed ecc_changed
+        mig_changed=$(echo "$gpu_configs" | jq -r ".[] | select(.gpu_index==$gpu) | .mig_changed")
+        ecc_changed=$(echo "$gpu_configs" | jq -r ".[] | select(.gpu_index==$gpu) | .ecc_changed")
+
+        if [[ "$mig_changed" == "true" ]]; then
+            local mig_now
+            mig_now=$(query_gpu_field "$gpu" "mig.mode.current")
+            if [[ "$mig_now" == "Disabled" ]]; then
+                log "  GPU $gpu: MIG confirmed Disabled"
+            else
+                warn "  GPU $gpu: MIG still $mig_now after reset (needs full reboot)"
+                still_pending="true"
+                issues=$(echo "$issues" | jq --argjson g "$gpu" --arg s "$mig_now" \
+                    '. + [{"issue":"GPU \($g): MIG still \($s) after reset, pending full reboot","severity":"warning"}]')
+            fi
+        fi
+
+        if [[ "$ecc_changed" == "true" ]]; then
+            local ecc_now
+            ecc_now=$(query_gpu_field "$gpu" "ecc.mode.current")
+            if [[ "$ecc_now" == "Enabled" ]]; then
+                log "  GPU $gpu: ECC confirmed Enabled"
+            else
+                warn "  GPU $gpu: ECC still $ecc_now after reset (needs full reboot)"
+                still_pending="true"
+                issues=$(echo "$issues" | jq --argjson g "$gpu" --arg s "$ecc_now" \
+                    '. + [{"issue":"GPU \($g): ECC still \($s) after reset, pending full reboot","severity":"warning"}]')
+            fi
+        fi
+    done
+
+    if [[ "$still_pending" == "true" || "$reset_failed" == "true" ]]; then
+        [[ "$overall" == "PASS" ]] && overall="WARN"
+        if [[ "$still_pending" == "true" ]]; then
+            issues=$(echo "$issues" | jq \
+                '. + [{"issue":"Some NVRAM changes did not activate via GPU reset, will take effect on deployment reboot","severity":"info"}]')
+        fi
+    fi
+
     echo "$overall" > "$WORK_DIR/overall.txt"
     echo "$issues" > "$WORK_DIR/issues.json"
+    # Changes activated (or noted as pending) -- no reboot needed
+    echo "false" > "$WORK_DIR/needs_reboot.txt"
 }
 
 ###############################################################################
@@ -262,31 +308,21 @@ main() {
     log "=========================================="
 
     preflight
+    configure_gpus
 
-    if [[ "${HAS_STARTED:-}" == "True" ]]; then
-        # Post-reboot: verify changes took effect
-        verify_gpus
-    else
-        # First run: configure GPUs
-        configure_gpus
+    local needs_reboot
+    needs_reboot=$(cat "$WORK_DIR/needs_reboot.txt" 2>/dev/null || echo "false")
+
+    # If NVRAM changes were made, activate them via GPU reset (no full reboot).
+    # This keeps the MAAS ephemeral environment intact so scripts 98/99 can run.
+    if [[ "$needs_reboot" == "true" ]]; then
+        reset_and_verify
     fi
 
     local overall
     overall=$(cat "$WORK_DIR/overall.txt" 2>/dev/null || echo "PASS")
-    local needs_reboot
-    needs_reboot=$(cat "$WORK_DIR/needs_reboot.txt" 2>/dev/null || echo "false")
 
     output_report
-
-    # If changes were made, reboot to apply
-    if [[ "$needs_reboot" == "true" ]]; then
-        log "=========================================="
-        log "Changes require reboot -- rebooting now..."
-        log "=========================================="
-        rm -rf "$WORK_DIR"
-        sudo reboot
-        sleep 120  # reboot will kill this process
-    fi
 
     rm -rf "$WORK_DIR"
 

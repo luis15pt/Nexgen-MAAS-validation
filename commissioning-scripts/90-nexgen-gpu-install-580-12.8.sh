@@ -85,6 +85,8 @@ detect_gpus() {
 install_packages() {
     log "=== Installing packages ==="
     export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=l          # list only -- never auto-restart services
+    export NEEDRESTART_SUSPEND=1       # fully suspend needrestart hooks
 
     # Base tools
     log "Installing base tools..."
@@ -197,9 +199,9 @@ load_and_verify() {
 
     if command -v dcgmi &>/dev/null; then
         # Start DCGM service (4.x: systemd nvidia-dcgm, 3.x: nv-hostengine)
-        if systemctl is-active nvidia-dcgm &>/dev/null 2>&1; then
+        if systemctl is-active --quiet nvidia-dcgm 2>/dev/null; then
             log "nvidia-dcgm service already running"
-        elif systemctl start nvidia-dcgm &>/dev/null 2>&1; then
+        elif systemctl start nvidia-dcgm >/dev/null 2>&1; then
             log "Started nvidia-dcgm systemd service"
         elif ! pgrep -x nv-hostengine &>/dev/null; then
             log "Starting nv-hostengine..."
