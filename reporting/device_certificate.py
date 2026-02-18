@@ -1316,47 +1316,138 @@ def extract_num(text: str, pattern: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _resolve_gpu_id(r: dict) -> int | None:
+    """Try to determine real GPU ID from a single DCGM result entry.
+
+    Returns the GPU index (int) if found, or None if indeterminate.
+    Checks the explicit gpu_id field first, then parses the info string
+    for patterns like 'GPU 3 calculated ...' or 'ECC is not enabled on GPU 7'.
+    """
+    gid = r.get("gpu_id")
+    if gid is not None:
+        try:
+            return int(gid)
+        except (ValueError, TypeError):
+            pass
+    info = info_to_str(r.get("info", ""))
+    m = re.search(r'\bGPU\s+(\d+)\b', info)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _find_remap_skipped_gpus(diag: dict, n_gpus: int) -> set[int]:
+    """Identify GPU IDs skipped due to row-remapping failure.
+
+    Scans tests that carry explicit GPU IDs in their info strings to
+    determine which GPU(s) are absent when a row-remap skip is present.
+    """
+    all_ids = set(range(n_gpus))
+    skipped: set[int] = set()
+    for t in diag.get("test_results", []):
+        found_ids: set[int] = set()
+        has_remap_skip = False
+        for r in t.get("results", []):
+            gid = _resolve_gpu_id(r)
+            if gid is not None and 0 <= gid < n_gpus:
+                found_ids.add(gid)
+            if "row remapping" in info_to_str(r.get("info", "")).lower():
+                has_remap_skip = True
+        if has_remap_skip and found_ids:
+            skipped |= (all_ids - found_ids)
+    return skipped
+
+
+def _build_gpu_id_map(results_list: list[dict], n_gpus: int,
+                      remap_skipped: set[int]) -> list[int]:
+    """Map each result-array index to the real GPU ID.
+
+    Uses three strategies in order:
+      1. Explicit gpu_id / info-string extraction
+      2. Row-remapping skip entries matched to known-skipped GPUs
+      3. Remaining unknowns filled by elimination against the full 0..n-1 set
+    Falls back to array-index if nothing else resolves.
+    """
+    n = len(results_list)
+    mapping: list[int | None] = [None] * n
+
+    # --- Pass 1: resolve from gpu_id field or info string ---
+    for idx, r in enumerate(results_list):
+        gid = _resolve_gpu_id(r)
+        if gid is not None and 0 <= gid < n_gpus:
+            mapping[idx] = gid
+
+    # --- Pass 2: assign row-remapping skip entries ---
+    remap_indices = [
+        idx for idx, r in enumerate(results_list)
+        if mapping[idx] is None
+        and "row remapping" in info_to_str(r.get("info", "")).lower()
+    ]
+    unassigned_remap = sorted(remap_skipped - {g for g in mapping if g is not None})
+    if remap_indices and len(remap_indices) == len(unassigned_remap):
+        for idx, gid in zip(remap_indices, unassigned_remap):
+            mapping[idx] = gid
+
+    # --- Pass 3: fill remaining unknowns by elimination ---
+    known_ids = {g for g in mapping if g is not None}
+    missing_ids = sorted(set(range(n_gpus)) - known_ids)
+    unknown_indices = [i for i in range(n) if mapping[i] is None]
+    if len(missing_ids) == len(unknown_indices):
+        for idx, gid in zip(unknown_indices, missing_ids):
+            mapping[idx] = gid
+    else:
+        # Last resort: use array index
+        for idx in unknown_indices:
+            mapping[idx] = idx if idx < n_gpus else 0
+
+    return mapping  # type: ignore[return-value]
+
+
 # ---------------------------------------------------------------------------
 # STRESS METRIC EXTRACTION (from v2.2)
 # ---------------------------------------------------------------------------
 
 def build_stress_metrics(diag: dict, n_gpus: int) -> list[dict]:
     metrics = [{} for _ in range(n_gpus)]
+    remap_skipped = _find_remap_skipped_gpus(diag, n_gpus)
     results = diag.get("test_results", [])
     for t in results:
         name = t.get("test", "")
-        for idx, r in enumerate(t.get("results", [])):
-            if idx >= n_gpus:
-                break
+        per_gpu = t.get("results", [])
+        gpu_map = _build_gpu_id_map(per_gpu, n_gpus, remap_skipped)
+        for idx, r in enumerate(per_gpu):
+            gpu_id = gpu_map[idx]
+            if gpu_id >= n_gpus:
+                continue
             info = info_to_str(r.get("info", ""))
             if not info:
                 continue
             if name == "diagnostic":
                 val = extract_num(info, r'approximately\s+([\d.]+)\s+gigaflops')
                 if val:
-                    metrics[idx]["gflops"] = val
+                    metrics[gpu_id]["gflops"] = val
             elif name == "pcie":
                 bw = extract_num(info, r'bidirectional bandwidth[:\s]+([\d.]+)')
                 lat = extract_num(info, r'GPU to Host latency[:\s]+([\d.]+)')
                 if bw:
-                    metrics[idx]["pcie_bw"] = bw
+                    metrics[gpu_id]["pcie_bw"] = bw
                 if lat:
-                    metrics[idx]["pcie_lat"] = lat
+                    metrics[gpu_id]["pcie_lat"] = lat
             elif name == "targeted_power":
                 avg = extract_num(info, r'average power usage[:\s]+([\d.]+)')
                 mx = extract_num(info, r'max power[:\s]+([\d.]+)')
                 if avg:
-                    metrics[idx]["power_avg"] = avg
+                    metrics[gpu_id]["power_avg"] = avg
                 if mx:
-                    metrics[idx]["power_max"] = mx
+                    metrics[gpu_id]["power_max"] = mx
             elif name == "targeted_stress":
                 lvl = extract_num(info, r'stress level\s+([\d]+)')
                 if lvl:
-                    metrics[idx]["stress_lvl"] = lvl
+                    metrics[gpu_id]["stress_lvl"] = lvl
             elif name == "memory":
                 pct = extract_num(info, r'\(([\d.]+)%\)')
                 if pct:
-                    metrics[idx]["mem_pct"] = pct
+                    metrics[gpu_id]["mem_pct"] = pct
     return metrics
 
 
@@ -1364,24 +1455,32 @@ def render_test_matrix(diag: dict, n_gpus: int) -> str:
     results = diag.get("test_results", [])
     if not results:
         return ""
+    remap_skipped = _find_remap_skipped_gpus(diag, n_gpus)
     gpu_headers = "".join(f"<th>{i}</th>" for i in range(n_gpus))
     rows = ""
     for t in results:
         name = t.get("test", "?")
-        cells = ""
-        for r in t.get("results", []):
+        per_gpu = t.get("results", [])
+        gpu_map = _build_gpu_id_map(per_gpu, n_gpus, remap_skipped)
+        # Build cells indexed by real GPU ID
+        cells_by_gpu = ['<td><span class="dot-skip">?</span></td>'] * n_gpus
+        for idx, r in enumerate(per_gpu):
+            gpu_id = gpu_map[idx]
+            if gpu_id >= n_gpus:
+                continue
             st = r.get("status", "?").lower()
             if "pass" in st:
-                cells += '<td><span class="dot-pass">&#10003;</span></td>'
+                cell = '<td><span class="dot-pass">&#10003;</span></td>'
             elif "fail" in st:
-                cells += '<td><span class="dot-fail">&#10007;</span></td>'
+                cell = '<td><span class="dot-fail">&#10007;</span></td>'
             elif "warn" in st:
-                cells += '<td><span class="dot-warn">!</span></td>'
+                cell = '<td><span class="dot-warn">!</span></td>'
             elif "skip" in st:
-                cells += '<td><span class="dot-skip">&mdash;</span></td>'
+                cell = '<td><span class="dot-skip">&mdash;</span></td>'
             else:
-                cells += '<td><span class="dot-skip">?</span></td>'
-        rows += f'<tr><td class="test-name">{escape(name)}</td>{cells}</tr>'
+                cell = '<td><span class="dot-skip">?</span></td>'
+            cells_by_gpu[gpu_id] = cell
+        rows += f'<tr><td class="test-name">{escape(name)}</td>{"".join(cells_by_gpu)}</tr>'
 
     total_pass = sum(1 for t in results for r in t.get("results", []) if "pass" in r.get("status", "").lower())
     total_fail = sum(1 for t in results for r in t.get("results", []) if "fail" in r.get("status", "").lower())
