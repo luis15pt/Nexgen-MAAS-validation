@@ -190,6 +190,10 @@ load_and_verify() {
         else
             log "nouveau successfully unloaded"
         fi
+
+        # Rescan PCI bus so devices are available for nvidia to bind
+        log "Triggering PCI bus rescan..."
+        echo 1 > /sys/bus/pci/rescan 2>/dev/null || warn "PCI rescan failed"
         sleep 2
     fi
 
@@ -205,15 +209,31 @@ load_and_verify() {
 
     # Retry modprobe nvidia -- devices may need time after nouveau release
     local nvidia_loaded=false
-    local attempt
+    local attempt modprobe_err
     for attempt in 1 2 3; do
-        if modprobe nvidia 2>/dev/null; then
-            nvidia_loaded=true
-            break
-        fi
-        warn "modprobe nvidia attempt $attempt failed -- retrying in ${attempt}s..."
+        modprobe_err=$(modprobe nvidia 2>&1) && { nvidia_loaded=true; break; }
+        warn "modprobe nvidia attempt $attempt failed: $modprobe_err"
         sleep "$attempt"
     done
+
+    # Last resort: remove GPU PCI devices and rescan to reset their state
+    if ! $nvidia_loaded; then
+        warn "All modprobe attempts failed -- removing and rescanning GPU PCI devices..."
+        local pci_addr
+        for pci_addr in $(lspci -n | awk '/10de:/{print $1}'); do
+            if [[ -e "/sys/bus/pci/devices/0000:${pci_addr}/remove" ]]; then
+                echo 1 > "/sys/bus/pci/devices/0000:${pci_addr}/remove" 2>/dev/null || true
+            fi
+        done
+        sleep 2
+        echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
+        sleep 3
+        log "PCI rescan complete -- retrying modprobe nvidia..."
+        modprobe_err=$(modprobe nvidia 2>&1) && nvidia_loaded=true
+        if ! $nvidia_loaded; then
+            warn "modprobe after PCI rescan failed: $modprobe_err"
+        fi
+    fi
 
     if ! $nvidia_loaded; then
         err "Failed to load nvidia kernel module"
