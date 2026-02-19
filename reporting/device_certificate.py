@@ -1055,9 +1055,9 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
     log("Fetching GPU commissioning script outputs...")
     install_data = client.get_script_json(system_id, SCRIPT_ALIASES["install"])
     if install_data:
-        log(f"  97-install: loaded ({install_data.get('verdict', {}).get('overall', '?')})")
+        log(f"  90-install: loaded ({install_data.get('verdict', {}).get('overall', '?')})")
     else:
-        log("  97-install: not found or no JSON output")
+        log("  90-install: not found or no JSON output")
 
     inventory_data = client.get_script_json(system_id, SCRIPT_ALIASES["inventory"])
     if inventory_data:
