@@ -79,7 +79,7 @@ GPU_SCRIPTS = [
 
 # Map short names used internally to the MAAS script names
 SCRIPT_ALIASES = {
-    "install":   "97-nexgen-gpu-install-580-12.8",
+    "install":   "90-nexgen-gpu-install-580-12.8",
     "inventory": "98-nexgen-gpu-inventory",
     "stress":    "99-nexgen-gpu-stress-test",
 }
