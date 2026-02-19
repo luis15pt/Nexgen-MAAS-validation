@@ -154,19 +154,43 @@ load_and_verify() {
 
     # Blacklist and unload nouveau -- it claims older GPUs (A100, V100, etc.)
     # and prevents the nvidia driver from binding.
+    echo "blacklist nouveau"  > /etc/modprobe.d/blacklist-nouveau.conf
+    echo "options nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
+
     if lsmod | grep -q nouveau; then
         log "nouveau is loaded -- blacklisting and unloading..."
-        echo "blacklist nouveau"  > /etc/modprobe.d/blacklist-nouveau.conf
-        echo "options nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
-        rmmod nouveau >&2 2>&1 || {
-            warn "rmmod nouveau failed -- trying modprobe -r"
-            modprobe -r nouveau >&2 2>&1 || warn "Could not unload nouveau (may be in use)"
-        }
-        sleep 1
-    elif ! [ -f /etc/modprobe.d/blacklist-nouveau.conf ]; then
-        log "Blacklisting nouveau (preventive)..."
-        echo "blacklist nouveau"  > /etc/modprobe.d/blacklist-nouveau.conf
-        echo "options nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
+
+        # Remove nouveau and its dependency chain (order matters)
+        local mod
+        for mod in nouveau drm_kms_helper drm ttm; do
+            if lsmod | grep -q "^${mod} "; then
+                rmmod "$mod" 2>/dev/null || true
+            fi
+        done
+        # modprobe -r handles the full dependency tree as a fallback
+        modprobe -r nouveau 2>/dev/null || true
+
+        # If nouveau is still loaded, forcefully unbind it from PCI devices
+        if lsmod | grep -q "^nouveau "; then
+            warn "nouveau still loaded after rmmod -- unbinding from PCI devices..."
+            local pci_addr
+            for pci_addr in /sys/bus/pci/drivers/nouveau/0000:*; do
+                if [[ -e "$pci_addr" ]]; then
+                    echo "${pci_addr##*/}" > /sys/bus/pci/drivers/nouveau/unbind 2>/dev/null || true
+                    log "  Unbound ${pci_addr##*/} from nouveau"
+                fi
+            done
+            sleep 1
+            rmmod nouveau 2>/dev/null || warn "Could not unload nouveau (may need reboot)"
+        fi
+
+        # Verify nouveau is gone
+        if lsmod | grep -q "^nouveau "; then
+            warn "nouveau is STILL loaded -- nvidia may fail to bind"
+        else
+            log "nouveau successfully unloaded"
+        fi
+        sleep 2
     fi
 
     if ! modinfo nvidia &>/dev/null; then
@@ -179,7 +203,19 @@ load_and_verify() {
         fi
     fi
 
-    modprobe nvidia >&2 2>&1 || {
+    # Retry modprobe nvidia -- devices may need time after nouveau release
+    local nvidia_loaded=false
+    local attempt
+    for attempt in 1 2 3; do
+        if modprobe nvidia 2>/dev/null; then
+            nvidia_loaded=true
+            break
+        fi
+        warn "modprobe nvidia attempt $attempt failed -- retrying in ${attempt}s..."
+        sleep "$attempt"
+    done
+
+    if ! $nvidia_loaded; then
         err "Failed to load nvidia kernel module"
         dkms status >&2 2>&1 || true
         tail -30 /var/lib/dkms/nvidia/*/build/make.log 2>/dev/null >&2 || true
@@ -190,7 +226,7 @@ load_and_verify() {
         mokutil --sb-state >&2 2>&1 || true
         log "--- end PCIe diagnostics ---"
         return 1
-    }
+    fi
     modprobe nvidia-uvm >&2 2>&1 || warn "nvidia-uvm failed to load"
     sleep 3
 
