@@ -152,6 +152,23 @@ install_packages() {
 load_and_verify() {
     log "=== Loading kernel modules ==="
 
+    # Blacklist and unload nouveau -- it claims older GPUs (A100, V100, etc.)
+    # and prevents the nvidia driver from binding.
+    if lsmod | grep -q nouveau; then
+        log "nouveau is loaded -- blacklisting and unloading..."
+        echo "blacklist nouveau"  > /etc/modprobe.d/blacklist-nouveau.conf
+        echo "options nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
+        rmmod nouveau >&2 2>&1 || {
+            warn "rmmod nouveau failed -- trying modprobe -r"
+            modprobe -r nouveau >&2 2>&1 || warn "Could not unload nouveau (may be in use)"
+        }
+        sleep 1
+    elif ! [ -f /etc/modprobe.d/blacklist-nouveau.conf ]; then
+        log "Blacklisting nouveau (preventive)..."
+        echo "blacklist nouveau"  > /etc/modprobe.d/blacklist-nouveau.conf
+        echo "options nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
+    fi
+
     if ! modinfo nvidia &>/dev/null; then
         log "nvidia module not found -- attempting DKMS build..."
         local nvidia_ver
