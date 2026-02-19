@@ -152,51 +152,79 @@ install_packages() {
 load_and_verify() {
     log "=== Loading kernel modules ==="
 
-    # Blacklist and unload nouveau -- it claims older GPUs (A100, V100, etc.)
-    # and prevents the nvidia driver from binding.
-    echo "blacklist nouveau"  > /etc/modprobe.d/blacklist-nouveau.conf
+    # ── Blacklist nouveau ──────────────────────────────────────────────
+    # Nouveau claims older GPUs (A100, V100, etc.) and prevents the
+    # nvidia driver from binding.  Best practice: always write the
+    # blacklist, then unload if loaded.
+    echo "blacklist nouveau"        > /etc/modprobe.d/blacklist-nouveau.conf
     echo "options nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
 
     if lsmod | grep -q nouveau; then
-        log "nouveau is loaded -- blacklisting and unloading..."
+        log "nouveau is loaded -- unloading..."
 
-        # Remove nouveau and its dependency chain (order matters)
+        # Step 1: Unbind the framebuffer console from nouveau.
+        # Nouveau's nouveaufb holds a reference through the VT console;
+        # without this unbind, rmmod silently fails to fully release devices.
+        # Ref: https://nouveau.freedesktop.org/KernelModeSetting.html
+        local vtcon
+        for vtcon in /sys/class/vtconsole/vtcon*/; do
+            if [[ -e "${vtcon}name" ]] && grep -q "frame buffer" "${vtcon}name" 2>/dev/null; then
+                log "  Unbinding framebuffer vtconsole ${vtcon##*/sys/class/vtconsole/}..."
+                echo 0 > "${vtcon}bind" 2>/dev/null || true
+            fi
+        done
+        sleep 1
+
+        # Step 2: Unbind nouveau from all GPU PCI devices via sysfs.
+        local pci_addr
+        for pci_addr in /sys/bus/pci/drivers/nouveau/0000:*; do
+            if [[ -e "$pci_addr" ]]; then
+                echo "${pci_addr##*/}" > /sys/bus/pci/drivers/nouveau/unbind 2>/dev/null || true
+                log "  Unbound ${pci_addr##*/} from nouveau"
+            fi
+        done
+
+        # Step 3: Remove nouveau and its full dependency chain.
         local mod
         for mod in nouveau drm_kms_helper drm ttm; do
             if lsmod | grep -q "^${mod} "; then
                 rmmod "$mod" 2>/dev/null || true
             fi
         done
-        # modprobe -r handles the full dependency tree as a fallback
         modprobe -r nouveau 2>/dev/null || true
 
-        # If nouveau is still loaded, forcefully unbind it from PCI devices
+        # Step 4: If nouveau is STILL loaded, last-ditch rmmod.
         if lsmod | grep -q "^nouveau "; then
-            warn "nouveau still loaded after rmmod -- unbinding from PCI devices..."
-            local pci_addr
-            for pci_addr in /sys/bus/pci/drivers/nouveau/0000:*; do
-                if [[ -e "$pci_addr" ]]; then
-                    echo "${pci_addr##*/}" > /sys/bus/pci/drivers/nouveau/unbind 2>/dev/null || true
-                    log "  Unbound ${pci_addr##*/} from nouveau"
-                fi
-            done
             sleep 1
-            rmmod nouveau 2>/dev/null || warn "Could not unload nouveau (may need reboot)"
+            rmmod -f nouveau 2>/dev/null || warn "Could not unload nouveau (may need reboot)"
         fi
 
-        # Verify nouveau is gone
+        # Verify
         if lsmod | grep -q "^nouveau "; then
             warn "nouveau is STILL loaded -- nvidia may fail to bind"
         else
             log "nouveau successfully unloaded"
         fi
 
-        # Rescan PCI bus so devices are available for nvidia to bind
+        # Step 5: PCI Function Level Reset on each GPU.
+        # After nouveau releases the devices they can be stuck in D3cold.
+        # FLR resets the device state without affecting the rest of the bus.
+        log "Performing PCI Function Level Reset on NVIDIA devices..."
+        for pci_addr in $(lspci -n | awk '/10de:/{print "0000:" $1}'); do
+            if [[ -e "/sys/bus/pci/devices/${pci_addr}/reset" ]]; then
+                echo 1 > "/sys/bus/pci/devices/${pci_addr}/reset" 2>/dev/null && \
+                    log "  FLR ${pci_addr} OK" || \
+                    log "  FLR ${pci_addr} skipped (not supported)"
+            fi
+        done
+
+        # Step 6: Rescan PCI bus so devices are available for nvidia to bind.
         log "Triggering PCI bus rescan..."
         echo 1 > /sys/bus/pci/rescan 2>/dev/null || warn "PCI rescan failed"
-        sleep 2
+        sleep 3
     fi
 
+    # ── DKMS build (if nvidia module not found) ───────────────────────
     if ! modinfo nvidia &>/dev/null; then
         log "nvidia module not found -- attempting DKMS build..."
         local nvidia_ver
@@ -207,7 +235,37 @@ load_and_verify() {
         fi
     fi
 
-    # Retry modprobe nvidia -- devices may need time after nouveau release
+    # ── Verify GSP firmware (required for nvidia-open modules) ────────
+    # The open kernel modules REQUIRE the GPU System Processor firmware.
+    # Without it modprobe nvidia fails silently with "No such device".
+    local nvidia_mod_ver
+    nvidia_mod_ver=$(modinfo nvidia 2>/dev/null | awk '/^version:/{print $2}')
+    if [[ -n "$nvidia_mod_ver" ]]; then
+        local fw_path="/lib/firmware/nvidia/${nvidia_mod_ver}/gsp_ga10x.bin"
+        if [[ -f "$fw_path" ]]; then
+            log "GSP firmware found: ${fw_path}"
+        else
+            warn "GSP firmware NOT found at ${fw_path}"
+            # Search for any available GSP firmware
+            local found_fw
+            found_fw=$(find /lib/firmware/nvidia/ -name "gsp_ga10x.bin" 2>/dev/null | head -1)
+            if [[ -n "$found_fw" ]]; then
+                log "  Found alternative: ${found_fw}"
+            else
+                warn "  No GSP firmware found anywhere -- nvidia-open WILL fail"
+                warn "  Hint: ensure nvidia-firmware package is installed"
+            fi
+        fi
+    fi
+
+    # ── Secure Boot check ─────────────────────────────────────────────
+    if command -v mokutil &>/dev/null; then
+        if mokutil --sb-state 2>/dev/null | grep -qi "enabled"; then
+            warn "Secure Boot is ENABLED -- unsigned DKMS modules may fail to load"
+        fi
+    fi
+
+    # ── Load nvidia module (with retries) ─────────────────────────────
     local nvidia_loaded=false
     local attempt modprobe_err
     for attempt in 1 2 3; do
@@ -216,35 +274,60 @@ load_and_verify() {
         sleep "$attempt"
     done
 
-    # Last resort: remove GPU PCI devices and rescan to reset their state
+    # ── Last resort: full PCI device remove + rescan + retry ──────────
+    # Completely removes GPU PCI devices from the kernel, rescans the bus
+    # to get fresh device state, then tries modprobe one final time.
     if ! $nvidia_loaded; then
-        warn "All modprobe attempts failed -- removing and rescanning GPU PCI devices..."
-        local pci_addr
-        for pci_addr in $(lspci -n | awk '/10de:/{print $1}'); do
-            if [[ -e "/sys/bus/pci/devices/0000:${pci_addr}/remove" ]]; then
-                echo 1 > "/sys/bus/pci/devices/0000:${pci_addr}/remove" 2>/dev/null || true
+        warn "All modprobe attempts failed -- performing full PCI reset cycle..."
+
+        # Remove all NVIDIA PCI devices
+        local pci_addrs=()
+        local pa
+        for pa in $(lspci -n | awk '/10de:/{print "0000:" $1}'); do
+            pci_addrs+=("$pa")
+            if [[ -e "/sys/bus/pci/devices/${pa}/remove" ]]; then
+                echo 1 > "/sys/bus/pci/devices/${pa}/remove" 2>/dev/null || true
+                log "  Removed PCI device ${pa}"
             fi
         done
         sleep 2
+
+        # Rescan and verify devices reappeared
         echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
-        sleep 3
-        log "PCI rescan complete -- retrying modprobe nvidia..."
+        sleep 4
+        for pa in "${pci_addrs[@]}"; do
+            if [[ -e "/sys/bus/pci/devices/${pa}" ]]; then
+                log "  PCI device ${pa} back after rescan"
+            else
+                warn "  PCI device ${pa} did NOT reappear!"
+            fi
+        done
+        sleep 2
+
+        log "PCI reset cycle complete -- final modprobe nvidia attempt..."
         modprobe_err=$(modprobe nvidia 2>&1) && nvidia_loaded=true
         if ! $nvidia_loaded; then
-            warn "modprobe after PCI rescan failed: $modprobe_err"
+            warn "modprobe after PCI reset failed: $modprobe_err"
         fi
     fi
 
+    # ── Failure diagnostics ───────────────────────────────────────────
     if ! $nvidia_loaded; then
         err "Failed to load nvidia kernel module"
+        log "--- dmesg GPU diagnostics ---"
+        dmesg | grep -iE "nvidia|nouveau|pci|firmware|gsp|drm|NVRM" | tail -50 >&2
+        log "--- GSP firmware check ---"
+        find /lib/firmware/nvidia/ -name "gsp_ga*" -ls 2>/dev/null >&2 || warn "No GSP firmware found"
+        log "--- module info ---"
+        modinfo nvidia 2>&1 | head -20 >&2 || warn "modinfo nvidia failed"
+        log "--- DKMS status ---"
         dkms status >&2 2>&1 || true
-        tail -30 /var/lib/dkms/nvidia/*/build/make.log 2>/dev/null >&2 || true
         log "--- PCIe diagnostics ---"
         lspci -nn | grep -i "10de" >&2 2>&1 || warn "No NVIDIA devices in lspci"
         lspci -vvs "$(lspci -n | grep '10de:' | head -1 | awk '{print $1}')" >&2 2>&1 || true
         log "Secure Boot status:"
         mokutil --sb-state >&2 2>&1 || true
-        log "--- end PCIe diagnostics ---"
+        log "--- end diagnostics ---"
         return 1
     fi
     modprobe nvidia-uvm >&2 2>&1 || warn "nvidia-uvm failed to load"
