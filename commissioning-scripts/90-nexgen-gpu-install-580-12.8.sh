@@ -159,6 +159,24 @@ load_and_verify() {
     echo "blacklist nouveau"        > /etc/modprobe.d/blacklist-nouveau.conf
     echo "options nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
 
+    # ── Save BAR0 addresses before touching nouveau ───────────────────
+    # The BIOS assigns valid BAR0 (32-bit MMIO control registers) at boot.
+    # Unloading nouveau + any PCI reset can zero them out, and the kernel
+    # often cannot reassign 32-bit MMIO for 8× GPUs (128 MB needed).
+    # The nvidia driver REQUIRES BAR0; it fails with "No such device" if
+    # BAR0 is 0x0.  We save the BIOS values and restore them if needed.
+    # BAR0 is at PCI config offset 0x10.
+    declare -A _saved_bar0
+    local pci_short
+    for pci_short in $(lspci -n | awk '/10de:/{print $1}'); do
+        local bar0_val
+        bar0_val=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null) || continue
+        if [[ -n "$bar0_val" ]] && [[ "$bar0_val" != "00000000" ]]; then
+            _saved_bar0["$pci_short"]="$bar0_val"
+            log "  Saved BAR0 for ${pci_short}: 0x${bar0_val}"
+        fi
+    done
+
     if lsmod | grep -q nouveau; then
         log "nouveau is loaded -- unloading..."
 
@@ -206,22 +224,36 @@ load_and_verify() {
             log "nouveau successfully unloaded"
         fi
 
-        # Step 5: PCI Function Level Reset on each GPU.
-        # After nouveau releases the devices they can be stuck in D3cold.
-        # FLR resets the device state without affecting the rest of the bus.
-        log "Performing PCI Function Level Reset on NVIDIA devices..."
-        for pci_addr in $(lspci -n | awk '/10de:/{print "0000:" $1}'); do
-            if [[ -e "/sys/bus/pci/devices/${pci_addr}/reset" ]]; then
-                echo 1 > "/sys/bus/pci/devices/${pci_addr}/reset" 2>/dev/null && \
-                    log "  FLR ${pci_addr} OK" || \
-                    log "  FLR ${pci_addr} skipped (not supported)"
-            fi
-        done
+        # NOTE: We intentionally do NOT perform PCI Function Level Reset (FLR)
+        # here.  On A100s, FLR resets the PCI BAR registers to zero.  The
+        # kernel's PCI allocator often cannot reassign the 32-bit BAR0 region
+        # for 8 GPUs (128 MB of scarce 32-bit MMIO), leaving BAR0 = 0x0 and
+        # causing nvidia probe to fail with "PCI I/O region is invalid".
 
-        # Step 6: Rescan PCI bus so devices are available for nvidia to bind.
-        log "Triggering PCI bus rescan..."
-        echo 1 > /sys/bus/pci/rescan 2>/dev/null || warn "PCI rescan failed"
-        sleep 3
+        sleep 2
+    fi
+
+    # ── Restore BAR0 if zeroed ────────────────────────────────────────
+    # Check each GPU's BAR0; if it was zeroed during unload, restore the
+    # BIOS-assigned value we saved earlier.
+    local bar0_restored=false
+    for pci_short in "${!_saved_bar0[@]}"; do
+        local current_bar0
+        current_bar0=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null) || continue
+        if [[ "$current_bar0" == "00000000" ]]; then
+            log "  BAR0 zeroed on ${pci_short} -- restoring 0x${_saved_bar0[$pci_short]}"
+            setpci -s "$pci_short" BASE_ADDRESS_0="${_saved_bar0[$pci_short]}" 2>/dev/null || \
+                warn "  Failed to restore BAR0 on ${pci_short}"
+            bar0_restored=true
+        fi
+    done
+    if $bar0_restored; then
+        # Re-enable the devices after BAR restoration
+        for pci_short in "${!_saved_bar0[@]}"; do
+            setpci -s "$pci_short" COMMAND=0x0002 2>/dev/null || true  # Mem+ enable
+        done
+        log "BAR0 values restored from BIOS assignments"
+        sleep 1
     fi
 
     # ── DKMS build (if nvidia module not found) ───────────────────────
@@ -246,7 +278,6 @@ load_and_verify() {
             log "GSP firmware found: ${fw_path}"
         else
             warn "GSP firmware NOT found at ${fw_path}"
-            # Search for any available GSP firmware
             local found_fw
             found_fw=$(find /lib/firmware/nvidia/ -name "gsp_ga10x.bin" 2>/dev/null | head -1)
             if [[ -n "$found_fw" ]]; then
@@ -274,11 +305,12 @@ load_and_verify() {
         sleep "$attempt"
     done
 
-    # ── Last resort: full PCI device remove + rescan + retry ──────────
-    # Completely removes GPU PCI devices from the kernel, rescans the bus
-    # to get fresh device state, then tries modprobe one final time.
+    # ── Last resort: PCI device remove + rescan + BAR restore + retry ─
     if ! $nvidia_loaded; then
         warn "All modprobe attempts failed -- performing full PCI reset cycle..."
+
+        # Unload nvidia if it partially loaded
+        rmmod nvidia 2>/dev/null || true
 
         # Remove all NVIDIA PCI devices
         local pci_addrs=()
@@ -302,6 +334,20 @@ load_and_verify() {
                 warn "  PCI device ${pa} did NOT reappear!"
             fi
         done
+
+        # Restore BAR0 again (rescan likely zeroed them)
+        for pci_short in "${!_saved_bar0[@]}"; do
+            local current_bar0
+            current_bar0=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null) || continue
+            if [[ "$current_bar0" == "00000000" ]]; then
+                log "  Restoring BAR0 on ${pci_short}: 0x${_saved_bar0[$pci_short]}"
+                setpci -s "$pci_short" BASE_ADDRESS_0="${_saved_bar0[$pci_short]}" 2>/dev/null || true
+            fi
+        done
+        # Re-enable memory space on all GPUs
+        for pci_short in "${!_saved_bar0[@]}"; do
+            setpci -s "$pci_short" COMMAND=0x0002 2>/dev/null || true
+        done
         sleep 2
 
         log "PCI reset cycle complete -- final modprobe nvidia attempt..."
@@ -316,6 +362,12 @@ load_and_verify() {
         err "Failed to load nvidia kernel module"
         log "--- dmesg GPU diagnostics ---"
         dmesg | grep -iE "nvidia|nouveau|pci|firmware|gsp|drm|NVRM" | tail -50 >&2
+        log "--- BAR0 status ---"
+        for pci_short in $(lspci -n | awk '/10de:/{print $1}'); do
+            local b0
+            b0=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null)
+            log "  ${pci_short} BAR0=0x${b0:-?}" >&2
+        done
         log "--- GSP firmware check ---"
         find /lib/firmware/nvidia/ -name "gsp_ga*" -ls 2>/dev/null >&2 || warn "No GSP firmware found"
         log "--- module info ---"
