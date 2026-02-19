@@ -249,12 +249,12 @@ load_and_verify() {
     fi
 
     # ── Fix BAR0 if kernel has it as <ignored> ───────────────────────
-    # When the kernel marks BAR0 as <ignored>, writing via setpci alone
-    # does not help -- the kernel's resource struct stays at 0.  We must
-    # remove the device, write a valid unique BAR0 address, then rescan
-    # so the kernel re-reads config space and claims the resource.
+    # When the kernel marks BAR0 as <ignored>, nvidia sees BAR0=0x0.
+    # The fix: write unique BAR0 addresses via sysfs config WHILE the
+    # device is still in the kernel (sysfs accessible), verify the write,
+    # then remove + rescan so the kernel re-reads and claims the resource.
     if $_bar0_needs_fix; then
-        log "BAR0 needs fixing -- assigning unique addresses via PCI remove/rescan..."
+        log "BAR0 needs fixing -- assigning unique addresses..."
 
         # Collect GPU BDF addresses
         local gpu_bdfs=()
@@ -264,17 +264,12 @@ load_and_verify() {
 
         # Find a free 32-bit MMIO base by scanning /proc/iomem.
         # We need 16 MB per GPU (BAR0 size) aligned to 16 MB.
-        # Look for the largest gap below 4 GB that is not in use.
         local bar0_size=$((16 * 1024 * 1024))  # 16 MB
         local alloc_base=0
-
-        # Parse used 32-bit regions and find a gap big enough for all GPUs
         local needed=$(( ${#gpu_bdfs[@]} * bar0_size ))
-        log "  Need ${#gpu_bdfs[@]} × 16MB = $((needed / 1024 / 1024))MB of free 32-bit MMIO"
+        log "  Need ${#gpu_bdfs[@]} x 16MB = $((needed / 1024 / 1024))MB of free 32-bit MMIO"
 
-        # Look for free space in the typical PCI MMIO window (above RAM, below 4GB)
-        # Strategy: start from 0xA0000000 and check for a contiguous gap
-        local candidate=0
+        # Parse /proc/iomem for the largest free gap below 4GB
         local best_start=0 best_size=0
         local prev_end=$((0x80000000))  # Start scanning from 2GB
 
@@ -283,7 +278,6 @@ load_and_verify() {
             local range_end="0x${range_rest%% *}"
             local rs=$((range_start)) re=$((range_end))
 
-            # Only care about 32-bit range
             [[ $rs -ge $((0x100000000)) ]] && continue
             [[ $rs -lt $prev_end ]] && { prev_end=$(( re > prev_end ? re : prev_end )); continue; }
 
@@ -295,7 +289,6 @@ load_and_verify() {
             prev_end=$(( re + 1 ))
         done < <(grep -v '^ ' /proc/iomem | sort)
 
-        # Check trailing space up to 4GB
         local trailing=$(( 0x100000000 - prev_end ))
         if [[ $trailing -gt $best_size ]]; then
             best_start=$prev_end
@@ -303,17 +296,56 @@ load_and_verify() {
         fi
 
         if [[ $best_size -ge $needed ]] && [[ $best_start -gt 0 ]]; then
-            # Align to 16 MB
             alloc_base=$(( (best_start + bar0_size - 1) & ~(bar0_size - 1) ))
-            log "  Found ${best_size} bytes free at 0x$(printf '%x' $best_start), allocating from 0x$(printf '%x' $alloc_base)"
+            log "  Found $((best_size/1024/1024))MB free at 0x$(printf '%x' $best_start), allocating from 0x$(printf '%x' $alloc_base)"
         else
-            # Fallback: use the saved BIOS values but de-duplicate collisions
-            warn "  Could not find large enough free 32-bit MMIO gap (need $((needed/1024/1024))MB, best ${best_size} bytes)"
-            warn "  Falling back to BIOS BAR0 values with collision fixup"
+            warn "  Not enough contiguous 32-bit MMIO (need $((needed/1024/1024))MB, have $((best_size/1024/1024))MB)"
             alloc_base=0
         fi
 
-        # Remove all GPU PCI devices
+        # Step 1: Write unique BAR0 addresses WHILE devices are still in
+        # the kernel (sysfs config file accessible).  Use the sysfs config
+        # file at offset 0x10 (BAR0) for a guaranteed kernel-mediated write.
+        log "  Writing BAR0 via sysfs config (devices still in kernel)..."
+        local idx=0
+        declare -A _new_bar0
+        for pci_short in "${gpu_bdfs[@]}"; do
+            local new_bar0
+            if [[ $alloc_base -gt 0 ]]; then
+                new_bar0=$(printf '%08x' $(( alloc_base + idx * bar0_size )))
+            else
+                # De-duplicate BIOS values
+                new_bar0="${_saved_bar0[$pci_short]:-00000000}"
+                local other
+                for other in "${gpu_bdfs[@]}"; do
+                    [[ "$other" == "$pci_short" ]] && break
+                    if [[ "${_new_bar0[$other]}" == "$new_bar0" ]]; then
+                        new_bar0=$(printf '%08x' $(( 0x$new_bar0 + bar0_size )))
+                        warn "  ${pci_short}: collision, shifted to 0x${new_bar0}"
+                        break
+                    fi
+                done
+            fi
+            _new_bar0["$pci_short"]="$new_bar0"
+
+            # Write via setpci (uses sysfs while device exists)
+            setpci -s "$pci_short" BASE_ADDRESS_0="$new_bar0" 2>/dev/null
+
+            # Verify the write by reading back
+            local readback
+            readback=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null)
+            if [[ "$readback" == "$new_bar0" ]]; then
+                log "  ${pci_short}: BAR0=0x${new_bar0} (verified)"
+            else
+                warn "  ${pci_short}: write 0x${new_bar0} but readback 0x${readback:-failed}"
+            fi
+            idx=$((idx + 1))
+        done
+
+        # Step 2: Remove all GPU PCI devices.  This releases the kernel's
+        # (broken) resource claims but the PCI config space retains our
+        # BAR0 values in the hardware registers.
+        log "  Removing GPU PCI devices..."
         for pci_short in "${gpu_bdfs[@]}"; do
             if [[ -e "/sys/bus/pci/devices/0000:${pci_short}/remove" ]]; then
                 echo 1 > "/sys/bus/pci/devices/0000:${pci_short}/remove" 2>/dev/null || true
@@ -321,54 +353,32 @@ load_and_verify() {
         done
         sleep 2
 
-        # Write unique BAR0 addresses to PCI config space while devices are
-        # removed from the kernel but still physically on the bus.
-        # The bridge keeps config space accessible.
-        local idx=0
+        # Step 3: Re-write BAR0 values just before rescan.
+        # The PCI config space should retain our writes, but re-assert
+        # them to be safe (device is physically present, bridge passes
+        # config cycles even when kernel has no device struct).
         for pci_short in "${gpu_bdfs[@]}"; do
-            local new_bar0
-            if [[ $alloc_base -gt 0 ]]; then
-                new_bar0=$(printf '%08x' $(( alloc_base + idx * bar0_size )))
-            else
-                # De-duplicate: use saved value but shift collisions
-                new_bar0="${_saved_bar0[$pci_short]:-00000000}"
-                # Check for collision with already-assigned addresses
-                local collision=false
-                local other
-                for other in "${gpu_bdfs[@]}"; do
-                    [[ "$other" == "$pci_short" ]] && break
-                    if [[ "${_saved_bar0[$other]}" == "$new_bar0" ]]; then
-                        collision=true
-                        break
-                    fi
-                done
-                if $collision; then
-                    # Shift by 16MB to resolve collision
-                    local val=$((0x$new_bar0 + bar0_size))
-                    new_bar0=$(printf '%08x' $val)
-                    warn "  ${pci_short}: collision detected, shifted to 0x${new_bar0}"
-                fi
-            fi
-            setpci -s "$pci_short" BASE_ADDRESS_0="$new_bar0" 2>/dev/null || \
-                warn "  Failed to write BAR0 on ${pci_short}"
-            log "  ${pci_short}: wrote BAR0=0x${new_bar0}"
-            idx=$((idx + 1))
+            setpci -s "$pci_short" BASE_ADDRESS_0="${_new_bar0[$pci_short]}" 2>/dev/null || true
         done
 
-        # Rescan so the kernel discovers devices with corrected BARs
+        # Step 4: Rescan.  The kernel re-discovers the devices, reads the
+        # BAR0 values we wrote, and should claim them in its resource tree
+        # since they are now unique and within a valid MMIO range.
+        log "  Rescanning PCI bus..."
         echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
-        sleep 4
+        sleep 5
 
-        # Verify kernel now sees BAR0
+        # Step 5: Verify kernel now sees BAR0
         local fixed=0 broken=0
         for pci_short in "${gpu_bdfs[@]}"; do
-            local bar0_kern
+            local bar0_kern bar0_hw
             bar0_kern=$(awk 'NR==1{print $1}' "/sys/bus/pci/devices/0000:${pci_short}/resource" 2>/dev/null)
+            bar0_hw=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null)
             if [[ "$bar0_kern" != "0x0000000000000000" ]] && [[ "$bar0_kern" != "0x00000000" ]] && [[ -n "$bar0_kern" ]]; then
-                log "  ${pci_short}: kernel BAR0=${bar0_kern} OK"
+                log "  ${pci_short}: kernel BAR0=${bar0_kern} hw=0x${bar0_hw} OK"
                 fixed=$((fixed + 1))
             else
-                warn "  ${pci_short}: kernel still shows BAR0 as unassigned"
+                warn "  ${pci_short}: kernel BAR0 still unassigned (hw=0x${bar0_hw})"
                 broken=$((broken + 1))
             fi
         done
