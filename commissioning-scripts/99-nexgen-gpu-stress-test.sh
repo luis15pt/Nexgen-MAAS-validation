@@ -21,7 +21,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 ###############################################################################
 DCGM_DIAG_LEVEL="${DCGM_DIAG_LEVEL:-3}"
 WORK_DIR="/tmp/gpu-stress-$$"
-SCRIPT_VERSION="2.1.3"
+SCRIPT_VERSION="2.1.4"
 
 ###############################################################################
 # LOGGING
@@ -70,6 +70,64 @@ fail_json() {
             dcgm_diagnostics:{run_level:0, exit_code:-1, duration_seconds:0, test_results:[]}
         }'
     exit 1
+}
+
+###############################################################################
+# COLLECT FAILURE DIAGNOSTICS (runs only on DCGM FAIL)
+###############################################################################
+collect_failure_diagnostics() {
+    log "============================================"
+    log "=== Collecting failure diagnostics ===      "
+    log "============================================"
+
+    # --- nvidia-bug-report.sh ---
+    if command -v nvidia-bug-report.sh &>/dev/null; then
+        log "Running nvidia-bug-report.sh..."
+        local bug_report_dir="$WORK_DIR/bug-report"
+        mkdir -p "$bug_report_dir"
+
+        # Run from bug_report_dir so .log.gz lands there (120s timeout)
+        if ( cd "$bug_report_dir" && timeout 120 nvidia-bug-report.sh ) 2>&1 >&2; then
+            :
+        else
+            warn "nvidia-bug-report.sh exited non-zero (may still have produced output)"
+        fi
+
+        # Find the .log.gz — check our dir first, then CWD, then /tmp
+        local gz_file=""
+        local search_dir
+        for search_dir in "$bug_report_dir" "." "/tmp"; do
+            gz_file=$(find "$search_dir" -maxdepth 1 -name "nvidia-bug-report.log.gz" 2>/dev/null | head -1)
+            [[ -n "$gz_file" ]] && break
+        done
+
+        if [[ -n "$gz_file" && -f "$gz_file" ]]; then
+            local gz_size
+            gz_size=$(stat -c%s "$gz_file" 2>/dev/null || echo "0")
+            log "=== BEGIN nvidia-bug-report ($gz_size bytes compressed) ==="
+            gunzip -c "$gz_file" >&2 2>/dev/null || warn "Failed to decompress $gz_file"
+            log "=== END nvidia-bug-report ==="
+            rm -f "$gz_file"
+        else
+            warn "nvidia-bug-report.sh ran but no .log.gz found"
+        fi
+    else
+        warn "nvidia-bug-report.sh not available -- skipping"
+    fi
+
+    # --- fieldiag ---
+    if command -v fieldiag &>/dev/null; then
+        log "Running fieldiag..."
+        log "=== BEGIN fieldiag ==="
+        timeout 300 fieldiag 2>&1 >&2 || warn "fieldiag failed or timed out"
+        log "=== END fieldiag ==="
+    else
+        log "fieldiag not available -- skipping"
+    fi
+
+    log "============================================"
+    log "=== End failure diagnostics ===             "
+    log "============================================"
 }
 
 ###############################################################################
@@ -353,6 +411,7 @@ main() {
     local stress_ok=true
     if ! run_diagnostics; then
         stress_ok=false
+        collect_failure_diagnostics
     fi
 
     rm -rf "$WORK_DIR"

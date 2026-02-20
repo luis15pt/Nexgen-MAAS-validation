@@ -24,7 +24,7 @@ NVIDIA_DRIVER="${NVIDIA_DRIVER:-nvidia-driver-580-server-open}"
 CUDA_TOOLKIT="${CUDA_TOOLKIT:-cuda-toolkit-12-8}"
 DCGM_CUDA_MAJOR="${DCGM_CUDA_MAJOR:-13}"
 WORK_DIR="/tmp/gpu-install-$$"
-SCRIPT_VERSION="2.1.2"
+SCRIPT_VERSION="2.1.3"
 
 ###############################################################################
 # LOGGING
@@ -588,6 +588,27 @@ load_and_verify() {
         warn "dcgmi not found -- DCGM not installed"
     fi
 
+    # ── Check diagnostic tool availability ──────────────────────────
+    local nvidia_bug_report_available=false
+    local fieldiag_available=false
+
+    if command -v nvidia-bug-report.sh &>/dev/null; then
+        nvidia_bug_report_available=true
+        log "nvidia-bug-report.sh found: $(command -v nvidia-bug-report.sh)"
+    else
+        warn "nvidia-bug-report.sh not found -- diagnostics on failure will be limited"
+    fi
+
+    if command -v fieldiag &>/dev/null; then
+        fieldiag_available=true
+        log "fieldiag found: $(command -v fieldiag)"
+    elif [[ -x /usr/bin/fieldiag ]] || [[ -x /opt/nvidia/fieldiag/fieldiag ]]; then
+        fieldiag_available=true
+        log "fieldiag found at hardcoded path"
+    else
+        log "fieldiag not found (optional -- available from NVIDIA during product registration)"
+    fi
+
     jq -n \
         --arg driver_ver "$SMI_DRIVER" \
         --arg cuda_ver "$SMI_CUDA" \
@@ -597,6 +618,8 @@ load_and_verify() {
         --argjson dcgm_available "$dcgm_available" \
         --arg dcgm_ver "$DCGM_VER" \
         --argjson dcgm_gpus "$dcgm_gpus" \
+        --argjson bug_report "$nvidia_bug_report_available" \
+        --argjson fieldiag "$fieldiag_available" \
         '{
             nvidia_driver_version: $driver_ver,
             cuda_version: $cuda_ver,
@@ -605,7 +628,9 @@ load_and_verify() {
             cuda_package: $cuda_pkg,
             dcgm_available: $dcgm_available,
             dcgm_version: $dcgm_ver,
-            dcgm_gpu_count: $dcgm_gpus
+            dcgm_gpu_count: $dcgm_gpus,
+            nvidia_bug_report_available: $bug_report,
+            fieldiag_available: $fieldiag
         }' > "$WORK_DIR/install_result.json"
 }
 
