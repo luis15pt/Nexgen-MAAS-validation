@@ -109,14 +109,19 @@ collect_failure_diagnostics() {
             gz_size=$(stat -c%s "$gz_file" 2>/dev/null || echo "0")
             log "nvidia-bug-report.log.gz ready ($gz_size bytes)"
 
-            # Upload to sendit.sh (60s timeout, file available for 1 day, 1 download)
-            local upload_url
-            upload_url=$(timeout 60 curl -sS "https://sendit.sh" \
-                -T "$gz_file" \
-                -H "filename: ${hostname}-nvidia-bug-report-$(date +%Y%m%d-%H%M%S).log.gz" \
-                2>/dev/null) || true
+            # Rename file so sendit.sh serves a meaningful filename
+            local upload_file="$bug_report_dir/${hostname}-nvidia-bug-report-$(date +%Y%m%d-%H%M%S).log.gz"
+            mv "$gz_file" "$upload_file"
 
-            if [[ -n "$upload_url" && "$upload_url" == http* ]]; then
+            # Upload to sendit.sh (60s timeout, file available for 1 day, 1 download)
+            local curl_response upload_url
+            curl_response=$(timeout 60 curl -sS "https://sendit.sh" \
+                -T "$upload_file" 2>/dev/null) || true
+
+            # Extract download URL from multiline response (wget https://...)
+            upload_url=$(echo "$curl_response" | grep -oP 'https://sendit\.sh/\S+' | head -1)
+
+            if [[ -n "$upload_url" ]]; then
                 log "============================================"
                 log "=== NVIDIA BUG REPORT DOWNLOAD LINK ===    "
                 log "  $upload_url"
@@ -124,9 +129,9 @@ collect_failure_diagnostics() {
                 log "============================================"
             else
                 warn "Failed to upload nvidia-bug-report to sendit.sh"
-                warn "  curl response: ${upload_url:-empty}"
+                warn "  curl response: ${curl_response:-empty}"
             fi
-            rm -f "$gz_file"
+            rm -f "$upload_file"
         else
             warn "nvidia-bug-report.sh ran but no .log.gz found"
         fi
@@ -137,18 +142,18 @@ collect_failure_diagnostics() {
     # --- fieldiag ---
     if command -v fieldiag &>/dev/null; then
         log "Running fieldiag..."
-        local fieldiag_out="$WORK_DIR/fieldiag-output.txt"
+        local fieldiag_out="$WORK_DIR/${hostname}-fieldiag-$(date +%Y%m%d-%H%M%S).txt"
         timeout 300 fieldiag > "$fieldiag_out" 2>&1 || warn "fieldiag failed or timed out"
 
         if [[ -s "$fieldiag_out" ]]; then
             # Upload fieldiag output to sendit.sh
-            local fieldiag_url
-            fieldiag_url=$(timeout 60 curl -sS "https://sendit.sh" \
-                -T "$fieldiag_out" \
-                -H "filename: ${hostname}-fieldiag-$(date +%Y%m%d-%H%M%S).txt" \
-                2>/dev/null) || true
+            local fieldiag_response fieldiag_url
+            fieldiag_response=$(timeout 60 curl -sS "https://sendit.sh" \
+                -T "$fieldiag_out" 2>/dev/null) || true
 
-            if [[ -n "$fieldiag_url" && "$fieldiag_url" == http* ]]; then
+            fieldiag_url=$(echo "$fieldiag_response" | grep -oP 'https://sendit\.sh/\S+' | head -1)
+
+            if [[ -n "$fieldiag_url" ]]; then
                 log "============================================"
                 log "=== FIELDIAG REPORT DOWNLOAD LINK ===      "
                 log "  $fieldiag_url"
@@ -156,6 +161,7 @@ collect_failure_diagnostics() {
                 log "============================================"
             else
                 warn "Failed to upload fieldiag to sendit.sh"
+                warn "  curl response: ${fieldiag_response:-empty}"
             fi
             rm -f "$fieldiag_out"
         fi
