@@ -21,7 +21,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 ###############################################################################
 DCGM_DIAG_LEVEL="${DCGM_DIAG_LEVEL:-3}"
 WORK_DIR="/tmp/gpu-stress-$$"
-SCRIPT_VERSION="2.1.4"
+SCRIPT_VERSION="2.1.5"
 
 ###############################################################################
 # LOGGING
@@ -80,6 +80,9 @@ collect_failure_diagnostics() {
     log "=== Collecting failure diagnostics ===      "
     log "============================================"
 
+    local hostname
+    hostname=$(hostname 2>/dev/null || echo "unknown")
+
     # --- nvidia-bug-report.sh ---
     if command -v nvidia-bug-report.sh &>/dev/null; then
         log "Running nvidia-bug-report.sh..."
@@ -104,9 +107,25 @@ collect_failure_diagnostics() {
         if [[ -n "$gz_file" && -f "$gz_file" ]]; then
             local gz_size
             gz_size=$(stat -c%s "$gz_file" 2>/dev/null || echo "0")
-            log "=== BEGIN nvidia-bug-report ($gz_size bytes compressed) ==="
-            gunzip -c "$gz_file" >&2 2>/dev/null || warn "Failed to decompress $gz_file"
-            log "=== END nvidia-bug-report ==="
+            log "nvidia-bug-report.log.gz ready ($gz_size bytes)"
+
+            # Upload to sendit.sh (60s timeout, file available for 1 day, 1 download)
+            local upload_url
+            upload_url=$(timeout 60 curl -sS "https://sendit.sh" \
+                -T "$gz_file" \
+                -H "filename: ${hostname}-nvidia-bug-report-$(date +%Y%m%d-%H%M%S).log.gz" \
+                2>/dev/null) || true
+
+            if [[ -n "$upload_url" && "$upload_url" == http* ]]; then
+                log "============================================"
+                log "=== NVIDIA BUG REPORT DOWNLOAD LINK ===    "
+                log "  $upload_url"
+                log "  (available for 1 day, single download)   "
+                log "============================================"
+            else
+                warn "Failed to upload nvidia-bug-report to sendit.sh"
+                warn "  curl response: ${upload_url:-empty}"
+            fi
             rm -f "$gz_file"
         else
             warn "nvidia-bug-report.sh ran but no .log.gz found"
@@ -118,9 +137,28 @@ collect_failure_diagnostics() {
     # --- fieldiag ---
     if command -v fieldiag &>/dev/null; then
         log "Running fieldiag..."
-        log "=== BEGIN fieldiag ==="
-        timeout 300 fieldiag 2>&1 >&2 || warn "fieldiag failed or timed out"
-        log "=== END fieldiag ==="
+        local fieldiag_out="$WORK_DIR/fieldiag-output.txt"
+        timeout 300 fieldiag > "$fieldiag_out" 2>&1 || warn "fieldiag failed or timed out"
+
+        if [[ -s "$fieldiag_out" ]]; then
+            # Upload fieldiag output to sendit.sh
+            local fieldiag_url
+            fieldiag_url=$(timeout 60 curl -sS "https://sendit.sh" \
+                -T "$fieldiag_out" \
+                -H "filename: ${hostname}-fieldiag-$(date +%Y%m%d-%H%M%S).txt" \
+                2>/dev/null) || true
+
+            if [[ -n "$fieldiag_url" && "$fieldiag_url" == http* ]]; then
+                log "============================================"
+                log "=== FIELDIAG REPORT DOWNLOAD LINK ===      "
+                log "  $fieldiag_url"
+                log "  (available for 1 day, single download)   "
+                log "============================================"
+            else
+                warn "Failed to upload fieldiag to sendit.sh"
+            fi
+            rm -f "$fieldiag_out"
+        fi
     else
         log "fieldiag not available -- skipping"
     fi
