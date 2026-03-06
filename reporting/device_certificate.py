@@ -79,9 +79,9 @@ GPU_SCRIPTS = [
 
 # Map short names used internally to the MAAS script names
 SCRIPT_ALIASES = {
-    "install":   "90-nexgen-gpu-install-580-12.8",
-    "inventory": "98-nexgen-gpu-inventory",
-    "stress":    "99-nexgen-gpu-stress-test",
+    "install":   "90-nexgen-gpu-install-580-12.8.sh",
+    "inventory": "98-nexgen-gpu-inventory.sh",
+    "stress":    "99-nexgen-gpu-stress-test.sh",
 }
 
 
@@ -288,17 +288,23 @@ class MAASClient:
         return resp.json()
 
     def get_script_json(self, system_id: str, script_name: str) -> dict | None:
-        """Fetch a specific script's stdout and parse as JSON."""
+        """Fetch a specific script's stdout and parse as JSON.
+
+        Newer MAAS versions store scripts with .sh extension, older ones
+        without.  We try both variants so the lookup works either way.
+        """
+        candidates = [script_name]
+        if script_name.endswith(".sh"):
+            candidates.append(script_name.removesuffix(".sh"))
+        else:
+            candidates.append(script_name + ".sh")
         try:
-            data = self.get_commissioning_results(system_id, [script_name])
+            data = self.get_commissioning_results(system_id, candidates)
             for result in data.get("results", []):
-                if result.get("name") == script_name:
+                if result.get("name") in candidates:
                     stdout_b64 = result.get("stdout", "")
                     if stdout_b64:
                         raw = base64.b64decode(stdout_b64).decode("utf-8", errors="replace")
-                        # Our scripts output JSON to stdout but logs to stderr.
-                        # The stdout may have leading/trailing non-JSON text if
-                        # MAAS captured combined output. Try to extract JSON.
                         return _extract_json(raw)
             return None
         except Exception as e:
@@ -319,21 +325,31 @@ class MAASClient:
         return results
 
     def get_script_stdout_raw(self, system_id: str, script_name: str) -> str | None:
-        """Download raw stdout text for a script (no base64)."""
-        try:
-            resp = self._get(
-                f"nodes/{system_id}/results/current-commissioning/",
-                {
-                    "op": "download",
-                    "output": "stdout",
-                    "filetype": "txt",
-                    "filters": script_name,
-                },
-            )
-            return resp.text if resp.text.strip() else None
-        except Exception as e:
-            print(f"Warning: Could not download {script_name}: {e}", file=sys.stderr)
-            return None
+        """Download raw stdout text for a script (no base64).
+
+        Tries both with and without .sh extension for MAAS compatibility.
+        """
+        candidates = [script_name]
+        if script_name.endswith(".sh"):
+            candidates.append(script_name.removesuffix(".sh"))
+        else:
+            candidates.append(script_name + ".sh")
+        for name in candidates:
+            try:
+                resp = self._get(
+                    f"nodes/{system_id}/results/current-commissioning/",
+                    {
+                        "op": "download",
+                        "output": "stdout",
+                        "filetype": "txt",
+                        "filters": name,
+                    },
+                )
+                if resp.text.strip():
+                    return resp.text
+            except Exception:
+                continue
+        return None
 
 
 def _extract_json(text: str) -> dict | None:
