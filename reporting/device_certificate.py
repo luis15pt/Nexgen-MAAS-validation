@@ -1296,15 +1296,57 @@ def ecc_summary(ecc: dict) -> str:
     for key, label in [
         ("corrected_volatile", "CV"),
         ("uncorrected_volatile", "UV"),
+        ("corrected_aggregate", "CA"),
+        ("uncorrected_aggregate", "UA"),
         ("retired_pages_sbit", "RS"),
         ("retired_pages_dbit", "RD"),
     ]:
         val = ecc.get(key)
         if val is not None and isinstance(val, (int, float)) and val > 0:
-            parts.append(f'<span class="alert">{label}:{val}</span>')
+            cls = "alert" if "uncorrected" in key or "dbit" in key else "warn"
+            parts.append(f'<span class="{cls}">{label}:{val:,}</span>')
     if parts:
         return " ".join(parts)
     return '<span class="dim">Clean</span>'
+
+
+def remapped_rows_summary(gpu: dict) -> str:
+    rr = gpu.get("remapped_rows")
+    if not rr:
+        return '<span class="dim">N/A</span>'
+    parts = []
+    uce = rr.get("uncorrectable")
+    ce = rr.get("correctable")
+    if uce is not None and isinstance(uce, (int, float)) and uce > 0:
+        parts.append(f'<span class="alert">UCE:{uce}</span>')
+    if ce is not None and isinstance(ce, (int, float)) and ce > 0:
+        parts.append(f'CE:{ce}')
+    if rr.get("failure_occurred") is True:
+        parts.append('<span class="alert">FAILURE</span>')
+    elif rr.get("pending") is True:
+        parts.append('<span class="warn">PENDING</span>')
+    if not parts:
+        return '<span class="dim">None</span>'
+    return " ".join(parts)
+
+
+def bank_availability_summary(gpu: dict) -> str:
+    ba = gpu.get("bank_remap_availability")
+    if not ba:
+        return '<span class="dim">N/A</span>'
+    total = sum(v for v in ba.values() if isinstance(v, (int, float)))
+    if total == 0:
+        return '<span class="dim">N/A</span>'
+    parts = []
+    for key, label in [("max", "Max"), ("high", "High"), ("partial", "Part"), ("low", "Low"), ("none", "None")]:
+        val = ba.get(key)
+        if val is not None and isinstance(val, (int, float)) and val > 0:
+            cls = "alert" if key == "none" else ("warn" if key == "low" else "")
+            if cls:
+                parts.append(f'<span class="{cls}">{label}:{val}</span>')
+            else:
+                parts.append(f'{label}:{val}')
+    return " ".join(parts) if parts else '<span class="dim">N/A</span>'
 
 
 def pcie_str(g: dict) -> str:
@@ -2019,6 +2061,7 @@ def generate_report(
     gpu_header = f'''<tr>
         <th>#</th><th>Serial</th><th>PCIe</th><th>NUMA</th>
         <th>Idle</th><th>Idle Power</th><th>ECC</th>
+        <th>Remapped Rows</th><th>Banks</th>
         {stress_cols_hdr}
     </tr>'''
 
@@ -2053,6 +2096,8 @@ def generate_report(
             <td>{v(g.get("temp_idle_c"),"&deg;C")}</td>
             <td class="nowrap">{v(g.get("power_draw_w"),"W")} / {v(g.get("power_limit_w"),"W")}</td>
             <td>{ecc_summary(ecc)}</td>
+            <td>{remapped_rows_summary(g)}</td>
+            <td class="nowrap">{bank_availability_summary(g)}</td>
             {stress_cells}
         </tr>'''
 
@@ -2535,6 +2580,7 @@ section { margin-bottom: 2rem; }
 .dim { color: var(--txt2); }
 .hl { color: var(--accent); font-family: var(--mono); }
 .alert { color: var(--red); font-weight: 600; }
+.warn { color: #FF8C00; font-weight: 600; }
 
 .numa-node-row {
     display: flex;
