@@ -21,7 +21,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 WORK_DIR="/tmp/gpu-inventory-$$"
-SCRIPT_VERSION="2.0.3"
+SCRIPT_VERSION="2.1.0"
 
 ###############################################################################
 # LOGGING
@@ -343,6 +343,127 @@ collect_gpu_data() {
 
     echo "$gpus" > "$WORK_DIR/gpus.json"
 
+    #-----------------------------------------------------------------------
+    # ECC fallback: if --query-gpu ECC fields were unavailable, collect
+    # ECC counters and remapped row data via nvidia-smi -q -d ecc per GPU.
+    # This works on all driver versions including 580+.
+    #-----------------------------------------------------------------------
+    if [[ "$HAS_EXT" == "false" ]]; then
+        log "  Collecting ECC counters via nvidia-smi -q -d ecc (per GPU)..."
+        local gpu_indices
+        gpu_indices=$(jq -r '.[].gpu_index' "$WORK_DIR/gpus.json")
+
+        for gi in $gpu_indices; do
+            local ecc_out
+            ecc_out=$(nvidia-smi -i "$gi" -q -d ecc 2>/dev/null || true)
+
+            if [[ -n "$ecc_out" ]]; then
+                # Parse aggregate DRAM CE/UCE
+                local agg_section agg_ce agg_uce
+                agg_section=$(echo "$ecc_out" | sed -n '/Aggregate$/,/^[^ ]/p')
+                agg_ce=$(echo "$agg_section" | grep "DRAM Correctable" | head -1 | awk -F: '{print $2}' | tr -d ' ')
+                agg_uce=$(echo "$agg_section" | grep "DRAM Uncorrectable" | head -1 | awk -F: '{print $2}' | tr -d ' ')
+
+                # Parse volatile DRAM CE/UCE
+                local vol_section vol_ce vol_uce
+                vol_section=$(echo "$ecc_out" | sed -n '/Volatile$/,/Aggregate/p')
+                vol_ce=$(echo "$vol_section" | grep "DRAM Correctable" | head -1 | awk -F: '{print $2}' | tr -d ' ')
+                vol_uce=$(echo "$vol_section" | grep "DRAM Uncorrectable" | head -1 | awk -F: '{print $2}' | tr -d ' ')
+
+                # Parse remapped rows
+                local remap_ce remap_uce remap_pending remap_failure
+                remap_ce=$(echo "$ecc_out" | grep -A1 "Remapped Rows" | grep "Correctable Error" | awk -F: '{print $2}' | tr -d ' ')
+                remap_uce=$(echo "$ecc_out" | grep -A2 "Remapped Rows" | grep "Uncorrectable Error" | awk -F: '{print $2}' | tr -d ' ')
+                remap_pending=$(echo "$ecc_out" | grep -A3 "Remapped Rows" | grep "Pending" | head -1 | awk -F: '{print $2}' | tr -d ' ')
+                remap_failure=$(echo "$ecc_out" | grep "Remapping Failure Occurred" | awk -F: '{print $2}' | tr -d ' ')
+
+                # Parse SRAM threshold
+                local sram_threshold
+                sram_threshold=$(echo "$ecc_out" | grep "SRAM Threshold Exceeded" | awk -F: '{print $2}' | tr -d ' ')
+
+                # Parse bank remap availability
+                local bank_max bank_high bank_partial bank_low bank_none
+                bank_max=$(echo "$ecc_out" | grep -A1 "Max" | tail -1 | grep -oP '^\s*:\s*\K\d+' || echo "")
+                # Better parsing: look for the histogram section
+                local histo_section
+                histo_section=$(echo "$ecc_out" | sed -n '/Bank Remap Availability/,/Temperature/p')
+                bank_max=$(echo "$histo_section" | grep "Max" | awk -F: '{print $2}' | grep -oP '\d+' || echo "")
+                bank_high=$(echo "$histo_section" | grep "High" | awk -F: '{print $2}' | grep -oP '\d+' || echo "")
+                bank_partial=$(echo "$histo_section" | grep "Partial" | awk -F: '{print $2}' | grep -oP '\d+' || echo "")
+                bank_low=$(echo "$histo_section" | grep "Low" | awk -F: '{print $2}' | grep -oP '\d+' || echo "")
+                bank_none=$(echo "$histo_section" | grep "None" | awk -F: '{print $2}' | grep -oP '\d+' || echo "")
+
+                # Convert to JSON-safe values (N/A or empty -> null, numbers stay)
+                to_json_num() { local v="$1"; if [[ -z "$v" || "$v" == *"N/A"* || "$v" == *"Not"* ]]; then echo "null"; else echo "$v"; fi; }
+                to_json_bool() { local v="$1"; if [[ "$v" == "Yes" ]]; then echo "true"; elif [[ "$v" == "No" ]]; then echo "false"; else echo "null"; fi; }
+
+                local j_aca j_aua j_vca j_vua j_rce j_rue j_rp j_rf j_st
+                local j_bmax j_bhigh j_bpart j_blow j_bnone
+                j_aca=$(to_json_num "$agg_ce")
+                j_aua=$(to_json_num "$agg_uce")
+                j_vca=$(to_json_num "$vol_ce")
+                j_vua=$(to_json_num "$vol_uce")
+                j_rce=$(to_json_num "$remap_ce")
+                j_rue=$(to_json_num "$remap_uce")
+                j_rp=$(to_json_bool "$remap_pending")
+                j_rf=$(to_json_bool "$remap_failure")
+                j_st=$(to_json_bool "$sram_threshold")
+                j_bmax=$(to_json_num "$bank_max")
+                j_bhigh=$(to_json_num "$bank_high")
+                j_bpart=$(to_json_num "$bank_partial")
+                j_blow=$(to_json_num "$bank_low")
+                j_bnone=$(to_json_num "$bank_none")
+
+                # Update the GPU entry in gpus.json
+                gpus=$(cat "$WORK_DIR/gpus.json")
+                gpus=$(echo "$gpus" | jq --argjson gi "$gi" \
+                    --argjson aca "$j_aca" --argjson aua "$j_aua" \
+                    --argjson vca "$j_vca" --argjson vua "$j_vua" \
+                    --argjson rce "$j_rce" --argjson rue "$j_rue" \
+                    --argjson rp "$j_rp" --argjson rf "$j_rf" \
+                    --argjson st "$j_st" \
+                    --argjson bmax "$j_bmax" --argjson bhigh "$j_bhigh" \
+                    --argjson bpart "$j_bpart" --argjson blow "$j_blow" \
+                    --argjson bnone "$j_bnone" \
+                    '[.[] | if .gpu_index == $gi then
+                        .ecc = {
+                            corrected_volatile: $vca,
+                            uncorrected_volatile: $vua,
+                            corrected_aggregate: $aca,
+                            uncorrected_aggregate: $aua,
+                            retired_pages_sbit: .ecc.retired_pages_sbit,
+                            retired_pages_dbit: .ecc.retired_pages_dbit
+                        } |
+                        .remapped_rows = {
+                            correctable: $rce,
+                            uncorrectable: $rue,
+                            pending: $rp,
+                            failure_occurred: $rf
+                        } |
+                        .sram_threshold_exceeded = $st |
+                        .bank_remap_availability = {
+                            max: $bmax,
+                            high: $bhigh,
+                            partial: $bpart,
+                            low: $blow,
+                            none: $bnone
+                        }
+                    else . end]')
+                echo "$gpus" > "$WORK_DIR/gpus.json"
+
+                # Log summary
+                local ecc_summary="CE:${agg_ce:-n/a} UCE:${agg_uce:-n/a}"
+                [[ -n "$remap_uce" && "$remap_uce" != "0" && "$remap_uce" != *"N/A"* ]] && \
+                    ecc_summary+=" Remap:${remap_uce}UCE/${remap_ce:-0}CE"
+                [[ "$remap_failure" == "Yes" ]] && ecc_summary+=" REMAP_FAILURE!"
+                [[ "$sram_threshold" == "Yes" ]] && ecc_summary+=" SRAM_THRESHOLD!"
+                log "    GPU $gi ECC: $ecc_summary"
+            fi
+        done
+        # Re-read for downstream
+        gpus=$(cat "$WORK_DIR/gpus.json")
+    fi
+
     local numa_avail="false" numa_used=0
     if [[ "$numa_total" -gt 0 ]]; then
         numa_avail="true"
@@ -388,6 +509,33 @@ assemble_report() {
         overall="FAIL"
         issues=$(echo "$issues" | jq --argjson n "$ecc_fail" \
             '. + [{"issue":("\($n) GPU(s) with ECC uncorrectable errors or double-bit retired pages"),"severity":"critical"}]')
+    fi
+
+    # Remapping failure check (NVIDIA RMA condition)
+    local remap_fail
+    remap_fail=$(jq '[.[] | select(.remapped_rows.failure_occurred==true)] | length' "$WORK_DIR/gpus.json" 2>/dev/null || echo "0")
+    if [[ "$remap_fail" -gt 0 ]]; then
+        overall="FAIL"
+        issues=$(echo "$issues" | jq --argjson n "$remap_fail" \
+            '. + [{"issue":("\($n) GPU(s) with row remapping failure (RMA eligible)"),"severity":"critical"}]')
+    fi
+
+    # SRAM threshold exceeded check (NVIDIA RMA condition)
+    local sram_fail
+    sram_fail=$(jq '[.[] | select(.sram_threshold_exceeded==true)] | length' "$WORK_DIR/gpus.json" 2>/dev/null || echo "0")
+    if [[ "$sram_fail" -gt 0 ]]; then
+        overall="FAIL"
+        issues=$(echo "$issues" | jq --argjson n "$sram_fail" \
+            '. + [{"issue":("\($n) GPU(s) with SRAM threshold exceeded (RMA eligible)"),"severity":"critical"}]')
+    fi
+
+    # Remapped rows with UCEs (not yet at failure but degrading)
+    local remap_uce_warn
+    remap_uce_warn=$(jq '[.[] | select(.remapped_rows.uncorrectable!=null and .remapped_rows.uncorrectable>0 and .remapped_rows.failure_occurred!=true)] | length' "$WORK_DIR/gpus.json" 2>/dev/null || echo "0")
+    if [[ "$remap_uce_warn" -gt 0 ]]; then
+        [[ "$overall" == "PASS" ]] && overall="WARN"
+        issues=$(echo "$issues" | jq --argjson n "$remap_uce_warn" \
+            '. + [{"issue":("\($n) GPU(s) with UCE remapped rows (degrading, not yet at failure threshold)"),"severity":"warning"}]')
     fi
 
     # ECC unavailable note
