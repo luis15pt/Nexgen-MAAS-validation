@@ -24,7 +24,7 @@ NVIDIA_DRIVER="${NVIDIA_DRIVER:-nvidia-driver-580-server-open}"
 CUDA_TOOLKIT="${CUDA_TOOLKIT:-cuda-toolkit-12-8}"
 DCGM_CUDA_MAJOR="${DCGM_CUDA_MAJOR:-13}"
 WORK_DIR="/tmp/gpu-install-$$"
-SCRIPT_VERSION="2.1.3"
+SCRIPT_VERSION="2.1.5"
 
 ###############################################################################
 # LOGGING
@@ -171,28 +171,31 @@ load_and_verify() {
     # BAR0 is the first line of the resource file and config offset 0x10.
     declare -A _saved_bar0
     local _bar0_needs_fix=false
-    local pci_short
-    for pci_short in $(lspci -n | awk '/10de:/{print $1}'); do
+    local pci_addr
+    # Use -D to always include PCI domain (needed for multi-domain systems)
+    for pci_addr in $(lspci -Dn | awk '/10de:/{print $1}'); do
         local bar0_hw bar0_kern
-        bar0_hw=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null) || continue
+        bar0_hw=$(setpci -s "$pci_addr" BASE_ADDRESS_0 2>/dev/null) || continue
         # Kernel's view: first line of resource file, first field is start address
-        bar0_kern=$(awk 'NR==1{print $1}' "/sys/bus/pci/devices/0000:${pci_short}/resource" 2>/dev/null)
-        _saved_bar0["$pci_short"]="$bar0_hw"
+        bar0_kern=$(awk 'NR==1{print $1}' "/sys/bus/pci/devices/${pci_addr}/resource" 2>/dev/null)
+        _saved_bar0["$pci_addr"]="$bar0_hw"
 
-        if [[ "$bar0_kern" == "0x0000000000000000" ]] || [[ "$bar0_kern" == "0x00000000" ]]; then
+        if [[ -z "$bar0_kern" ]] || [[ "$bar0_kern" == "0x0000000000000000" ]] || [[ "$bar0_kern" == "0x00000000" ]]; then
             if [[ "$bar0_hw" != "00000000" ]]; then
-                warn "  ${pci_short}: BAR0 hw=0x${bar0_hw} but kernel=<ignored> (BIOS collision or conflict)"
+                warn "  ${pci_addr}: BAR0 hw=0x${bar0_hw} but kernel=<ignored> (BIOS collision or conflict)"
                 _bar0_needs_fix=true
             else
-                warn "  ${pci_short}: BAR0 is 0x0 in both hardware and kernel"
+                warn "  ${pci_addr}: BAR0 is 0x0 in both hardware and kernel"
                 _bar0_needs_fix=true
             fi
         else
-            log "  BAR0 ${pci_short}: hw=0x${bar0_hw} kern=${bar0_kern} OK"
+            log "  BAR0 ${pci_addr}: hw=0x${bar0_hw} kern=${bar0_kern} OK"
         fi
     done
 
+    local _nouveau_was_loaded=false
     if lsmod | grep -q nouveau; then
+        _nouveau_was_loaded=true
         log "nouveau is loaded -- unloading..."
 
         # Step 1: Unbind the framebuffer console from nouveau.
@@ -210,7 +213,7 @@ load_and_verify() {
 
         # Step 2: Unbind nouveau from all GPU PCI devices via sysfs.
         local pci_addr
-        for pci_addr in /sys/bus/pci/drivers/nouveau/0000:*; do
+        for pci_addr in /sys/bus/pci/drivers/nouveau/[0-9]*; do
             if [[ -e "$pci_addr" ]]; then
                 echo "${pci_addr##*/}" > /sys/bus/pci/drivers/nouveau/unbind 2>/dev/null || true
                 log "  Unbound ${pci_addr##*/} from nouveau"
@@ -248,39 +251,39 @@ load_and_verify() {
         sleep 2
     fi
 
-    # ── Fix BAR0 if kernel has it as <ignored> ───────────────────────
-    # When the kernel marks BAR0 as <ignored>, nvidia sees BAR0=0x0.
-    # The fix: write unique BAR0 addresses via sysfs config WHILE the
-    # device is still in the kernel (sysfs accessible), verify the write,
-    # then remove + rescan so the kernel re-reads and claims the resource.
-    if $_bar0_needs_fix; then
-        log "BAR0 needs fixing -- assigning unique addresses..."
+    # ── BAR0 fixup decision ──────────────────────────────────────────
+    # The remove+rescan fixup is only safe when nouveau previously held
+    # the devices and zeroed their BARs during unload.  On systems where
+    # BIOS never assigned BARs (e.g., some HPE Blackwell configs), the
+    # remove+rescan causes GPUs to "fall off the bus" -- a fatal PCIe
+    # link loss that no software fix can recover.  In that case the BIOS
+    # must be configured correctly (Above 4G Decoding, MMIO allocation).
+    if $_bar0_needs_fix && $_nouveau_was_loaded; then
+        # Nouveau previously held these devices and may have zeroed their
+        # BARs during unload (known A100 issue).  Safe to do remove+rescan
+        # because the PCIe links are still alive -- nouveau just cleared
+        # the BAR registers.
+        log "BAR0 issues detected after nouveau unload -- attempting remove+rescan fixup..."
 
-        # Collect GPU BDF addresses
         local gpu_bdfs=()
-        for pci_short in $(lspci -n | awk '/10de:/{print $1}'); do
-            gpu_bdfs+=("$pci_short")
+        for pci_addr in $(lspci -Dn | awk '/10de:/{print $1}'); do
+            gpu_bdfs+=("$pci_addr")
         done
 
-        # Find a free 32-bit MMIO base by scanning /proc/iomem.
-        # We need 16 MB per GPU (BAR0 size) aligned to 16 MB.
         local bar0_size=$((16 * 1024 * 1024))  # 16 MB
         local alloc_base=0
         local needed=$(( ${#gpu_bdfs[@]} * bar0_size ))
         log "  Need ${#gpu_bdfs[@]} x 16MB = $((needed / 1024 / 1024))MB of free 32-bit MMIO"
 
-        # Parse /proc/iomem for the largest free gap below 4GB
+        # Find a free 32-bit MMIO base by scanning /proc/iomem
         local best_start=0 best_size=0
-        local prev_end=$((0x80000000))  # Start scanning from 2GB
-
+        local prev_end=$((0x80000000))
         while IFS='-' read -r range_start range_rest; do
             range_start="0x${range_start// /}"
             local range_end="0x${range_rest%% *}"
             local rs=$((range_start)) re=$((range_end))
-
             [[ $rs -ge $((0x100000000)) ]] && continue
             [[ $rs -lt $prev_end ]] && { prev_end=$(( re > prev_end ? re : prev_end )); continue; }
-
             local gap_size=$(( rs - prev_end ))
             if [[ $gap_size -gt $best_size ]]; then
                 best_start=$prev_end
@@ -288,13 +291,11 @@ load_and_verify() {
             fi
             prev_end=$(( re + 1 ))
         done < <(grep -v '^ ' /proc/iomem | sort)
-
         local trailing=$(( 0x100000000 - prev_end ))
         if [[ $trailing -gt $best_size ]]; then
             best_start=$prev_end
             best_size=$trailing
         fi
-
         if [[ $best_size -ge $needed ]] && [[ $best_start -gt 0 ]]; then
             alloc_base=$(( (best_start + bar0_size - 1) & ~(bar0_size - 1) ))
             log "  Found $((best_size/1024/1024))MB free at 0x$(printf '%x' $best_start), allocating from 0x$(printf '%x' $alloc_base)"
@@ -303,87 +304,76 @@ load_and_verify() {
             alloc_base=0
         fi
 
-        # Step 1: Write unique BAR0 addresses WHILE devices are still in
-        # the kernel (sysfs config file accessible).  Use the sysfs config
-        # file at offset 0x10 (BAR0) for a guaranteed kernel-mediated write.
-        log "  Writing BAR0 via sysfs config (devices still in kernel)..."
+        log "  Writing BAR0 via sysfs config..."
         local idx=0
         declare -A _new_bar0
-        for pci_short in "${gpu_bdfs[@]}"; do
+        for pci_addr in "${gpu_bdfs[@]}"; do
             local new_bar0
             if [[ $alloc_base -gt 0 ]]; then
                 new_bar0=$(printf '%08x' $(( alloc_base + idx * bar0_size )))
             else
-                # De-duplicate BIOS values
-                new_bar0="${_saved_bar0[$pci_short]:-00000000}"
+                new_bar0="${_saved_bar0[$pci_addr]:-00000000}"
                 local other
                 for other in "${gpu_bdfs[@]}"; do
-                    [[ "$other" == "$pci_short" ]] && break
+                    [[ "$other" == "$pci_addr" ]] && break
                     if [[ "${_new_bar0[$other]}" == "$new_bar0" ]]; then
                         new_bar0=$(printf '%08x' $(( 0x$new_bar0 + bar0_size )))
-                        warn "  ${pci_short}: collision, shifted to 0x${new_bar0}"
+                        warn "  ${pci_addr}: collision, shifted to 0x${new_bar0}"
                         break
                     fi
                 done
             fi
-            _new_bar0["$pci_short"]="$new_bar0"
-
-            # Write via setpci (uses sysfs while device exists)
-            setpci -s "$pci_short" BASE_ADDRESS_0="$new_bar0" 2>/dev/null
-
-            # Verify the write by reading back
+            _new_bar0["$pci_addr"]="$new_bar0"
+            setpci -s "$pci_addr" BASE_ADDRESS_0="$new_bar0" 2>/dev/null
             local readback
-            readback=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null)
+            readback=$(setpci -s "$pci_addr" BASE_ADDRESS_0 2>/dev/null)
             if [[ "$readback" == "$new_bar0" ]]; then
-                log "  ${pci_short}: BAR0=0x${new_bar0} (verified)"
+                log "  ${pci_addr}: BAR0=0x${new_bar0} (verified)"
             else
-                warn "  ${pci_short}: write 0x${new_bar0} but readback 0x${readback:-failed}"
+                warn "  ${pci_addr}: write 0x${new_bar0} readback 0x${readback:-failed}"
             fi
             idx=$((idx + 1))
         done
 
-        # Step 2: Remove all GPU PCI devices.  This releases the kernel's
-        # (broken) resource claims but the PCI config space retains our
-        # BAR0 values in the hardware registers.
         log "  Removing GPU PCI devices..."
-        for pci_short in "${gpu_bdfs[@]}"; do
-            if [[ -e "/sys/bus/pci/devices/0000:${pci_short}/remove" ]]; then
-                echo 1 > "/sys/bus/pci/devices/0000:${pci_short}/remove" 2>/dev/null || true
+        for pci_addr in "${gpu_bdfs[@]}"; do
+            if [[ -e "/sys/bus/pci/devices/${pci_addr}/remove" ]]; then
+                echo 1 > "/sys/bus/pci/devices/${pci_addr}/remove" 2>/dev/null || true
             fi
         done
         sleep 2
 
-        # Step 3: Re-write BAR0 values just before rescan.
-        # The PCI config space should retain our writes, but re-assert
-        # them to be safe (device is physically present, bridge passes
-        # config cycles even when kernel has no device struct).
-        for pci_short in "${gpu_bdfs[@]}"; do
-            setpci -s "$pci_short" BASE_ADDRESS_0="${_new_bar0[$pci_short]}" 2>/dev/null || true
+        for pci_addr in "${gpu_bdfs[@]}"; do
+            setpci -s "$pci_addr" BASE_ADDRESS_0="${_new_bar0[$pci_addr]}" 2>/dev/null || true
         done
 
-        # Step 4: Rescan.  The kernel re-discovers the devices, reads the
-        # BAR0 values we wrote, and should claim them in its resource tree
-        # since they are now unique and within a valid MMIO range.
         log "  Rescanning PCI bus..."
         echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
         sleep 5
 
-        # Step 5: Verify kernel now sees BAR0
         local fixed=0 broken=0
-        for pci_short in "${gpu_bdfs[@]}"; do
+        for pci_addr in "${gpu_bdfs[@]}"; do
             local bar0_kern bar0_hw
-            bar0_kern=$(awk 'NR==1{print $1}' "/sys/bus/pci/devices/0000:${pci_short}/resource" 2>/dev/null)
-            bar0_hw=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null)
+            bar0_kern=$(awk 'NR==1{print $1}' "/sys/bus/pci/devices/${pci_addr}/resource" 2>/dev/null)
+            bar0_hw=$(setpci -s "$pci_addr" BASE_ADDRESS_0 2>/dev/null)
             if [[ "$bar0_kern" != "0x0000000000000000" ]] && [[ "$bar0_kern" != "0x00000000" ]] && [[ -n "$bar0_kern" ]]; then
-                log "  ${pci_short}: kernel BAR0=${bar0_kern} hw=0x${bar0_hw} OK"
+                log "  ${pci_addr}: kernel BAR0=${bar0_kern} hw=0x${bar0_hw} OK"
                 fixed=$((fixed + 1))
             else
-                warn "  ${pci_short}: kernel BAR0 still unassigned (hw=0x${bar0_hw})"
+                warn "  ${pci_addr}: kernel BAR0 still unassigned (hw=0x${bar0_hw})"
                 broken=$((broken + 1))
             fi
         done
         log "BAR0 fixup: ${fixed} fixed, ${broken} still broken"
         sleep 1
+    elif $_bar0_needs_fix; then
+        # No nouveau -- BIOS did not assign BARs.  Do NOT attempt
+        # remove+rescan: on Blackwell GPUs this causes "fallen off the
+        # bus" (fatal PCIe link loss).  Try modprobe directly -- the
+        # kernel may have valid 64-bit mappings that setpci can't show.
+        warn "BAR0 issues detected but nouveau was NOT loaded -- likely a BIOS configuration problem"
+        warn "  Recommended BIOS settings: Above 4G Decoding=Enabled, MMIO High Base, 64-bit PCIe resource allocation"
+        warn "  Skipping remove+rescan fixup (unsafe without nouveau) -- trying modprobe directly"
     fi
 
     # ── DKMS build (if nvidia module not found) ───────────────────────
@@ -435,37 +425,37 @@ load_and_verify() {
         sleep "$attempt"
     done
 
-    # ── Last resort: check dmesg for BAR0 failure and retry ─────────
+    # ── Last resort: check dmesg for BAR0 or fallen-off-bus failure ──
     if ! $nvidia_loaded; then
-        # Check if it's a BAR0 issue that we didn't catch earlier
-        if dmesg | grep -q "BAR0 is 0M"; then
-            warn "dmesg confirms BAR0 invalid -- re-running BAR0 fixup..."
+        if dmesg | grep -q "fallen off the bus"; then
+            err "GPUs have fallen off the PCIe bus -- this is a hardware or BIOS issue"
+            err "  The remove+rescan fixup or a PCIe link failure caused the GPUs to become unreachable"
+            err "  Action: check BIOS settings, reseat GPUs, or update BIOS firmware"
+        elif dmesg | grep -q "BAR0 is 0M" && $_nouveau_was_loaded; then
+            # Only safe to retry remove+rescan if nouveau was the cause
+            warn "dmesg confirms BAR0 invalid after nouveau -- re-running BAR0 fixup..."
             rmmod nvidia 2>/dev/null || true
-            _bar0_needs_fix=true
 
-            # Same fixup logic: remove devices, write BARs, rescan
             local gpu_bdfs=()
-            for pci_short in $(lspci -n | awk '/10de:/{print $1}'); do
-                gpu_bdfs+=("$pci_short")
+            for pci_addr in $(lspci -Dn | awk '/10de:/{print $1}'); do
+                gpu_bdfs+=("$pci_addr")
             done
             local bar0_size=$((16 * 1024 * 1024))
 
-            for pci_short in "${gpu_bdfs[@]}"; do
-                if [[ -e "/sys/bus/pci/devices/0000:${pci_short}/remove" ]]; then
-                    echo 1 > "/sys/bus/pci/devices/0000:${pci_short}/remove" 2>/dev/null || true
+            for pci_addr in "${gpu_bdfs[@]}"; do
+                if [[ -e "/sys/bus/pci/devices/${pci_addr}/remove" ]]; then
+                    echo 1 > "/sys/bus/pci/devices/${pci_addr}/remove" 2>/dev/null || true
                 fi
             done
             sleep 2
 
-            # Assign sequential BAR0 addresses starting from a safe base
-            # Use 0xB0000000 as a fallback base (typically available)
             local fallback_base=$((0xB0000000))
             local idx=0
-            for pci_short in "${gpu_bdfs[@]}"; do
+            for pci_addr in "${gpu_bdfs[@]}"; do
                 local new_bar0
                 new_bar0=$(printf '%08x' $(( fallback_base + idx * bar0_size )))
-                setpci -s "$pci_short" BASE_ADDRESS_0="$new_bar0" 2>/dev/null || true
-                log "  ${pci_short}: wrote BAR0=0x${new_bar0}"
+                setpci -s "$pci_addr" BASE_ADDRESS_0="$new_bar0" 2>/dev/null || true
+                log "  ${pci_addr}: wrote BAR0=0x${new_bar0}"
                 idx=$((idx + 1))
             done
 
@@ -477,6 +467,10 @@ load_and_verify() {
             if ! $nvidia_loaded; then
                 warn "modprobe after BAR0 re-fixup failed: $modprobe_err"
             fi
+        elif dmesg | grep -q "BAR0 is 0M"; then
+            err "BAR0 is invalid but nouveau was not involved -- BIOS did not assign GPU PCI resources"
+            err "  Action: enable 'Above 4G Decoding' in BIOS, check MMIO allocation settings"
+            err "  Compare BIOS version and settings with a working identical system"
         fi
     fi
 
@@ -486,11 +480,11 @@ load_and_verify() {
         log "--- dmesg GPU diagnostics ---"
         dmesg | grep -iE "nvidia|nouveau|pci|firmware|gsp|drm|NVRM" | tail -50 >&2
         log "--- BAR0 status (hardware vs kernel) ---"
-        for pci_short in $(lspci -n | awk '/10de:/{print $1}'); do
+        for pci_addr in $(lspci -Dn | awk '/10de:/{print $1}'); do
             local b0_hw b0_kern
-            b0_hw=$(setpci -s "$pci_short" BASE_ADDRESS_0 2>/dev/null)
-            b0_kern=$(awk 'NR==1{print $1}' "/sys/bus/pci/devices/0000:${pci_short}/resource" 2>/dev/null)
-            log "  ${pci_short} hw=0x${b0_hw:-?} kern=${b0_kern:-?}" >&2
+            b0_hw=$(setpci -s "$pci_addr" BASE_ADDRESS_0 2>/dev/null)
+            b0_kern=$(awk 'NR==1{print $1}' "/sys/bus/pci/devices/${pci_addr}/resource" 2>/dev/null)
+            log "  ${pci_addr} hw=0x${b0_hw:-?} kern=${b0_kern:-?}" >&2
         done
         log "--- GSP firmware check ---"
         find /lib/firmware/nvidia/ -name "gsp_ga*" -ls 2>/dev/null >&2 || warn "No GSP firmware found"
@@ -499,8 +493,8 @@ load_and_verify() {
         log "--- DKMS status ---"
         dkms status >&2 2>&1 || true
         log "--- PCIe diagnostics ---"
-        lspci -nn | grep -i "10de" >&2 2>&1 || warn "No NVIDIA devices in lspci"
-        lspci -vvs "$(lspci -n | grep '10de:' | head -1 | awk '{print $1}')" >&2 2>&1 || true
+        lspci -Dnn | grep -i "10de" >&2 2>&1 || warn "No NVIDIA devices in lspci"
+        lspci -vvs "$(lspci -Dn | grep '10de:' | head -1 | awk '{print $1}')" >&2 2>&1 || true
         log "Secure Boot status:"
         mokutil --sb-state >&2 2>&1 || true
         log "--- end diagnostics ---"
