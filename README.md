@@ -8,8 +8,9 @@ Automated GPU commissioning, validation, and certification pipeline for bare-met
 Nexgen-MAAS-validation/
 ├── README.md
 ├── .gitignore
-├── .env.example                             # MAAS credentials template
+├── .env.example                             # MAAS + NetBox credentials template
 ├── commissioning-scripts/        # MAAS commissioning scripts (run in order)
+│   ├── 80-nexgen-network-cabling-verify.sh # Step 0: NetBox vs LLDP cabling check
 │   ├── 97-nexgen-gpu-install-580-12.8.sh   # Step 1: Driver + CUDA + DCGM install
 │   ├── 98-nexgen-gpu-inventory.sh          # Step 2: GPU inventory & health check
 │   └── 99-nexgen-gpu-stress-test.sh        # Step 3: DCGM stress test
@@ -23,7 +24,27 @@ Nexgen-MAAS-validation/
 
 ## Commissioning Scripts
 
-All three scripts are designed to run as MAAS commissioning scripts in sequence. They follow the MAAS metadata format and output structured JSON for downstream consumption.
+All four scripts are designed to run as MAAS commissioning scripts in sequence. They follow the MAAS metadata format and output structured JSON for downstream consumption.
+
+### 80 - Network Cabling Verify (`v1.0.0`)
+
+Verifies physical cabling before any GPU work runs. Identifies the host by DMI serial (fallback: hostname), pulls the planned per-interface cable destinations from NetBox 4.x, collects live LLDP neighbours on every physical NIC, and fails commissioning on any mismatch.
+
+| Env Override | Default | Description |
+|---|---|---|
+| `NETBOX_URL` | `https://netbox.example.com` | NetBox base URL -- **edit before upload** |
+| `NETBOX_TOKEN` | `CHANGEME` | NetBox API token -- **edit before upload** |
+| `LLDP_WAIT_SECONDS` | `90` | Seconds to wait for LLDP neighbour discovery after starting `lldpd` |
+| `MATCH_BY_ENDPOINT` | `true` | Match planned cables by `(switch, port)` rather than requiring the local NIC name to equal the NetBox interface name |
+| `BMC_IFNAME_PATTERN` | `^(ipmi\|bmc\|mgmt\|management)$` | NetBox interfaces matching this regex are reported as `NOT_CHECKED` (info) -- the host OS can't observe BMC LLDP |
+| `REQUIRE_ALL_PLANNED` | `true` | Fail if any NetBox-planned cable has no LLDP neighbour |
+| `ALLOW_EXTRA_LINKS` | `false` | Strict mode: any live NIC without a NetBox cable fails the run |
+| `NAME_MATCH_STRICT` | `false` | Require exact (post-normalisation) port-name match instead of suffix match |
+| `IGNORE_IFNAMES` | (empty) | Comma-separated list of local NICs to exempt (e.g. management NIC) |
+
+Installs `lldpd` via apt if missing. Writes a planned-vs-actual ASCII table to stderr and structured JSON (`planned`, `actual`, `comparison`, `verdict`) to stdout. Row results: `OK`, `NOT_CHECKED` (BMC/IPMI, info only), `WRONG_SWITCH`, `WRONG_PORT`, `MISSING_LINK`, `LOCAL_NIC_NOT_FOUND`, `UNPLANNED_LINK`, `UNPLANNED_IDLE`. On `MISSING_LINK` the reason string lists down NICs, up-with-no-LLDP NICs, and any neighbours observed elsewhere so cable/optic/switch-config failures can be told apart at a glance. When zero LLDP neighbours are observed on a host with Mellanox NICs, the script auto-installs `mft` and dumps firmware `LLDP_NB`/`DCBX` settings to help diagnose firmware-level LLDP intercept.
+
+**Timeout**: 5 minutes
 
 ### 97 - GPU Driver Install (`v2.1.1`)
 
@@ -133,9 +154,17 @@ Or see the source at [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/
 
 ## Adding Scripts to MAAS
 
-Upload the commissioning scripts via the MAAS CLI:
+Upload the commissioning scripts via the MAAS CLI. **Before uploading the
+80- script**, edit its `NETBOX_URL` / `NETBOX_TOKEN` defaults (top of the
+file) -- MAAS does not inject per-script secrets:
 
 ```bash
+maas $PROFILE commissioning-scripts create \
+  name=80-nexgen-network-cabling-verify \
+  script_type=commissioning \
+  hardware_type=network \
+  content@=commissioning-scripts/80-nexgen-network-cabling-verify.sh
+
 maas $PROFILE commissioning-scripts create \
   name=97-nexgen-gpu-install-580-12.8 \
   script_type=commissioning \
@@ -159,6 +188,9 @@ maas $PROFILE commissioning-scripts create \
 
 ```
 Commission Machine in MAAS
+         │
+         ▼
+   80 - Cabling Verify ───► NetBox planned vs. LLDP actual (fails fast)
          │
          ▼
    97 - Install Drivers ──► nvidia-driver-580 + CUDA 12.8 + DCGM 4.x
