@@ -42,7 +42,23 @@ Verifies physical cabling before any GPU work runs. Identifies the host by DMI s
 | `NAME_MATCH_STRICT` | `false` | Require exact (post-normalisation) port-name match instead of suffix match |
 | `IGNORE_IFNAMES` | (empty) | Comma-separated list of local NICs to exempt (e.g. management NIC) |
 
-Installs `lldpd` via apt if missing. Writes a planned-vs-actual ASCII table to stderr and structured JSON (`planned`, `actual`, `comparison`, `verdict`) to stdout. Row results: `OK`, `NOT_CHECKED` (BMC/IPMI, info only), `WRONG_SWITCH`, `WRONG_PORT`, `MISSING_LINK`, `LOCAL_NIC_NOT_FOUND`, `UNPLANNED_LINK`, `UNPLANNED_IDLE`. On `MISSING_LINK` the reason string lists down NICs, up-with-no-LLDP NICs, and any neighbours observed elsewhere so cable/optic/switch-config failures can be told apart at a glance. When zero LLDP neighbours are observed on a host with Mellanox NICs, the script auto-installs `mft` and dumps firmware `LLDP_NB`/`DCBX` settings to help diagnose firmware-level LLDP intercept.
+Installs `lldpd` via apt if missing. Writes a planned-vs-actual ASCII table to stderr and structured JSON (`planned`, `actual`, `comparison`, `verdict`) to stdout. Row results: `OK`, `NOT_CHECKED` (BMC/IPMI, info only), `WRONG_SWITCH`, `WRONG_PORT`, `MISSING_LINK`, `LOCAL_NIC_NOT_FOUND`, `UNPLANNED_LINK`, `NO_LLDP_ON_UP_NIC`, `UNPLANNED_IDLE`. A fleet-level `LLDP_SWITCH_OFFLINE` issue is raised when the host has ≥1 up NIC but zero neighbours, so the verdict reads as a switch-config problem rather than a flurry of per-row `MISSING_LINK` failures. On `MISSING_LINK` the reason string lists down NICs, up-with-no-LLDP NICs, and any neighbours observed elsewhere so cable/optic/switch-config failures can be told apart at a glance. When zero LLDP neighbours are observed on a host with Mellanox NICs, the script auto-installs `mft` and dumps firmware `LLDP_NB`/`DCBX` settings to help diagnose firmware-level LLDP intercept.
+
+#### Example scenarios (defaults)
+
+Baseline: NetBox plans `IPMI → mgmt-sw/Gi1/0/6`, `eth0 → leaf254a/Eth1/4`, `eth1 → leaf254b/Eth1/4`. Host has 2× mlx5 + 2× igb NICs.
+
+| # | Physical reality | Per-row results | Extra NICs | Overall |
+|---|---|---|---|---|
+| 1 | Both mlx5 cabled exactly as planned. igb NICs down. | IPMI `NOT_CHECKED` · eth0 `OK` · eth1 `OK` | eno1/eno2 silenced (down) | **PASS** |
+| 2 | `eth1` cable unplugged. `eth0` fine. | eth0 `OK` · eth1 `MISSING_LINK` (reason names down NICs) | — | **FAIL** |
+| 3 | Both mlx5 cables swapped: mlx5_0→leaf254a, mlx5_1→leaf254b (opposite of plan). | eth0 `OK` · eth1 `OK` — endpoint mode accepts any host NIC that carries the planned `(switch, port)` | — | **PASS** |
+| 4 | `eth0` moved to wrong leaf port: leaf254a/Eth1/**5** instead of Eth1/4. | eth0 `MISSING_LINK` (reason: "Observed elsewhere: …leaf254a/Ethernet1/5") · eth1 `OK` | — | **FAIL** |
+| 5 | `eth0` moved to a different leaf: leaf253a/Eth1/4. | eth0 `MISSING_LINK` (reason names wrong leaf) · eth1 `OK` | — | **FAIL** |
+| 6 | Planned links correct, but a 3rd cable plugged into eno1 with LLDP neighbour not in NetBox. | eth0 `OK` · eth1 `OK` | eno1 `UNPLANNED_LINK` critical | **FAIL** |
+| 7 | Planned links correct, eno1 is up but its switch port has LLDP disabled. | eth0 `OK` · eth1 `OK` | eno1 `NO_LLDP_ON_UP_NIC` critical — "enable LLDP on the switch" | **FAIL** |
+| 8 | LLDP disabled fleet-wide (nothing observed on any up NIC). | all planned rows `MISSING_LINK` | — | **FAIL** + top-level `LLDP_SWITCH_OFFLINE` alert + mlx firmware diagnostics block |
+| 9 | NetBox entry `LOM` (not in BMC regex) has no host counterpart. | LOM `MISSING_LINK` | — | **FAIL** — add `LOM` to `BMC_IFNAME_PATTERN` to exempt |
 
 **Timeout**: 5 minutes
 

@@ -665,6 +665,22 @@ compare_and_build() {
     local issues="[]"
     local matched_ifnames=""
 
+    # Fleet-wide LLDP-offline detection: if the host has at least one up NIC
+    # and we observed zero LLDP neighbours across all of them, that's almost
+    # always switch-side LLDP being off (or mlx firmware intercept, which the
+    # separate diagnostics block already checks). Emit a single crisp issue
+    # so the verdict reads "LLDP disabled at switch" instead of a confusing
+    # flurry of per-row MISSING_LINK failures.
+    local up_nic_count lldp_count
+    up_nic_count=$(jq '[.[] | select(.operstate=="up")] | length' "$WORK_DIR/nics.json")
+    lldp_count=$(jq 'length' "$WORK_DIR/lldp.json")
+    if [[ "$up_nic_count" -gt 0 && "$lldp_count" == "0" ]]; then
+        local msg="No LLDP neighbours observed on any of $up_nic_count up NIC(s). Switch-side LLDP appears to be disabled -- this script cannot verify cabling until LLDP is enabled on the adjacent switch ports. (Also possible: Mellanox firmware LLDP intercept; see diagnostics block above.)"
+        warn "$msg"
+        issues=$(echo "$issues" | jq --arg m "[FLEET] LLDP_SWITCH_OFFLINE: $msg" --arg s "critical" \
+            '. + [{issue:$m, severity:$s}]')
+    fi
+
     local planned_count
     planned_count=$(jq 'length' "$WORK_DIR/planned.json")
 
@@ -791,7 +807,8 @@ compare_and_build() {
             continue
         fi
 
-        local lldp_row a_chassis="" a_port="" result reason
+        local lldp_row a_chassis="" a_port="" result reason operstate
+        operstate=$(jq -r --arg n "$nic" '.[] | select(.ifname==$n) | .operstate' "$WORK_DIR/nics.json")
         lldp_row=$(lldp_for_ifname "$nic")
         if [[ -n "$lldp_row" ]]; then
             a_chassis=$(echo "$lldp_row" | jq -r '.chassis_name // ""')
@@ -802,9 +819,16 @@ compare_and_build() {
             [[ -z "$a_port" || "$a_port" == "null" ]] && a_port="$a_descr"
             result="UNPLANNED_LINK"
             reason="NIC $nic is live (neighbour $a_chassis/$a_port) but has no cable in NetBox"
+        elif [[ "$operstate" == "up" ]]; then
+            # Carrier is up but no LLDP seen. Either the switch port has LLDP
+            # disabled (can't verify cabling here) or this is a rogue
+            # undocumented link. Either way it should fail -- we can't prove
+            # where it terminates without LLDP on both sides.
+            result="NO_LLDP_ON_UP_NIC"
+            reason="NIC $nic is up but no LLDP neighbour observed. Likely switch-side LLDP disabled on this port, or undocumented link. Enable LLDP on the switch and verify NetBox cabling."
         else
             result="UNPLANNED_IDLE"
-            reason="NIC $nic present on host but not in NetBox (no LLDP neighbour either)"
+            reason="NIC $nic present on host but not in NetBox (operstate=$operstate, no LLDP neighbour)"
         fi
 
         comparison=$(echo "$comparison" | jq \
@@ -819,8 +843,8 @@ compare_and_build() {
                 result:$r, reason:$why
             }]')
 
-        # UNPLANNED_IDLE on a down interface isn't actionable -- skip it in
-        # endpoint mode where we're deliberately relaxing ifname pedantry.
+        # UNPLANNED_IDLE on a *down* interface isn't actionable -- skip it.
+        # NO_LLDP_ON_UP_NIC and UNPLANNED_LINK always flag as issues below.
         if [[ "$result" == "UNPLANNED_IDLE" && "$MATCH_BY_ENDPOINT" == "true" ]]; then
             continue
         fi
