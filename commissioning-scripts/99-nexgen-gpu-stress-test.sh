@@ -79,30 +79,56 @@ fail_json() {
 ###############################################################################
 # COLLECT FAILURE DIAGNOSTICS (runs only on DCGM FAIL)
 ###############################################################################
+# Artifacts are written to stderr, which MAAS retains as part of the
+# commissioning result and the report generator can fetch back out.  They are
+# deliberately NOT uploaded anywhere: these logs carry GPU serials and host
+# identifiers, and the previous sendit.sh path put them on a third-party host
+# with a single-download, short-retention link that only ever appeared in the
+# log text -- so the evidence was simultaneously exposed and unreachable.
+#
+# Sets DIAG_ARTIFACTS to a JSON array describing what was captured, so the
+# report can state which artifacts exist.  Must therefore run BEFORE the final
+# report is emitted.
 collect_failure_diagnostics() {
     log "============================================"
     log "=== Collecting failure diagnostics ===      "
     log "============================================"
 
-    local hostname
+    local hostname stamp
     hostname=$(hostname 2>/dev/null || echo "unknown")
+    stamp=$(date -u '+%Y%m%dT%H%M%SZ')
+    DIAG_ARTIFACTS="[]"
 
-    # --- nvidia-bug-report.sh ---
+    _artifact() { # name, bytes, note
+        DIAG_ARTIFACTS=$(printf '%s' "$DIAG_ARTIFACTS" | jq \
+            --arg n "$1" --argjson b "${2:-0}" --arg note "${3:-}" \
+            '. + [{artifact:$n, bytes:$b, note:$note, location:"MAAS commissioning log (stderr)"}]')
+    }
+
+    # --- Xid scan: the fault history the acceptance spec asks for ----------
+    # Reported here as well as in the burn-in script so that a stress failure
+    # carries its own kernel evidence.
+    local xid_lines xid_count
+    xid_lines=$(dmesg 2>/dev/null | grep -iE 'NVRM: *Xid' || true)
+    xid_count=$(printf '%s' "$xid_lines" | grep -c . || true)
+    if [[ "${xid_count:-0}" -gt 0 ]]; then
+        err "--- Xid events in dmesg ($xid_count) ---"
+        printf '%s\n' "$xid_lines" >&2
+        err "--- end Xid events ---"
+    else
+        log "No Xid events in dmesg"
+    fi
+    _artifact "dmesg-xid" "${#xid_lines}" "$xid_count Xid line(s)"
+
+    # --- nvidia-bug-report.sh ---------------------------------------------
     if command -v nvidia-bug-report.sh &>/dev/null; then
         log "Running nvidia-bug-report.sh..."
         local bug_report_dir="$WORK_DIR/bug-report"
         mkdir -p "$bug_report_dir"
+        ( cd "$bug_report_dir" && timeout 120 nvidia-bug-report.sh ) >&2 2>&1 \
+            || warn "nvidia-bug-report.sh exited non-zero (may still have produced output)"
 
-        # Run from bug_report_dir so .log.gz lands there (120s timeout)
-        if ( cd "$bug_report_dir" && timeout 120 nvidia-bug-report.sh ) >&2 2>&1; then
-            :
-        else
-            warn "nvidia-bug-report.sh exited non-zero (may still have produced output)"
-        fi
-
-        # Find the .log.gz — check our dir first, then CWD, then /tmp
-        local gz_file=""
-        local search_dir
+        local gz_file="" search_dir
         for search_dir in "$bug_report_dir" "." "/tmp"; do
             gz_file=$(find "$search_dir" -maxdepth 1 -name "nvidia-bug-report.log.gz" 2>/dev/null | head -1)
             [[ -n "$gz_file" ]] && break
@@ -111,31 +137,14 @@ collect_failure_diagnostics() {
         if [[ -n "$gz_file" && -f "$gz_file" ]]; then
             local gz_size
             gz_size=$(stat -c%s "$gz_file" 2>/dev/null || echo "0")
-            log "nvidia-bug-report.log.gz ready ($gz_size bytes)"
-
-            # Rename file so sendit.sh serves a meaningful filename
-            local upload_file="$bug_report_dir/${hostname}-nvidia-bug-report-$(date +%Y%m%d-%H%M%S).log.gz"
-            mv "$gz_file" "$upload_file"
-
-            # Upload to sendit.sh (60s timeout, file available for 1 day, 1 download)
-            local curl_response upload_url
-            curl_response=$(timeout 60 curl -sS "https://sendit.sh" \
-                -T "$upload_file" 2>/dev/null) || true
-
-            # Extract download URL from multiline response (wget https://...)
-            upload_url=$(echo "$curl_response" | grep -oP 'https://sendit\.sh/\S+' | head -1)
-
-            if [[ -n "$upload_url" ]]; then
-                log "============================================"
-                log "=== NVIDIA BUG REPORT DOWNLOAD LINK ===    "
-                log "  $upload_url"
-                log "  (available for 1 day, single download)   "
-                log "============================================"
-            else
-                warn "Failed to upload nvidia-bug-report to sendit.sh"
-                warn "  curl response: ${curl_response:-empty}"
-            fi
-            rm -f "$upload_file"
+            log "nvidia-bug-report.log.gz captured ($gz_size bytes)"
+            # Emit the decompressed text to stderr so it is retained in the
+            # commissioning result rather than left in an ephemeral /tmp file.
+            log "---------- begin nvidia-bug-report ----------"
+            zcat "$gz_file" 2>/dev/null | head -c 2000000 >&2 || \
+                warn "could not decompress $gz_file"
+            log "---------- end nvidia-bug-report ----------"
+            _artifact "nvidia-bug-report" "$gz_size" "${hostname} ${stamp}"
         else
             warn "nvidia-bug-report.sh ran but no .log.gz found"
         fi
@@ -143,31 +152,20 @@ collect_failure_diagnostics() {
         warn "nvidia-bug-report.sh not available -- skipping"
     fi
 
-    # --- fieldiag ---
+    # --- fieldiag ---------------------------------------------------------
+    # Entitlement-gated and usually absent; the DCGM path is the one we can
+    # rely on. Captured when present because the spec accepts it as evidence.
     if command -v fieldiag &>/dev/null; then
         log "Running fieldiag..."
-        local fieldiag_out="$WORK_DIR/${hostname}-fieldiag-$(date +%Y%m%d-%H%M%S).txt"
+        local fieldiag_out="$WORK_DIR/fieldiag-${stamp}.txt"
         timeout 300 fieldiag > "$fieldiag_out" 2>&1 || warn "fieldiag failed or timed out"
-
         if [[ -s "$fieldiag_out" ]]; then
-            # Upload fieldiag output to sendit.sh
-            local fieldiag_response fieldiag_url
-            fieldiag_response=$(timeout 60 curl -sS "https://sendit.sh" \
-                -T "$fieldiag_out" 2>/dev/null) || true
-
-            fieldiag_url=$(echo "$fieldiag_response" | grep -oP 'https://sendit\.sh/\S+' | head -1)
-
-            if [[ -n "$fieldiag_url" ]]; then
-                log "============================================"
-                log "=== FIELDIAG REPORT DOWNLOAD LINK ===      "
-                log "  $fieldiag_url"
-                log "  (available for 1 day, single download)   "
-                log "============================================"
-            else
-                warn "Failed to upload fieldiag to sendit.sh"
-                warn "  curl response: ${fieldiag_response:-empty}"
-            fi
-            rm -f "$fieldiag_out"
+            local fd_size
+            fd_size=$(stat -c%s "$fieldiag_out" 2>/dev/null || echo "0")
+            log "---------- begin fieldiag ----------"
+            head -c 2000000 "$fieldiag_out" >&2
+            log "---------- end fieldiag ----------"
+            _artifact "fieldiag" "$fd_size" "${hostname} ${stamp}"
         fi
     else
         log "fieldiag not available -- skipping"
@@ -482,6 +480,15 @@ run_diagnostics() {
             '. + [{"issue":"DCGM exited \($e) but every parsed result passed -- exit code and results disagree","severity":"warning"}]')
     fi
 
+    # Failure diagnostics must run BEFORE the report is emitted so the
+    # artifacts they capture can be named in it.  This used to be called from
+    # main() after the JSON had already gone to stdout, which made every
+    # artifact it collected unreferenceable.
+    DIAG_ARTIFACTS="[]"
+    if [[ "$overall" == "FAIL" ]]; then
+        collect_failure_diagnostics
+    fi
+
     log "=== STRESS TEST COMPLETE -- Verdict: $overall (${diag_dur}s) ==="
 
     # Final report
@@ -494,11 +501,13 @@ run_diagnostics() {
         --arg dcgm "$DCGM_VER" --argjson gpus "${SMI_GPU_COUNT:-0}" \
         --arg level "$DCGM_DIAG_LEVEL" --argjson exit_code "$diag_exit" \
         --argjson diag_dur "$diag_dur" --argjson results "$test_results" \
+        --argjson artifacts "${DIAG_ARTIFACTS:-[]}" \
         '{
             report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts, duration_seconds:$dur},
             verdict:{overall:$verdict, issues:$issues},
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus},
-            dcgm_diagnostics:{run_level:$level, exit_code:$exit_code, duration_seconds:$diag_dur, test_results:$results}
+            dcgm_diagnostics:{run_level:$level, exit_code:$exit_code, duration_seconds:$diag_dur, test_results:$results},
+            diagnostic_artifacts:$artifacts
         }'
 
     [[ "$overall" == "FAIL" ]] && return 1
@@ -518,9 +527,10 @@ main() {
 
     preflight
     local stress_ok=true
+    # run_diagnostics collects failure diagnostics itself, before emitting the
+    # report, so there is nothing to do here but record the outcome.
     if ! run_diagnostics; then
         stress_ok=false
-        collect_failure_diagnostics
     fi
 
     rm -rf "$WORK_DIR"
