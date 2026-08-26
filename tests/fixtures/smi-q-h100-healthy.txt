@@ -1,0 +1,35 @@
+
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1B:00.0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)

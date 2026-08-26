@@ -1,0 +1,33 @@
+
+==============NVSMI LOG==============
+
+Attached GPUs                             : 1
+GPU 00000000:1B:00.0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable Parity     : 1
+            SRAM Uncorrectable SEC-DED    : 2
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 4
+        Aggregate
+            SRAM Correctable              : 7
+            SRAM Uncorrectable Parity     : 3
+            SRAM Uncorrectable SEC-DED    : 5
+            DRAM Correctable              : 900
+            DRAM Uncorrectable            : 11
+            SRAM Threshold Exceeded       : Yes
+    Remapped Rows
+        Correctable Error                 : 40
+        Uncorrectable Error               : 6
+        Pending                           : Yes
+        Remapping Failure Occurred        : Yes
+        Bank Remap Availability Histogram
+            Max                           : 500 bank(s)
+            High                          : 100 bank(s)
+            Partial                       : 30 bank(s)
+            Low                           : 8 bank(s)
+            None                          : 2 bank(s)
