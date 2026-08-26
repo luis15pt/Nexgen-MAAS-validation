@@ -20,7 +20,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 WORK_DIR="/tmp/gpu-mig-ecc-$$"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 
 ###############################################################################
 # LOGGING
@@ -56,7 +56,7 @@ fail_json() {
             report_metadata:{script_version:$v, script_name:"gpu-mig-ecc-config"},
             verdict:{overall:"FAIL", issues:[{"issue":$m,"severity":"critical"}]},
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, gpu_count:$gpus},
-            gpu_config:[], reboot_triggered:false
+            gpu_config:[], reboot_required:false, gpu_reset_failed:false
         }'
     exit 1
 }
@@ -115,7 +115,7 @@ configure_gpus() {
             nvidia-smi mig -dci -i "$gpu" 2>/dev/null || true
             nvidia-smi mig -dgi -i "$gpu" 2>/dev/null || true
 
-            if nvidia-smi -i "$gpu" -mig 0 2>&1; then
+            if nvidia-smi -i "$gpu" -mig 0 >&2 2>&1; then
                 log "  GPU $gpu: MIG disabled (pending reboot)"
                 mig_changed="true"
                 needs_reboot="true"
@@ -137,7 +137,7 @@ configure_gpus() {
 
         if [[ "$ecc_before" == "Disabled" ]]; then
             log "  GPU $gpu: Enabling ECC..."
-            if nvidia-smi -i "$gpu" -e 1 2>&1; then
+            if nvidia-smi -i "$gpu" -e 1 >&2 2>&1; then
                 log "  GPU $gpu: ECC enabled (pending reboot)"
                 ecc_changed="true"
                 needs_reboot="true"
@@ -253,24 +253,41 @@ reset_and_verify() {
             issues=$(echo "$issues" | jq \
                 '. + [{"issue":"Some NVRAM changes did not activate via GPU reset, will take effect on deployment reboot","severity":"info"}]')
         fi
+        # Must emit an issue of its own: a WARN carrying no issues is upgraded
+        # back to PASS downstream, and a failed reset means the GPU was never
+        # actually re-initialised -- so any "re-queried after reset" evidence
+        # taken from this run is not trustworthy.
+        if [[ "$reset_failed" == "true" ]]; then
+            issues=$(echo "$issues" | jq \
+                '. + [{"issue":"One or more GPU resets failed -- NVRAM changes are unverified and post-reset state was not re-read","severity":"warning"}]')
+        fi
     fi
 
     echo "$overall" > "$WORK_DIR/overall.txt"
     echo "$issues" > "$WORK_DIR/issues.json"
-    # Changes activated (or noted as pending) -- no reboot needed
-    echo "false" > "$WORK_DIR/needs_reboot.txt"
+    # This script never reboots (may_reboot: false) -- it activates NVRAM
+    # changes with --gpu-reset so the MAAS ephemeral environment survives for
+    # scripts 92/98/99.  Record whether a deployment reboot is still needed to
+    # finish the job, rather than the constant false this used to write.
+    if [[ "$still_pending" == "true" || "$reset_failed" == "true" ]]; then
+        echo "true"  > "$WORK_DIR/needs_reboot.txt"
+    else
+        echo "false" > "$WORK_DIR/needs_reboot.txt"
+    fi
+    echo "$reset_failed" > "$WORK_DIR/reset_failed.txt"
 }
 
 ###############################################################################
 # OUTPUT REPORT
 ###############################################################################
 output_report() {
-    local test_end dur overall issues needs_reboot
+    local test_end dur overall issues needs_reboot reset_failed
     test_end=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     dur=$(( $(date +%s) - SCRIPT_START ))
     overall=$(cat "$WORK_DIR/overall.txt" 2>/dev/null || echo "PASS")
     issues=$(cat "$WORK_DIR/issues.json" 2>/dev/null || echo "[]")
     needs_reboot=$(cat "$WORK_DIR/needs_reboot.txt" 2>/dev/null || echo "false")
+    reset_failed=$(cat "$WORK_DIR/reset_failed.txt" 2>/dev/null || echo "false")
 
     local gpu_configs
     gpu_configs=$(cat "$WORK_DIR/gpu_configs.json" 2>/dev/null || echo "[]")
@@ -280,9 +297,10 @@ output_report() {
         --arg ts "$test_end" --argjson dur "$dur" \
         --arg verdict "$overall" --argjson issues "$issues" \
         --arg drv "$SMI_DRIVER" --arg cuda "$SMI_CUDA" \
-        --argjson gpus "$SMI_GPU_COUNT" \
+        --argjson gpus "${SMI_GPU_COUNT:-0}" \
         --argjson gpu_config "$gpu_configs" \
         --argjson reboot "$needs_reboot" \
+        --argjson resetfail "$reset_failed" \
         '{
             report_metadata:{
                 script_version:$ver, script_name:$name,
@@ -291,7 +309,8 @@ output_report() {
             verdict:{overall:$verdict, issues:$issues},
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, gpu_count:$gpus},
             gpu_config:$gpu_config,
-            reboot_triggered:$reboot
+            reboot_required:$reboot,
+            gpu_reset_failed:$resetfail
         }'
 
     log "=== MIG/ECC CONFIG COMPLETE -- Verdict: $overall ==="
