@@ -1,0 +1,5 @@
+#!/bin/bash
+N="${STUB_GPU_COUNT:-8}"
+for ((i=0;i<N;i++)); do
+  printf '0000:%02x:00.0 0302: 10de:2331 (rev a1)\n' $((0x1B+i))
+done

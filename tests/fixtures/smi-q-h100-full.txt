@@ -1,0 +1,91 @@
+
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1B:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456789
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556666
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1B:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz

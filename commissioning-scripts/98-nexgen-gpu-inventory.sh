@@ -38,13 +38,20 @@ safe_run() { local o; if o=$("$@" 2>/dev/null); then echo "$o"; else echo ""; fi
 # HELPERS: nvidia-smi -q text parsing + JSON value coercion
 ###############################################################################
 # Extract the indented body beneath a heading, stopping when indentation
-# returns to the heading's own level.  nvidia-smi -q reuses field names across
+# returns to the heading's own level.  The heading is matched on its exact
+# trimmed text, not as a substring -- "Product Name : NVIDIA H100 PCIe"
+# contains "PCI" and must not be mistaken for the PCI section.  nvidia-smi -q reuses field names across
 # sections ("Pending" under both ECC Mode and Remapped Rows; "Correctable
 # Error" under both DRAM and the row remapper), so fields must be read from
 # within their own section rather than grepped out of the whole document.
 smi_section() {
     awk -v want="$1" '
-        !found && index($0, want) { match($0, /^ */); ind = RLENGTH; found = 1; next }
+        !found {
+            h = $0
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", h)
+            if (h == want) { match($0, /^ */); ind = RLENGTH; found = 1 }
+            next
+        }
         found {
             if ($0 ~ /^[[:space:]]*$/) next
             match($0, /^ */)
@@ -505,6 +512,76 @@ collect_gpu_data() {
         # consumer scanning for the JSON payload.
         local raw_b64
         raw_b64=$(printf '%s\n' "$ecc_out" | base64 2>/dev/null | tr -d '\n')
+        local q_raw_b64=""
+
+        # --- Identity, link and thermal, from the full -q document --------
+        # Everything the acceptance spec asks to be *reported* lives here:
+        # board part number, PCI device id, InfoROM versions, and the two
+        # distinct PCIe ceilings.
+        local q_out pci link gen wid inforom temps power clocks maxclocks
+        q_out=$(nvidia-smi -i "$gi" -q 2>/dev/null || true)
+        pci=$(printf     '%s\n' "$q_out" | smi_section "PCI")
+        link=$(printf    '%s\n' "$pci"   | smi_section "GPU Link Info")
+        gen=$(printf     '%s\n' "$link"  | smi_section "PCIe Generation")
+        wid=$(printf     '%s\n' "$link"  | smi_section "Link Width")
+        inforom=$(printf '%s\n' "$q_out" | smi_section "Inforom Version")
+        temps=$(printf   '%s\n' "$q_out" | smi_section "Temperature")
+        power=$(printf   '%s\n' "$q_out" | smi_section "GPU Power Readings")
+        [[ -z "$power" ]] && power=$(printf '%s\n' "$q_out" | smi_section "Power Readings")
+        clocks=$(printf    '%s\n' "$q_out" | smi_section "Clocks")
+        maxclocks=$(printf '%s\n' "$q_out" | smi_section "Max Clocks")
+
+        local prod_name board_pn gpu_pn dev_id subsys_id serial_q
+        prod_name=$(printf '%s\n' "$q_out" | smi_field "Product Name")
+        board_pn=$(printf  '%s\n' "$q_out" | smi_field "Board Part Number")
+        gpu_pn=$(printf    '%s\n' "$q_out" | smi_field "GPU Part Number")
+        serial_q=$(printf  '%s\n' "$q_out" | smi_field "Serial Number")
+        dev_id=$(printf    '%s\n' "$pci"   | smi_field "Device Id")
+        subsys_id=$(printf '%s\n' "$pci"   | smi_field "Sub System Id")
+
+        # "Device Id : 0x233110DE" packs device (0x2331) and vendor (0x10DE).
+        # The acceptance spec quotes the device half, so split it out.
+        local dev_id_short
+        dev_id_short=$(printf '%s' "$dev_id" | grep -oiE '0x[0-9a-f]{8}' \
+            | head -1 | sed -E 's/^0[xX]//; s/(.{4}).*/0x\1/')
+
+        local irom_img irom_oem irom_ecc irom_pwr
+        irom_img=$(printf '%s\n' "$inforom" | smi_field "Image Version")
+        irom_oem=$(printf '%s\n' "$inforom" | smi_field "OEM Object")
+        irom_ecc=$(printf '%s\n' "$inforom" | smi_field "ECC Object")
+        irom_pwr=$(printf '%s\n' "$inforom" | smi_field "Power Management Object")
+
+        # nvidia-smi emits a corruption warning rather than a queryable field.
+        local irom_corrupt="false"
+        printf '%s\n' "$q_out" | grep -qiE 'infoROM is corrupted|infoROM.*corrupt' && irom_corrupt="true"
+
+        # Two different ceilings, and the difference matters: "Device Max" is
+        # what the card supports, "Host Max" is what this slot permits.  A Gen4
+        # host caps the negotiated Max at 4 on a perfectly good Gen5 card, so
+        # the negotiated value alone cannot tell a weak card from a weak slot.
+        local gen_max gen_cur gen_dev_max gen_dev_cur gen_host_max
+        gen_max=$(printf      '%s\n' "$gen" | smi_field "Max")
+        gen_cur=$(printf      '%s\n' "$gen" | smi_field "Current")
+        gen_dev_max=$(printf  '%s\n' "$gen" | smi_field "Device Max")
+        gen_dev_cur=$(printf  '%s\n' "$gen" | smi_field "Device Current")
+        gen_host_max=$(printf '%s\n' "$gen" | smi_field "Host Max")
+
+        local wid_max wid_cur replays rollovers
+        wid_max=$(printf   '%s\n' "$wid" | smi_field "Max")
+        wid_cur=$(printf   '%s\n' "$wid" | smi_field "Current")
+        replays=$(printf   '%s\n' "$pci" | smi_field "Replays Since Reset")
+        rollovers=$(printf '%s\n' "$pci" | smi_field "Replay Number Rollovers")
+
+        local t_gpu t_mem p_draw p_limit p_enforced c_sm c_sm_max
+        t_gpu=$(printf      '%s\n' "$temps"  | smi_field "GPU Current Temp")
+        t_mem=$(printf      '%s\n' "$temps"  | smi_field "Memory Current Temp")
+        p_draw=$(printf     '%s\n' "$power"  | smi_field "Power Draw")
+        p_limit=$(printf    '%s\n' "$power"  | smi_field "Current Power Limit")
+        [[ -z "$p_limit" ]] && p_limit=$(printf '%s\n' "$power" | smi_field "Power Limit")
+        p_enforced=$(printf '%s\n' "$power"  | smi_field "Enforced Power Limit")
+        c_sm=$(printf       '%s\n' "$clocks" | smi_field "SM")
+        c_sm_max=$(printf   '%s\n' "$maxclocks" | smi_field "SM")
+        q_raw_b64=$(printf '%s\n' "$q_out" | base64 2>/dev/null | tr -d '\n')
 
         gpus=$(jq \
             --argjson gi    "$gi" \
@@ -531,6 +608,29 @@ collect_gpu_data() {
             --argjson blow  "$(to_json_num "$bank_low")" \
             --argjson bnone "$(to_json_num "$bank_none")" \
             --arg     raw   "$raw_b64" \
+            --arg     qraw  "$q_raw_b64" \
+            --arg     pname "$prod_name" --arg bpn "$board_pn" --arg gpn "$gpu_pn" \
+            --arg     devid "$dev_id_short" --arg devidfull "$dev_id" \
+            --arg     subsys "$subsys_id"  --arg serialq "$serial_q" \
+            --arg     iimg  "$irom_img" --arg ioem "$irom_oem" \
+            --arg     iecc  "$irom_ecc" --arg ipwr "$irom_pwr" \
+            --argjson icorrupt "$irom_corrupt" \
+            --argjson gmax "$(to_json_num "$gen_max")" \
+            --argjson gcur "$(to_json_num "$gen_cur")" \
+            --argjson gdmax "$(to_json_num "$gen_dev_max")" \
+            --argjson gdcur "$(to_json_num "$gen_dev_cur")" \
+            --argjson ghmax "$(to_json_num "$gen_host_max")" \
+            --argjson wmax "$(to_json_num "$wid_max")" \
+            --argjson wcur "$(to_json_num "$wid_cur")" \
+            --argjson repl "$(to_json_num "$replays")" \
+            --argjson roll "$(to_json_num "$rollovers")" \
+            --argjson tgpu "$(to_json_num "$t_gpu")" \
+            --argjson tmem "$(to_json_num "$t_mem")" \
+            --argjson pdraw "$(to_json_num "$p_draw")" \
+            --argjson plim "$(to_json_num "$p_limit")" \
+            --argjson penf "$(to_json_num "$p_enforced")" \
+            --argjson csm "$(to_json_num "$c_sm")" \
+            --argjson csmmax "$(to_json_num "$c_sm_max")" \
             '[.[] | if .gpu_index == $gi then
                 .ecc = (.ecc + {
                     dram_corrected_volatile:    $vdce,
@@ -560,7 +660,50 @@ collect_gpu_data() {
                     low:     $blow,
                     none:    $bnone
                 }
-                | .raw_evidence = {row_remapper_ecc_b64: $raw}
+                | .identity = {
+                    product_name:      (if $pname   == "" then null else $pname   end),
+                    board_part_number: (if $bpn     == "" then null else $bpn     end),
+                    gpu_part_number:   (if $gpn     == "" then null else $gpn     end),
+                    pci_device_id:     (if $devid   == "" then null else $devid   end),
+                    pci_device_id_full:(if $devidfull == "" then null else $devidfull end),
+                    pci_subsystem_id:  (if $subsys  == "" then null else $subsys  end),
+                    serial_from_query: (if $serialq == "" then null else $serialq end),
+                    inforom: {
+                        image: (if $iimg == "" then null else $iimg end),
+                        oem:   (if $ioem == "" then null else $ioem end),
+                        ecc:   (if $iecc == "" then null else $iecc end),
+                        pwr:   (if $ipwr == "" then null else $ipwr end)
+                    },
+                    inforom_corrupted: $icorrupt
+                }
+                | .pcie = {
+                    gen_negotiated_max: $gmax,
+                    gen_current:        $gcur,
+                    gen_device_max:     $gdmax,
+                    gen_device_current: $gdcur,
+                    gen_host_max:       $ghmax,
+                    width_max:          $wmax,
+                    width_current:      $wcur,
+                    replays_since_reset: $repl,
+                    replay_rollovers:    $roll
+                }
+                | .thermal = {
+                    temp_gpu_c:    $tgpu,
+                    temp_memory_c: $tmem
+                }
+                | .power = {
+                    draw_w:           $pdraw,
+                    limit_w:          $plim,
+                    enforced_limit_w: $penf
+                }
+                | .clocks = {
+                    sm_mhz:     $csm,
+                    sm_max_mhz: $csmmax
+                }
+                | .raw_evidence = {
+                    row_remapper_ecc_b64: $raw,
+                    smi_query_b64:        $qraw
+                }
             else . end]' "$WORK_DIR/gpus.json")
         echo "$gpus" > "$WORK_DIR/gpus.json"
 

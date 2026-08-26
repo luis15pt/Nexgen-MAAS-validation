@@ -1,14 +1,64 @@
 #!/bin/bash
-# Test stub. Emits just enough for the commissioning scripts' preflight.
-case "$*" in
-  "") cat <<'H'
+# Test stub for the commissioning scripts. Fixture-driven, no GPU required.
+#   STUB_GPU_COUNT  number of GPUs to synthesise (default 8)
+#   STUB_SMI_Q      fixture replayed for `-q`
+#   STUB_SMI_ECC    fixture replayed for `-q -d ROW_REMAPPER,ECC` (defaults to $STUB_SMI_Q)
+N="${STUB_GPU_COUNT:-8}"
+Q="${STUB_SMI_Q:-tests/fixtures/smi-q-h100-full.txt}"
+E="${STUB_SMI_ECC:-$Q}"
+args="$*"
+
+if [[ -z "$args" ]]; then
+  cat <<'H'
 Tue Aug 26 14:00:00 2026
 +-----------------------------------------------------------------------------+
 | NVIDIA-SMI 595.10       Driver Version: 595.10       CUDA Version: 12.8     |
 |-----------------------------------------------------------------------------|
 H
-    ;;
-  *--query-gpu=count*) echo "${STUB_GPU_COUNT:-8}" ;;
-  *--query-gpu=persistence_mode*) echo "Enabled" ;;
-  *) exit 0 ;;
-esac
+  exit 0
+fi
+
+# CSV queries first: "--query-gpu" contains the substring "-q", so matching the
+# -q document cases ahead of these would swallow every bulk query.
+if [[ "$args" == *--query-gpu=count* ]]; then echo "$N"; exit 0; fi
+
+if [[ "$args" == *--query-gpu=persistence_mode* ]]; then
+  for ((i=0;i<N;i++)); do echo "Enabled"; done
+  exit 0
+fi
+
+if [[ "$args" == *--query-gpu=* ]]; then
+  fields="${args#*--query-gpu=}"; fields="${fields%% *}"
+  IFS=',' read -ra fs <<< "$fields"
+  for ((i=0;i<N;i++)); do
+    row=""
+    for f in "${fs[@]}"; do
+      case "$f" in
+        index)                   v="$i" ;;
+        gpu_name|name)           v="NVIDIA H100 PCIe" ;;
+        serial)                  v="157102345678$i" ;;
+        uuid)                    v="GPU-3f1c8a20-1111-2222-3333-44445555666$i" ;;
+        memory.total)            v="81559" ;;
+        memory.free)             v="81036" ;;
+        pcie.link.gen.current)   v="1" ;;
+        pcie.link.gen.max)       v="4" ;;
+        pcie.link.width.current) v="16" ;;
+        pcie.link.width.max)     v="16" ;;
+        temperature.gpu)         v="34" ;;
+        power.draw)              v="71.22" ;;
+        power.limit)             v="350.00" ;;
+        vbios_version)           v="96.00.61.00.01" ;;
+        ecc.mode.current)        v="${STUB_ECC_MODE:-Enabled}" ;;
+        pci.bus_id)              v="00000000:$(printf '%02X' $((0x1B+i))):00.0" ;;
+        *)                       v="0" ;;
+      esac
+      row+="${row:+, }$v"
+    done
+    echo "$row"
+  done
+  exit 0
+fi
+
+if [[ "$args" == *"-q"* && "$args" == *ECC* ]]; then cat "$E"; exit 0; fi
+if [[ "$args" == *"-q"* ]];                     then cat "$Q"; exit 0; fi
+exit 0
