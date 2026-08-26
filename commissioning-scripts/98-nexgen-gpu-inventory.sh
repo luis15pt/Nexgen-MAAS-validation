@@ -478,6 +478,24 @@ collect_gpu_data() {
 }
 
 ###############################################################################
+# NVIDIA-SMI VERBOSE DUMP (logged to stderr for MAAS commissioning log)
+###############################################################################
+dump_smi_verbose() {
+    log "=== nvidia-smi verbose dump (copy from commissioning log) ==="
+
+    log "---------- nvidia-smi ----------"
+    nvidia-smi >&2 2>&1 || warn "nvidia-smi failed"
+
+    log "---------- nvidia-smi -q ----------"
+    nvidia-smi -q >&2 2>&1 || warn "nvidia-smi -q failed"
+
+    log "---------- nvidia-smi topo -m ----------"
+    nvidia-smi topo -m >&2 2>&1 || warn "nvidia-smi topo -m failed"
+
+    log "---------- end nvidia-smi dump ----------"
+}
+
+###############################################################################
 # ASSEMBLE & OUTPUT
 ###############################################################################
 assemble_report() {
@@ -593,6 +611,7 @@ main() {
     log "=========================================="
 
     preflight
+    dump_smi_verbose
     collect_system_context
     collect_gpu_data
     local inventory_ok=true
