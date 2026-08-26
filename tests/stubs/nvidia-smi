@@ -29,6 +29,16 @@ fi
 
 if [[ "$args" == *--query-gpu=* ]]; then
   fields="${args#*--query-gpu=}"; fields="${fields%% *}"
+  # Snapshot query signature: serve POST values from the 2nd call onward.
+  if [[ "$fields" == *ecc.errors.corrected.aggregate.total* ]]; then
+    _m="${STUB_SNAP_MARKER:-/tmp/stub-snap-called.$PPID}"
+    if [[ -e "$_m" ]]; then
+      STUB_ECC_UCE_AGG="${STUB_ECC_UCE_AGG_POST:-${STUB_ECC_UCE_AGG:-0}}"
+      STUB_REMAP_UCE="${STUB_REMAP_UCE_POST:-${STUB_REMAP_UCE:-0}}"
+      STUB_REPLAY="${STUB_REPLAY_POST:-${STUB_REPLAY:-0}}"
+    fi
+    touch "$_m"
+  fi
   IFS=',' read -ra fs <<< "$fields"
   for ((i=0;i<N;i++)); do
     row=""
@@ -45,11 +55,22 @@ if [[ "$args" == *--query-gpu=* ]]; then
         pcie.link.width.current) v="16" ;;
         pcie.link.width.max)     v="16" ;;
         temperature.gpu)         v="34" ;;
-        power.draw)              v="71.22" ;;
+        power.draw)              v="${STUB_POWER:-71.22}" ;;
         power.limit)             v="350.00" ;;
         vbios_version)           v="96.00.61.00.01" ;;
         ecc.mode.current)        v="${STUB_ECC_MODE:-Enabled}" ;;
         pci.bus_id)              v="00000000:$(printf '%02X' $((0x1B+i))):00.0" ;;
+        temperature.memory)      v="${STUB_TEMP_MEM:-40}" ;;
+        clocks.sm)               v="${STUB_CLOCK_SM:-1755}" ;;
+        pcie.replay_counter)     v="${STUB_REPLAY:-0}" ;;
+        remapped_rows.correctable)   v="${STUB_REMAP_CE:-0}" ;;
+        remapped_rows.uncorrectable) v="${STUB_REMAP_UCE:-0}" ;;
+        *ecc.errors.uncorrected.aggregate.total) v="${STUB_ECC_UCE_AGG:-0}" ;;
+        *ecc.errors.corrected.aggregate.total)   v="${STUB_ECC_CE_AGG:-0}" ;;
+        *sw_power_cap)               v="${STUB_TH_SWPC:-Active}" ;;
+        *hw_thermal_slowdown)        v="${STUB_TH_HWTH:-Not Active}" ;;
+        *hw_power_brake_slowdown)    v="${STUB_TH_HWPB:-Not Active}" ;;
+        *sw_thermal_slowdown)        v="${STUB_TH_SWTH:-Not Active}" ;;
         *)                       v="0" ;;
       esac
       row+="${row:+, }$v"

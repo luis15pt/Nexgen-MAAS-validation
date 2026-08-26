@@ -1,0 +1,15 @@
+#!/bin/bash
+# Test stub. Emits a stable baseline; on the SECOND call onward it also emits
+# the Xid lines named by $STUB_DMESG_XID, simulating events during the window.
+marker="${STUB_DMESG_MARKER:-/tmp/stub-dmesg-called.$PPID}"
+cat <<'BASE'
+[    0.000000] Linux version 5.15.0-177-generic
+[   12.345678] nvidia: loading out-of-tree module taints kernel.
+[   13.111111] NVRM: loading NVIDIA UNIX x86_64 Kernel Module  595.10
+BASE
+if [[ -e "$marker" && -n "$STUB_DMESG_XID" ]]; then
+  for x in $STUB_DMESG_XID; do
+    echo "[  999.000000] NVRM: Xid (PCI:0000:1b:00): $x, pid=1234, name=synthetic"
+  done
+fi
+touch "$marker"

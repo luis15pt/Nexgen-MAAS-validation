@@ -1,0 +1,5 @@
+#!/bin/bash
+# Test stub: pretends to apply load for a moment.
+echo "dcgmproftester: synthetic load, args: $*" >&2
+sleep "${STUB_LOAD_SLEEP:-1}"
+exit "${STUB_LOAD_EXIT:-0}"
