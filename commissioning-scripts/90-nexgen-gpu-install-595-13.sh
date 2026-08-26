@@ -1,8 +1,8 @@
 #!/bin/bash
 # --- Start MAAS Metadata ---
-# name: 90-nexgen-gpu-install-580-12.8
-# title: NexGen GPU Driver 580 + CUDA 12.8 + DCGM 4.x Installation
-# description: Installs nvidia-driver-580-server-open, cuda-toolkit-12-8,
+# name: 90-nexgen-gpu-install-595-13
+# title: NexGen GPU Driver 595 + CUDA 13 + DCGM 4.x Installation
+# description: Installs nvidia-driver-595-server-open, cuda-toolkit-12-8,
 #   DCGM 4.x (datacenter-gpu-manager-4-cuda13), and support tools.
 #   Enables persistence mode, loads kernel modules, starts DCGM service.
 #   Must run before 98-inventory and 99-stress-test.
@@ -20,11 +20,15 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 ###############################################################################
 # CONFIG
 ###############################################################################
-NVIDIA_DRIVER="${NVIDIA_DRIVER:-nvidia-driver-580-server-open}"
+NVIDIA_DRIVER="${NVIDIA_DRIVER:-nvidia-driver-595-server-open}"
 CUDA_TOOLKIT="${CUDA_TOOLKIT:-cuda-toolkit-12-8}"
 DCGM_CUDA_MAJOR="${DCGM_CUDA_MAJOR:-13}"
+# Seconds to wait for the NVSwitch fabric to reach "Completed" after Fabric
+# Manager starts. Blackwell/NVL fabric training can take a while; a restart +
+# IMEX nudge is attempted at the halfway mark.
+FABRIC_READY_TIMEOUT="${FABRIC_READY_TIMEOUT:-300}"
 WORK_DIR="/tmp/gpu-install-$$"
-SCRIPT_VERSION="2.1.5"
+SCRIPT_VERSION="2.1.6"
 
 ###############################################################################
 # LOGGING
@@ -54,6 +58,273 @@ get_dcgm_version() {
     [[ -z "$DCGM_VER" ]] && DCGM_VER=$(dcgmi -v 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     [[ -z "$DCGM_VER" ]] && DCGM_VER=$(dcgmi version 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     [[ -z "$DCGM_VER" ]] && DCGM_VER="unknown"
+}
+
+###############################################################################
+# HELPER: Detect NVSwitch fabric (does this node need Fabric Manager?)
+###############################################################################
+# B300/NVL systems expose NO NVSwitch PCI or /dev nodes, and the
+# --query-gpu=fabric.state CSV field is unreliable on this driver -- but the
+# GPUs DO report a "Fabric" section in `nvidia-smi -q`. That State line is the
+# reliable signal. _fabric_states echoes one State per GPU (e.g. "In Progress"
+# / "Completed" / "N/A"); empty output => GPUs are not fabric-attached.
+_fabric_states() {
+    nvidia-smi -q 2>/dev/null | awk '
+        /^[[:space:]]*Fabric[[:space:]]*$/ {f=1; next}
+        f && /State[[:space:]]*:/ { sub(/^[^:]*:[[:space:]]*/, ""); print; f=0 }'
+}
+
+detect_nvswitch() {
+    local dev_count fab
+    dev_count=$(ls -1 /dev/nvidia-nvswitch[0-9]* 2>/dev/null | wc -l)
+    NVSWITCH_COUNT=$(( dev_count + 0 ))
+    fab=$(_fabric_states)
+    # Fabric node if a /dev nvswitch node exists OR any GPU reports a real
+    # (non-N/A) fabric State. Plain PCIe cards report neither, so they skip
+    # the fabric gate (FM is still installed -- harmless there).
+    if [[ "$NVSWITCH_COUNT" -gt 0 ]] \
+       || echo "$fab" | grep -viqE '^[[:space:]]*(n/?a)?[[:space:]]*$'; then
+        FABRIC_REQUIRED=true
+    else
+        FABRIC_REQUIRED=false
+    fi
+}
+
+###############################################################################
+# HELPER: is the NVSwitch fabric fully trained? (all GPUs "Completed")
+###############################################################################
+# Sets FABRIC_STATE to the first reported state; returns 0 iff every GPU is
+# "Completed".
+fabric_is_ready() {
+    local states total completed
+    states=$(_fabric_states)
+    [[ -z "$states" ]] && { FABRIC_STATE="unknown"; return 1; }
+    total=$(echo "$states" | grep -c .)
+    completed=$(echo "$states" | grep -ci 'completed')
+    FABRIC_STATE=$(echo "$states" | head -1 | tr -d '[:space:]')
+    [[ "$total" -gt 0 && "$completed" -eq "$total" ]]
+}
+
+###############################################################################
+# HELPER: wait for the fabric to finish training (with a restart nudge)
+###############################################################################
+# Polls fabric_is_ready up to FABRIC_READY_TIMEOUT seconds. At the halfway
+# mark, if still not ready, restarts Fabric Manager (and starts IMEX if it's
+# installed but stopped -- the all-zero Cluster UUID/Clique signature). Returns
+# 0 when the fabric reaches Completed, 1 on timeout.
+wait_for_fabric() {
+    local timeout="${FABRIC_READY_TIMEOUT:-300}"
+    local waited=0 restarted=false
+    # Blackwell fabric (NVLink5) trains via NVLSM, which rides on ib_umad --
+    # make sure it's loaded before we wait, or the fabric never completes.
+    lsmod 2>/dev/null | grep -q '^ib_umad' || modprobe ib_umad 2>/dev/null || true
+    log "Waiting up to ${timeout}s for NVSwitch fabric to reach Completed..."
+    local fm_installed=false
+    dpkg -l 'nvidia-fabricmanager*' 2>/dev/null | grep -q '^ii' && fm_installed=true
+    while :; do
+        if fabric_is_ready; then
+            log "Fabric ready (state=$FABRIC_STATE) after ${waited}s"
+            return 0
+        fi
+        # A hard-failed unit will never train the fabric, no matter how long
+        # we poll -- restart it immediately (once); if it fails AGAIN, dump
+        # the journal and bail early instead of burning the full timeout.
+        if $fm_installed && systemctl is-failed --quiet nvidia-fabricmanager 2>/dev/null; then
+            if ! $restarted; then
+                warn "nvidia-fabricmanager unit is in 'failed' state after ${waited}s -- reloading ib_umad + restarting..."
+                modprobe ib_umad 2>/dev/null || true
+                systemctl reset-failed nvidia-fabricmanager >/dev/null 2>&1 || true
+                systemctl restart nvidia-fabricmanager >/dev/null 2>&1 || true
+                restarted=true
+            elif [[ $waited -ge 15 ]]; then
+                err "nvidia-fabricmanager failed again after restart -- aborting fabric wait early"
+                journalctl -u nvidia-fabricmanager --no-pager 2>/dev/null | tail -20 >&2 || true
+                break
+            fi
+        elif ! $restarted && [[ $waited -ge $(( timeout / 2 )) ]] && $fm_installed; then
+            # Unit is up but the fabric is stuck training -- give FM one nudge.
+            warn "Fabric still '${FABRIC_STATE}' after ${waited}s -- reloading ib_umad + restarting nvidia-fabricmanager..."
+            modprobe ib_umad 2>/dev/null || true
+            systemctl restart nvidia-fabricmanager >/dev/null 2>&1 || true
+            restarted=true
+        fi
+        [[ $waited -ge $timeout ]] && break
+        sleep 5
+        waited=$(( waited + 5 ))
+    done
+    err "NVSwitch fabric did NOT reach Completed within ${timeout}s (state=${FABRIC_STATE})"
+    return 1
+}
+
+###############################################################################
+# FABRIC MANAGER (required on NVSwitch/NVL systems for CUDA to initialize)
+###############################################################################
+# We install Fabric Manager on every node (harmless on PCIe cards), start it,
+# and -- only on nodes that actually have NVSwitches -- verify the fabric
+# reaches "Completed".  On a PCIe card FM simply won't stay running and that is
+# reported as OK, never a failure.
+#
+# CRITICAL: the FM package version must EXACTLY match the running driver
+# (X.Y.Z), or nvidia-fabricmanager.service starts then immediately exits with
+# "fabric manager version A doesn't match driver version B".  We derive the
+# version from the RUNNING driver (nvidia-smi), not the pinned package name.
+setup_fabric_manager() {
+    log "=== Fabric Manager setup ==="
+
+    export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=l
+    export NEEDRESTART_SUSPEND=1
+
+    # Defaults for the JSON report (updated as we go)
+    FM_INSTALLED=false
+    FM_VERSION="not installed"
+    FM_SERVICE_ACTIVE=false
+    FABRIC_STATE="N/A"
+    FABRIC_READY=false
+
+    # Driver is loaded by now, so both NVSwitch signals are valid
+    detect_nvswitch
+    log "NVSwitch devices detected: ${NVSWITCH_COUNT} (fabric_required=${FABRIC_REQUIRED})"
+
+    # -- Derive FM branch from the RUNNING driver (not the pinned name) --
+    local fm_branch=""
+    if [[ -n "$SMI_DRIVER" && "$SMI_DRIVER" != "unknown" ]]; then
+        fm_branch="${SMI_DRIVER%%.*}"
+    else
+        local pkgver
+        pkgver=$(dpkg-query -W -f='${Version}' 'nvidia-driver-*-server-open' 2>/dev/null \
+            | grep -oP '^[0-9]+' | head -1)
+        fm_branch="${pkgver:-$(echo "$NVIDIA_DRIVER" | grep -oP 'nvidia-driver-\K[0-9]+' || true)}"
+        warn "SMI_DRIVER unknown -- deriving Fabric Manager branch as '${fm_branch:-?}' from fallback"
+    fi
+
+    if [[ -z "$fm_branch" ]]; then
+        warn "Could not determine driver branch -- skipping Fabric Manager install"
+        return 0
+    fi
+
+    # -- Resolve the exact repo version matching the driver X.Y.Z --
+    local fm_pkg="nvidia-fabricmanager-${fm_branch}"
+    local fm_exact=""
+    if [[ -n "$SMI_DRIVER" && "$SMI_DRIVER" != "unknown" ]]; then
+        fm_exact=$(apt-cache madison "$fm_pkg" 2>/dev/null | awk '{print $3}' \
+            | grep -F "$SMI_DRIVER" | head -1 || true)
+    fi
+
+    # -- Install: exact-version pinned first, then unpinned candidate --
+    if dpkg --list "$fm_pkg" 2>/dev/null | grep -q '^ii'; then
+        log "$fm_pkg already installed"
+    elif [[ -n "$fm_exact" ]]; then
+        log "Installing ${fm_pkg}=${fm_exact} (matched to driver ${SMI_DRIVER})..."
+        apt-get install -y -qq "${fm_pkg}=${fm_exact}" 2>&1 | tail -5 >&2 \
+            || warn "Exact-version FM install failed -- will retry unpinned"
+    fi
+    if ! dpkg --list "$fm_pkg" 2>/dev/null | grep -q '^ii'; then
+        log "Installing ${fm_pkg} (candidate version)..."
+        apt-get install -y -qq "$fm_pkg" 2>&1 | tail -5 >&2 \
+            || warn "Fabric Manager install failed (${fm_pkg}) -- fabric may not initialize"
+    fi
+
+    # -- Verify install + assert version match --
+    local installed_ver
+    installed_ver=$(dpkg-query -W -f='${Version}' "$fm_pkg" 2>/dev/null \
+        | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    if [[ -n "$installed_ver" ]]; then
+        FM_INSTALLED=true
+        FM_VERSION="$installed_ver"
+        log "Fabric Manager installed: $FM_VERSION"
+        if [[ -n "$SMI_DRIVER" && "$SMI_DRIVER" != "unknown" && "$installed_ver" != "$SMI_DRIVER" ]]; then
+            warn "Fabric Manager $installed_ver != driver $SMI_DRIVER -- service may refuse to start (version mismatch)"
+        fi
+    else
+        warn "Fabric Manager package not installed"
+        [[ "$FABRIC_REQUIRED" == "true" ]] && \
+            warn "  This is an NVSwitch node -- CUDA/DCGM WILL fail without Fabric Manager"
+        return 0
+    fi
+
+    # -- Blackwell (NVLink5 / 4th-gen NVSwitch) fabric prerequisites --
+    # B200/B300 train the fabric through NVLSM (NVLink Subnet Manager), which FM
+    # launches under its own systemd unit. NVLSM needs the nvlsm/libnvsdm
+    # packages and the ib_umad kernel module; without them the fabric stays
+    # "training in progress" forever (all-zero Cluster UUID, CUDA 802). These
+    # must be in place BEFORE FM starts. Only relevant on fabric nodes.
+    if [[ "$FABRIC_REQUIRED" == "true" ]]; then
+        if ! dpkg -l nvlsm 2>/dev/null | grep -q '^ii'; then
+            log "Installing NVLSM stack (nvlsm libnvsdm)..."
+            apt-get install -y -qq nvlsm libnvsdm 2>&1 | tail -3 >&2 \
+                || warn "nvlsm/libnvsdm not installable -- Blackwell fabric needs the DOCA-OFED repo"
+        fi
+        # nvidia-fabricmanager-start.sh probes the CX bridge ports with
+        # `ibstat` (infiniband-diags) to pick the NVLSM management port.
+        # Without it the ExecStart wrapper exits 1 EVERY time ("ibstat
+        # command not found"), FM never launches, and the fabric sits at
+        # "In Progress" until the wait times out.  Hard prerequisite.
+        if ! command -v ibstat &>/dev/null; then
+            log "Installing infiniband-diags (ibstat -- required by FM start wrapper)..."
+            apt-get install -y -qq infiniband-diags 2>&1 | tail -3 >&2 || true
+        fi
+        if command -v ibstat &>/dev/null; then
+            log "ibstat available: $(command -v ibstat)"
+        else
+            warn "ibstat STILL missing -- nvidia-fabricmanager-start.sh WILL exit 1 and the fabric will never train"
+            warn "  Install the infiniband-diags package (or full DOCA-OFED) in the base image"
+        fi
+        if modprobe ib_umad 2>/dev/null; then
+            log "ib_umad kernel module loaded (NVLSM management path)"
+            echo "ib_umad" > /etc/modules-load.d/nvidia-nvlsm.conf 2>/dev/null || true
+        else
+            warn "Could NOT load ib_umad -- NVLSM cannot train the NVLink fabric"
+            warn "  Install DOCA-OFED (provides ib_umad) BEFORE the NVIDIA driver, or modprobe ib_umad manually"
+        fi
+        local fm_cfg="/usr/share/nvidia/nvswitch/fabricmanager.cfg"
+        if [[ -f "$fm_cfg" ]]; then
+            local fmode
+            fmode=$(grep -oP '^\s*FABRIC_MODE\s*=\s*\K[0-9]+' "$fm_cfg" 2>/dev/null | head -1)
+            if [[ -n "$fmode" && "$fmode" != "0" ]]; then
+                warn "FABRIC_MODE=$fmode in $fm_cfg (expected 0 for bare metal) -- fabric may wait for a hypervisor handshake that never comes"
+            fi
+        fi
+    fi
+
+    # -- Start the service (restart so it re-inits with ib_umad/NVLSM present) --
+    log "Starting nvidia-fabricmanager service..."
+    systemctl enable nvidia-fabricmanager >/dev/null 2>&1 || true
+    systemctl restart nvidia-fabricmanager >/dev/null 2>&1 \
+        || warn "systemctl restart nvidia-fabricmanager failed"
+    if systemctl is-active --quiet nvidia-fabricmanager 2>/dev/null; then
+        FM_SERVICE_ACTIVE=true
+        log "nvidia-fabricmanager service active"
+    else
+        warn "nvidia-fabricmanager service not active"
+    fi
+
+    # -- PCIe node: FM not required; inactivity is expected, never a fail --
+    if [[ "$FABRIC_REQUIRED" != "true" ]]; then
+        log "PCIe topology -- Fabric Manager not required; not gating on fabric state"
+        FABRIC_STATE="N/A"
+        FABRIC_READY=true    # not-applicable == not a problem for the verdict
+        return 0
+    fi
+
+    # -- NVSwitch node: wait for the fabric to finish training --
+    if wait_for_fabric; then
+        FABRIC_READY=true
+    else
+        FABRIC_READY=false
+        # Dump the "why" to stderr -- this shows up in MAAS output when the node
+        # is not SSH-reachable. "training in progress" + all-zero Cluster UUID
+        # usually means IMEX/clique config; a link error means hardware.
+        warn "--- Fabric Manager diagnostics ---"
+        echo "ib_umad loaded: $(lsmod 2>/dev/null | grep -c '^ib_umad')" >&2
+        dpkg -l 2>/dev/null | grep -iE 'nvlsm|libnvsdm|doca-ofed|fabricmanager' >&2 || true
+        systemctl status nvidia-fabricmanager --no-pager >&2 2>&1 || true
+        journalctl -u nvidia-fabricmanager --no-pager 2>/dev/null | tail -50 >&2 || true
+        tail -50 /var/log/fabricmanager.log >&2 2>&1 || true
+        nvidia-smi -q 2>/dev/null | grep -A6 -i 'Fabric' >&2 || true
+        warn "--- end Fabric Manager diagnostics ---"
+    fi
+    return 0
 }
 
 ###############################################################################
@@ -119,13 +390,35 @@ install_packages() {
     log "Pinned driver: $driver_pkg"
     log "Pinned CUDA:   $cuda_pkg"
 
+    # Fallback if the pinned driver branch has no installable candidate
+    # (e.g. 595 not yet published -- degrade to the newest -server-open branch).
+    if ! apt-cache policy "$driver_pkg" 2>/dev/null | grep -qE 'Candidate:\s*[0-9]'; then
+        warn "$driver_pkg has no installable candidate -- searching for newest nvidia-driver-*-server-open..."
+        # Dump the raw policy output: a false negative here (e.g. cache not
+        # yet refreshed, epoch-prefixed versions) otherwise masks itself.
+        apt-cache policy "$driver_pkg" 2>&1 | head -5 >&2 || true
+        local newest
+        newest=$(apt-cache search --names-only '^nvidia-driver-[0-9]+-server-open$' 2>/dev/null \
+            | grep -oP 'nvidia-driver-\K[0-9]+' | sort -rn | head -1)
+        if [[ -n "$newest" && "nvidia-driver-${newest}-server-open" != "$driver_pkg" ]]; then
+            driver_pkg="nvidia-driver-${newest}-server-open"
+            warn "Falling back to $driver_pkg"
+        elif [[ -n "$newest" ]]; then
+            # Search found the pinned package itself => the policy check was
+            # a false negative, not a missing package. Proceed with the pin.
+            warn "apt-cache search DOES list $driver_pkg -- candidate check false negative; keeping the pin"
+        else
+            warn "No nvidia-driver-*-server-open candidate found -- attempting $driver_pkg anyway"
+        fi
+    fi
+
     log "Installing $driver_pkg and $cuda_pkg..."
     apt-get install -y -qq "$driver_pkg" "$cuda_pkg" 2>&1 | tail -10 >&2 || {
         warn "CUDA toolkit install failed -- trying driver only..."
         apt-get install -y -qq "$driver_pkg" 2>&1 | tail -10 >&2
     }
 
-    # DCGM 4.x (required for driver 580+, DCGM 3.x is NOT compatible)
+    # DCGM 4.x (required for driver 595+, DCGM 3.x is NOT compatible)
     # Purge old 3.x first
     log "Purging old DCGM 3.x if present..."
     dpkg --list datacenter-gpu-manager &>/dev/null && \
@@ -511,12 +804,26 @@ load_and_verify() {
     get_smi_header_info
     log "nvidia-smi OK -- $SMI_GPU_COUNT GPU(s), driver $SMI_DRIVER, CUDA $SMI_CUDA"
 
+    # Surface the latent pin discrepancy (e.g. pinned 595 but running 580).
+    # Fabric Manager matches the RUNNING driver, so this is informational only.
+    local pinned_branch actual_branch
+    pinned_branch=$(echo "$NVIDIA_DRIVER" | grep -oP 'nvidia-driver-\K[0-9]+' || true)
+    actual_branch="${SMI_DRIVER%%.*}"
+    if [[ -n "$pinned_branch" && -n "$actual_branch" && "$actual_branch" != "unknown" && "$pinned_branch" != "$actual_branch" ]]; then
+        warn "Pinned driver branch ($pinned_branch) != running driver branch ($actual_branch) -- Fabric Manager will match the running driver"
+    fi
+
     # Enable persistence mode (critical for DCGM GPU discovery)
     log "Enabling persistence mode..."
     nvidia-smi -pm 1 >&2 2>&1 || warn "nvidia-smi -pm 1 failed (may need root)"
     local pm_status
     pm_status=$(nvidia-smi --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 || echo "unknown")
     log "Persistence mode: $pm_status"
+
+    # Install + start Fabric Manager and, on NVSwitch nodes, verify the fabric.
+    # Must run after nvidia-smi works (FM version is matched to the running
+    # driver) and before CUDA-dependent steps. Harmless/no-op on PCIe cards.
+    setup_fabric_manager
 
     # Start DCGM and verify GPU discovery
     local dcgm_available="false"
@@ -614,6 +921,12 @@ load_and_verify() {
         --argjson dcgm_gpus "$dcgm_gpus" \
         --argjson bug_report "$nvidia_bug_report_available" \
         --argjson fieldiag "$fieldiag_available" \
+        --argjson fabric_required "${FABRIC_REQUIRED:-false}" \
+        --argjson fm_installed "${FM_INSTALLED:-false}" \
+        --arg fm_version "${FM_VERSION:-not installed}" \
+        --argjson fm_active "${FM_SERVICE_ACTIVE:-false}" \
+        --arg fabric_state "${FABRIC_STATE:-N/A}" \
+        --argjson fabric_ready "${FABRIC_READY:-false}" \
         '{
             nvidia_driver_version: $driver_ver,
             cuda_version: $cuda_ver,
@@ -624,8 +937,21 @@ load_and_verify() {
             dcgm_version: $dcgm_ver,
             dcgm_gpu_count: $dcgm_gpus,
             nvidia_bug_report_available: $bug_report,
-            fieldiag_available: $fieldiag
+            fieldiag_available: $fieldiag,
+            fabric_required: $fabric_required,
+            fabric_manager_installed: $fm_installed,
+            fabric_manager_version: $fm_version,
+            fabric_manager_service_active: $fm_active,
+            fabric_state: $fabric_state,
+            fabric_ready: $fabric_ready
         }' > "$WORK_DIR/install_result.json"
+
+    # Fabric node with an uninitialized fabric == broken node: fail the
+    # install (report is already written above so the fabric_* fields survive).
+    if [[ "${FABRIC_REQUIRED:-false}" == "true" && "${FABRIC_READY:-false}" != "true" ]]; then
+        err "NVSwitch fabric not ready (Fabric Manager missing/failed) -- failing install"
+        return 1
+    fi
 }
 
 ###############################################################################
@@ -678,6 +1004,17 @@ output_report() {
                 --arg m "DCGM $dcgm_ver sees $dcgm_gpus GPUs while nvidia-smi sees $actual_gpus -- stress test (99) may not work" \
                 '. + [{"issue":$m,"severity":"warning"}]')
         fi
+    fi
+
+    # NVSwitch fabric health -- critical on fabric nodes, ignored on PCIe
+    local fabric_required fabric_ready fabric_state
+    fabric_required=$(jq -r '.fabric_required // false' "$WORK_DIR/install_result.json" 2>/dev/null || echo false)
+    fabric_ready=$(jq -r '.fabric_ready // false' "$WORK_DIR/install_result.json" 2>/dev/null || echo false)
+    fabric_state=$(jq -r '.fabric_state // "N/A"' "$WORK_DIR/install_result.json" 2>/dev/null || echo "N/A")
+    if [[ "$fabric_required" == "true" && "$fabric_ready" != "true" ]]; then
+        overall="FAIL"
+        issues=$(echo "$issues" | jq --arg s "$fabric_state" \
+            '. + [{"issue":"NVSwitch fabric not initialized (Fabric Manager missing/failed, state=\($s)) -- CUDA/DCGM will fail","severity":"critical"}]')
     fi
 
     jq -n \

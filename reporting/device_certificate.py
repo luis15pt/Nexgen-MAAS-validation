@@ -72,14 +72,14 @@ _load_dotenv()
 # ---------------------------------------------------------------------------
 
 GPU_SCRIPTS = [
-    "97-nexgen-gpu-install-580-12.8",
+    "90-nexgen-gpu-install-595-13",
     "98-nexgen-gpu-inventory",
     "99-nexgen-gpu-stress-test",
 ]
 
 # Map short names used internally to the MAAS script names
 SCRIPT_ALIASES = {
-    "install":   "90-nexgen-gpu-install-580-12.8.sh",
+    "install":   "90-nexgen-gpu-install-595-13.sh",
     "inventory": "98-nexgen-gpu-inventory.sh",
     "stress":    "99-nexgen-gpu-stress-test.sh",
 }

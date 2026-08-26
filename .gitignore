@@ -1,6 +1,10 @@
 # Environment secrets
 .env
 
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+
 # Generated reports — keep the folder, ignore the contents
 reports/*
 !reports/.gitkeep

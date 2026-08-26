@@ -11,7 +11,7 @@ Nexgen-MAAS-validation/
 ├── .env.example                             # MAAS + NetBox credentials template
 ├── commissioning-scripts/        # MAAS commissioning scripts (run in order)
 │   ├── 80-nexgen-network-cabling-verify.sh # Step 0: NetBox vs LLDP cabling check
-│   ├── 97-nexgen-gpu-install-580-12.8.sh   # Step 1: Driver + CUDA + DCGM install
+│   ├── 90-nexgen-gpu-install-595-13.sh     # Step 1: Driver + CUDA + DCGM + Fabric Manager
 │   ├── 98-nexgen-gpu-inventory.sh          # Step 2: GPU inventory & health check
 │   └── 99-nexgen-gpu-stress-test.sh        # Step 3: DCGM stress test
 ├── reporting/                    # Report generation tooling
@@ -62,21 +62,31 @@ Baseline: NetBox plans `IPMI → mgmt-sw/Gi1/0/6`, `eth0 → leaf254a/Eth1/4`, `
 
 **Timeout**: 5 minutes
 
-### 97 - GPU Driver Install (`v2.1.1`)
+### 90 - GPU Driver Install (`v2.1.6`)
 
 Installs the full NVIDIA GPU software stack:
 
-- **Driver**: `nvidia-driver-580-server-open`
+- **Driver**: `nvidia-driver-595-server-open` (falls back to the newest
+  available `nvidia-driver-*-server-open` branch if 595 has no candidate)
 - **CUDA Toolkit**: `cuda-toolkit-12-8`
 - **DCGM**: `datacenter-gpu-manager-4` (CUDA 13)
+- **Fabric Manager**: `nvidia-fabricmanager-<branch>`, version-matched to the
+  *running* driver
 
 Enables persistence mode, loads kernel modules, and starts the DCGM service.
 
+On NVSwitch/NVL nodes it also installs the NVLSM stack (`nvlsm`, `libnvsdm`,
+`infiniband-diags`), loads `ib_umad`, starts Fabric Manager, and waits for the
+NVLink fabric to reach `Completed`. A fabric-attached node whose fabric never
+trains is a **FAIL** — CUDA and DCGM cannot initialize without it. Plain PCIe
+cards skip the fabric gate entirely.
+
 | Env Override | Default | Description |
 |---|---|---|
-| `NVIDIA_DRIVER` | `nvidia-driver-580-server-open` | Driver package name |
+| `NVIDIA_DRIVER` | `nvidia-driver-595-server-open` | Driver package name |
 | `CUDA_TOOLKIT` | `cuda-toolkit-12-8` | CUDA toolkit package |
 | `DCGM_CUDA_MAJOR` | `13` | DCGM CUDA major version |
+| `FABRIC_READY_TIMEOUT` | `300` | Seconds to wait for the NVLink fabric to train |
 
 **Timeout**: 20 minutes
 
@@ -176,6 +186,7 @@ file) -- MAAS does not inject per-script secrets:
 
 ```bash
 maas $PROFILE commissioning-scripts create \
+<<<<<<< HEAD
   name=80-nexgen-network-cabling-verify \
   script_type=commissioning \
   hardware_type=network \
@@ -183,9 +194,12 @@ maas $PROFILE commissioning-scripts create \
 
 maas $PROFILE commissioning-scripts create \
   name=97-nexgen-gpu-install-580-12.8 \
+=======
+  name=90-nexgen-gpu-install-595-13 \
+>>>>>>> ae5503c (Add Fabric Manager support and bump driver pin to 595)
   script_type=commissioning \
   hardware_type=gpu \
-  content@=commissioning-scripts/97-nexgen-gpu-install-580-12.8.sh
+  content@=commissioning-scripts/90-nexgen-gpu-install-595-13.sh
 
 maas $PROFILE commissioning-scripts create \
   name=98-nexgen-gpu-inventory \
