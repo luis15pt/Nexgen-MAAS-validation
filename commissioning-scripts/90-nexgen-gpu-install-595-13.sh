@@ -838,9 +838,9 @@ load_and_verify() {
             log "Started nvidia-dcgm systemd service"
         elif ! pgrep -x nv-hostengine &>/dev/null; then
             log "Starting nv-hostengine..."
-            nv-hostengine 2>&1 >&2 || {
+            nv-hostengine >&2 2>&1 || {
                 rm -f /var/run/nvidia-hostengine/socket 2>/dev/null
-                nv-hostengine 2>&1 >&2 || warn "nv-hostengine failed to start"
+                nv-hostengine >&2 2>&1 || warn "nv-hostengine failed to start"
             }
         fi
 
@@ -864,7 +864,7 @@ load_and_verify() {
                 systemctl restart nvidia-dcgm &>/dev/null 2>&1 || {
                     pkill -x nv-hostengine 2>/dev/null || true
                     sleep 1
-                    nv-hostengine 2>&1 >&2 || true
+                    nv-hostengine >&2 2>&1 || true
                 }
             fi
         done

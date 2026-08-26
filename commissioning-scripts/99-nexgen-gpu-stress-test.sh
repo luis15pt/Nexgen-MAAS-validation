@@ -20,8 +20,12 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 DCGM_DIAG_LEVEL="${DCGM_DIAG_LEVEL:-3}"
+# Hard ceiling on the diag run.  Without it a hung dcgmi is killed by MAAS at
+# the script timeout with NO JSON emitted, so the run yields no evidence
+# either way.  Level 4 can legitimately take ~90 min, hence the wide default.
+DCGM_DIAG_TIMEOUT="${DCGM_DIAG_TIMEOUT:-6000}"
 WORK_DIR="/tmp/gpu-stress-$$"
-SCRIPT_VERSION="2.1.5"
+SCRIPT_VERSION="2.2.0"
 
 ###############################################################################
 # LOGGING
@@ -90,7 +94,7 @@ collect_failure_diagnostics() {
         mkdir -p "$bug_report_dir"
 
         # Run from bug_report_dir so .log.gz lands there (120s timeout)
-        if ( cd "$bug_report_dir" && timeout 120 nvidia-bug-report.sh ) 2>&1 >&2; then
+        if ( cd "$bug_report_dir" && timeout 120 nvidia-bug-report.sh ) >&2 2>&1; then
             :
         else
             warn "nvidia-bug-report.sh exited non-zero (may still have produced output)"
@@ -196,9 +200,9 @@ preflight() {
         sleep 3
     elif ! pgrep -x nv-hostengine &>/dev/null; then
         log "Starting nv-hostengine..."
-        nv-hostengine 2>&1 >&2 || {
+        nv-hostengine >&2 2>&1 || {
             rm -f /var/run/nvidia-hostengine/socket 2>/dev/null
-            nv-hostengine 2>&1 >&2 || fail_json "DCGM service failed to start"
+            nv-hostengine >&2 2>&1 || fail_json "DCGM service failed to start"
         }
         sleep 3
     fi
@@ -245,7 +249,7 @@ run_diagnostics() {
     local diag_start diag_end diag_exit
     diag_start=$(date +%s)
 
-    dcgmi diag -r "$DCGM_DIAG_LEVEL" -j \
+    timeout "$DCGM_DIAG_TIMEOUT" dcgmi diag -r "$DCGM_DIAG_LEVEL" -j \
         > "$WORK_DIR/diag_raw.json" 2>"$WORK_DIR/diag_stderr.txt"
     diag_exit=$?
     diag_end=$(date +%s)
@@ -368,17 +372,31 @@ run_diagnostics() {
         fi
 
         # Count failures and warnings
-        local fail_count warn_count pass_count skip_count
-        fail_count=$(echo "$test_results" | jq '[.[].results[] | select(.status | test("(?i)fail"))] | length' 2>/dev/null || echo "0")
-        warn_count=$(echo "$test_results" | jq '[.[].results[] | select(.status | test("(?i)warn"))] | length' 2>/dev/null || echo "0")
-        pass_count=$(echo "$test_results" | jq '[.[].results[] | select(.status | test("(?i)pass"))] | length' 2>/dev/null || echo "0")
-        skip_count=$(echo "$test_results" | jq '[.[].results[] | select(.status | test("(?i)skip"))] | length' 2>/dev/null || echo "0")
+        # --- Classify every result status --------------------------------
+        # DCGM statuses are not limited to Pass/Fail/Warn.  CONFIG and RETEST
+        # mean the rig was misconfigured and the test never characterised the
+        # hardware.  SKIP means it did not run.  Neither is a hardware pass,
+        # and counting them as one is how a card that was never actually
+        # tested ends up reported as healthy.
+        local fail_count warn_count pass_count skip_count config_count
+        local unknown_count total_count
+        _count() {
+            echo "$test_results" | jq --arg re "$1" \
+                '[.[].results[] | select(.status | test($re; "i"))] | length' 2>/dev/null || echo "0"
+        }
+        total_count=$(echo "$test_results" | jq '[.[].results[]] | length' 2>/dev/null || echo "0")
+        pass_count=$(_count 'pass')
+        fail_count=$(_count 'fail')
+        warn_count=$(_count 'warn')
+        skip_count=$(_count 'skip|not[ _-]?run')
+        config_count=$(_count 'config|retest')
+        unknown_count=$(( total_count - pass_count - fail_count - warn_count - skip_count - config_count ))
+        [[ "$unknown_count" -lt 0 ]] && unknown_count=0
 
-        log "Summary: $pass_count passed, $fail_count failed, $warn_count warnings, $skip_count skipped"
+        log "Summary: $total_count result(s) -- $pass_count pass, $fail_count fail, $warn_count warn, $skip_count skip, $config_count config/retest, $unknown_count unclassified"
 
         if [[ "$fail_count" -gt 0 ]]; then
             overall="FAIL"
-            # Extract specific failure details
             local fail_details
             fail_details=$(echo "$test_results" | jq -r '[
                 .[].results[] | select(.status | test("(?i)fail")) |
@@ -388,33 +406,80 @@ run_diagnostics() {
                 --argjson n "$fail_count" --arg d "$fail_details" \
                 '. + [{"issue":"\($n) test(s) failed","severity":"critical","details":$d}]')
         fi
+
+        # A CONFIG/RETEST result is a test-rig failure, not a hardware pass.
+        if [[ "$config_count" -gt 0 ]]; then
+            overall="FAIL"
+            local cfg_details
+            cfg_details=$(echo "$test_results" | jq -r '[
+                .[].results[] | select(.status | test("(?i)config|retest")) |
+                "\(.gpu_id // "all"):\(.status)"
+            ] | join("; ")' 2>/dev/null | head -c 500 || echo "")
+            issues=$(echo "$issues" | jq \
+                --argjson n "$config_count" --arg d "$cfg_details" \
+                '. + [{"issue":"\($n) test(s) returned CONFIG/RETEST -- the rig was misconfigured and the hardware was never characterised","severity":"critical","details":$d}]')
+        fi
+
+        # Nothing ran, or nothing passed -- enumeration is not a test.
+        if [[ "$total_count" -eq 0 ]]; then
+            overall="FAIL"
+            issues=$(echo "$issues" | jq \
+                '. + [{"issue":"DCGM returned no test results -- no test was executed","severity":"critical"}]')
+        elif [[ "$pass_count" -eq 0 ]]; then
+            overall="FAIL"
+            issues=$(echo "$issues" | jq --argjson t "$total_count" \
+                '. + [{"issue":"DCGM produced \($t) result(s) but none passed","severity":"critical"}]')
+        fi
+
+        if [[ "$skip_count" -gt 0 ]]; then
+            [[ "$overall" == "PASS" ]] && overall="WARN"
+            local skip_details
+            skip_details=$(echo "$test_results" | jq -r '[
+                .[] | select([.results[].status | test("(?i)skip|not[ _-]?run")] | any) | .test
+            ] | unique | join(", ")' 2>/dev/null | head -c 300 || echo "")
+            issues=$(echo "$issues" | jq \
+                --argjson n "$skip_count" --arg d "$skip_details" \
+                '. + [{"issue":"\($n) test(s) skipped -- they did not run, so they evidence nothing","severity":"warning","details":$d}]')
+        fi
+
         if [[ "$warn_count" -gt 0 ]]; then
             [[ "$overall" == "PASS" ]] && overall="WARN"
             issues=$(echo "$issues" | jq --argjson n "$warn_count" \
                 '. + [{"issue":"\($n) test(s) with warnings","severity":"warning"}]')
         fi
-    else
-        # No valid JSON output
-        if [[ "$diag_exit" -ne 0 ]]; then
-            overall="FAIL"
-            local stderr_msg
-            stderr_msg=$(head -5 "$WORK_DIR/diag_stderr.txt" 2>/dev/null | tr '\n' ' ' || echo "unknown error")
-            issues=$(echo "$issues" | jq --arg m "DCGM diag failed (exit $diag_exit): $stderr_msg" \
-                '. + [{"issue":$m,"severity":"critical"}]')
+
+        if [[ "$unknown_count" -gt 0 ]]; then
+            [[ "$overall" == "PASS" ]] && overall="WARN"
+            local unk_details
+            unk_details=$(echo "$test_results" | jq -r \
+                '[.[].results[].status] | unique | join(", ")' 2>/dev/null | head -c 300 || echo "")
+            issues=$(echo "$issues" | jq \
+                --argjson n "$unknown_count" --arg d "$unk_details" \
+                '. + [{"issue":"\($n) result(s) carry an unrecognised status and are not counted as a pass","severity":"warning","details":$d}]')
         fi
+    else
+        # No parseable JSON at all.  A failure regardless of exit code: there
+        # is no evidence that any test ran.
+        overall="FAIL"
+        local stderr_msg
+        stderr_msg=$(head -5 "$WORK_DIR/diag_stderr.txt" 2>/dev/null | tr '\n' ' ' || echo "")
+        issues=$(echo "$issues" | jq \
+            --argjson e "$diag_exit" --arg m "${stderr_msg:-no stderr}" \
+            '. + [{"issue":"DCGM produced no parseable JSON (exit \($e)) -- no test evidence","severity":"critical","details":$m}]')
         warn "DCGM produced no valid JSON output"
         [[ -s "$WORK_DIR/diag_stderr.txt" ]] && { warn "stderr:"; head -10 "$WORK_DIR/diag_stderr.txt" >&2; }
     fi
 
-    # Non-zero exit with empty results = FAIL
-    if [[ "$diag_exit" -ne 0 && "$overall" == "PASS" ]]; then
-        local total
-        total=$(echo "$test_results" | jq '[.[].results[]] | length' 2>/dev/null || echo "0")
-        if [[ "$total" -eq 0 ]]; then
-            overall="FAIL"
-            issues=$(echo "$issues" | jq --argjson e "$diag_exit" \
-                '. + [{"issue":"DCGM exited \($e) with no test results","severity":"critical"}]')
-        fi
+    # `timeout` kills with 124 -- the run never completed, so it proves nothing.
+    if [[ "$diag_exit" -eq 124 ]]; then
+        overall="FAIL"
+        issues=$(echo "$issues" | jq --arg t "$DCGM_DIAG_TIMEOUT" \
+            '. + [{"issue":"DCGM diag exceeded its \($t)s timeout and was killed -- run incomplete","severity":"critical"}]')
+    # A non-zero exit is never silently discarded, even when results parsed.
+    elif [[ "$diag_exit" -ne 0 && "$overall" == "PASS" ]]; then
+        overall="WARN"
+        issues=$(echo "$issues" | jq --argjson e "$diag_exit" \
+            '. + [{"issue":"DCGM exited \($e) but every parsed result passed -- exit code and results disagree","severity":"warning"}]')
     fi
 
     log "=== STRESS TEST COMPLETE -- Verdict: $overall (${diag_dur}s) ==="
@@ -426,8 +491,8 @@ run_diagnostics() {
         --argjson dur "$(( $(date +%s) - SCRIPT_START ))" \
         --arg verdict "$overall" --argjson issues "$issues" \
         --arg drv "$SMI_DRIVER" --arg cuda "$SMI_CUDA" \
-        --arg dcgm "$DCGM_VER" --argjson gpus "$SMI_GPU_COUNT" \
-        --argjson level "$DCGM_DIAG_LEVEL" --argjson exit_code "$diag_exit" \
+        --arg dcgm "$DCGM_VER" --argjson gpus "${SMI_GPU_COUNT:-0}" \
+        --arg level "$DCGM_DIAG_LEVEL" --argjson exit_code "$diag_exit" \
         --argjson diag_dur "$diag_dur" --argjson results "$test_results" \
         '{
             report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts, duration_seconds:$dur},

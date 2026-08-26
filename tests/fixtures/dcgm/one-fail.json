@@ -1,0 +1,78 @@
+{
+ "categories": [
+  {
+   "category": "Hardware",
+   "tests": [
+    {
+     "name": "Targeted Stress",
+     "results": [
+      {
+       "gpu_ids": [
+        0
+       ],
+       "status": "Fail",
+       "info": "sm clock throttled",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        1
+       ],
+       "status": "Pass",
+       "info": "ok",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        2
+       ],
+       "status": "Pass",
+       "info": "ok",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        3
+       ],
+       "status": "Pass",
+       "info": "ok",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        4
+       ],
+       "status": "Pass",
+       "info": "ok",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        5
+       ],
+       "status": "Pass",
+       "info": "ok",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        6
+       ],
+       "status": "Pass",
+       "info": "ok",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        7
+       ],
+       "status": "Pass",
+       "info": "ok",
+       "warnings": []
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

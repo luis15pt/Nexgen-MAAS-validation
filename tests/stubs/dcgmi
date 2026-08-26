@@ -1,0 +1,11 @@
+#!/bin/bash
+# Test stub. `diag` replays a fixture named by $DCGM_FIXTURE.
+case "$1" in
+  --version|-v|version) echo "dcgmi version 4.2.3" ;;
+  discovery)            echo "${STUB_GPU_COUNT:-8} GPUs found" ;;
+  diag)
+      [[ -n "$DCGM_FIXTURE_STDERR" ]] && printf '%s\n' "$DCGM_FIXTURE_STDERR" >&2
+      [[ -f "$DCGM_FIXTURE" ]] && cat "$DCGM_FIXTURE"
+      exit "${DCGM_FIXTURE_EXIT:-0}" ;;
+  *) exit 0 ;;
+esac

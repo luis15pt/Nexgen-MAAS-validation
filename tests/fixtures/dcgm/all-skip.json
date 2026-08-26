@@ -1,0 +1,285 @@
+{
+ "categories": [
+  {
+   "category": "Hardware",
+   "tests": [
+    {
+     "name": "Targeted Stress",
+     "results": [
+      {
+       "gpu_ids": [
+        0
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        1
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        2
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        3
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        4
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        5
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        6
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        7
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      }
+     ]
+    },
+    {
+     "name": "Targeted Power",
+     "results": [
+      {
+       "gpu_ids": [
+        0
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        1
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        2
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        3
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        4
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        5
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        6
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        7
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      }
+     ]
+    },
+    {
+     "name": "Memory Bandwidth",
+     "results": [
+      {
+       "gpu_ids": [
+        0
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        1
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        2
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        3
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        4
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        5
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        6
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        7
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      }
+     ]
+    },
+    {
+     "name": "PCIe",
+     "results": [
+      {
+       "gpu_ids": [
+        0
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        1
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        2
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        3
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        4
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        5
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        6
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      },
+      {
+       "gpu_ids": [
+        7
+       ],
+       "status": "Skip",
+       "info": "synthetic",
+       "warnings": []
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

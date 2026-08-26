@@ -1,0 +1,14 @@
+#!/bin/bash
+# Test stub. Emits just enough for the commissioning scripts' preflight.
+case "$*" in
+  "") cat <<'H'
+Tue Aug 26 14:00:00 2026
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 595.10       Driver Version: 595.10       CUDA Version: 12.8     |
+|-----------------------------------------------------------------------------|
+H
+    ;;
+  *--query-gpu=count*) echo "${STUB_GPU_COUNT:-8}" ;;
+  *--query-gpu=persistence_mode*) echo "Enabled" ;;
+  *) exit 0 ;;
+esac
