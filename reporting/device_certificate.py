@@ -77,6 +77,10 @@ GPU_SCRIPTS = [
     "99-nexgen-gpu-stress-test",
 ]
 
+# Stages whose absence makes a report incomplete rather than merely partial.
+# Install alone proves nothing about the hardware's health.
+REQUIRED_STAGES = ("Inventory", "Stress Test")
+
 # Map short names used internally to the MAAS script names
 SCRIPT_ALIASES = {
     "install":   "90-nexgen-gpu-install-595-13.sh",
@@ -360,21 +364,40 @@ def _extract_json(text: str) -> dict | None:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # Find first { and try progressively larger substrings
+    # Scan for the first balanced top-level object, skipping over string
+    # literals.  A naive depth counter desyncs on any brace inside a string
+    # value -- and the scripts now embed base64 blobs, dmesg excerpts and
+    # nvidia-smi error text, all of which can contain braces.
     start = text.find("{")
     if start < 0:
         return None
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start : i + 1])
-                except json.JSONDecodeError:
-                    pass
+    while start >= 0:
+        depth = 0
+        in_str = False
+        escaped = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+        # That candidate did not parse -- try the next top-level brace.
+        start = text.find("{", start + 1)
     return None
 
 
@@ -1939,8 +1962,30 @@ def generate_report(
         else:
             verdicts.append((label, "N/A"))
 
+    # Absent evidence must degrade the verdict, not be ignored.  N/A used to
+    # rank *lowest* here, so a report where inventory and stress were missing
+    # entirely came out PASS on the strength of the install stage alone.  A
+    # report that omits required evidence is not a pass.
     pri = {"FAIL": 0, "WARN": 1, "PASS": 2, "N/A": 3}
-    overall = min(verdicts, key=lambda x: pri.get(x[1], 3))[1]
+    present = [v for v in verdicts if v[1] != "N/A"]
+    missing = [label for label, vv in verdicts if vv == "N/A" and label in REQUIRED_STAGES]
+
+    if not present:
+        overall = "N/A"
+    else:
+        overall = min(present, key=lambda x: pri.get(x[1], 3))[1]
+        if missing:
+            # Downgrade at most to WARN: the evidence we do have still stands,
+            # but the report is incomplete and must not read as a clean pass.
+            if overall == "PASS":
+                overall = "WARN"
+            all_issues.append({
+                "severity": "warning",
+                "source": "Report",
+                "issue": ("Required evidence missing: no result for "
+                          + ", ".join(missing)
+                          + " -- the report is incomplete"),
+            })
 
     # Script metadata
     script_meta = []
@@ -2090,7 +2135,7 @@ def generate_report(
 
         gpu_rows += f'''<tr>
             <td>{idx}</td>
-            <td class="mono">{g.get("serial","--")}</td>
+            <td class="mono">{escape(str(g.get("serial") or "--"))}</td>
             <td class="nowrap">{pcie_str(g)}</td>
             <td>{v(g.get("numa_node"))}</td>
             <td>{v(g.get("temp_idle_c"),"&deg;C")}</td>

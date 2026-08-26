@@ -1,0 +1,255 @@
+{
+  "report_metadata": {
+    "script_version": "2.2.0",
+    "script_name": "gpu-stress-test",
+    "generated_at": "2026-08-26T16:27:43Z",
+    "duration_seconds": 1
+  },
+  "verdict": {
+    "overall": "FAIL",
+    "issues": [
+      {
+        "issue": "32 test(s) returned CONFIG/RETEST -- the rig was misconfigured and the hardware was never characterised",
+        "severity": "critical",
+        "details": "0:CONFIG; 1:CONFIG; 2:CONFIG; 3:CONFIG; 4:CONFIG; 5:CONFIG; 6:CONFIG; 7:CONFIG; 0:CONFIG; 1:CONFIG; 2:CONFIG; 3:CONFIG; 4:CONFIG; 5:CONFIG; 6:CONFIG; 7:CONFIG; 0:CONFIG; 1:CONFIG; 2:CONFIG; 3:CONFIG; 4:CONFIG; 5:CONFIG; 6:CONFIG; 7:CONFIG; 0:CONFIG; 1:CONFIG; 2:CONFIG; 3:CONFIG; 4:CONFIG; 5:CONFIG; 6:CONFIG; 7:CONFIG"
+      },
+      {
+        "issue": "DCGM produced 32 result(s) but none passed",
+        "severity": "critical"
+      }
+    ]
+  },
+  "system": {
+    "nvidia_driver_version": "595.10",
+    "cuda_version": "12.8",
+    "dcgm_version": "4.2.3",
+    "gpu_count": 8
+  },
+  "dcgm_diagnostics": {
+    "run_level": "3",
+    "exit_code": 0,
+    "duration_seconds": 0,
+    "test_results": [
+      {
+        "test": "Targeted Stress",
+        "results": [
+          {
+            "gpu_id": 0,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 1,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 2,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 3,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 4,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 5,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 6,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 7,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          }
+        ]
+      },
+      {
+        "test": "Targeted Power",
+        "results": [
+          {
+            "gpu_id": 0,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 1,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 2,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 3,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 4,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 5,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 6,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 7,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          }
+        ]
+      },
+      {
+        "test": "Memory Bandwidth",
+        "results": [
+          {
+            "gpu_id": 0,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 1,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 2,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 3,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 4,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 5,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 6,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 7,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          }
+        ]
+      },
+      {
+        "test": "PCIe",
+        "results": [
+          {
+            "gpu_id": 0,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 1,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 2,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 3,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 4,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 5,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 6,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 7,
+            "status": "CONFIG",
+            "info": "synthetic",
+            "warnings": []
+          }
+        ]
+      }
+    ]
+  },
+  "diagnostic_artifacts": [
+    {
+      "artifact": "dmesg-xid",
+      "bytes": 0,
+      "note": "0 Xid line(s)",
+      "location": "MAAS commissioning log (stderr)"
+    }
+  ]
+}

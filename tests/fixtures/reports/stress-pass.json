@@ -1,0 +1,238 @@
+{
+  "report_metadata": {
+    "script_version": "2.2.0",
+    "script_name": "gpu-stress-test",
+    "generated_at": "2026-08-26T16:27:42Z",
+    "duration_seconds": 1
+  },
+  "verdict": {
+    "overall": "PASS",
+    "issues": []
+  },
+  "system": {
+    "nvidia_driver_version": "595.10",
+    "cuda_version": "12.8",
+    "dcgm_version": "4.2.3",
+    "gpu_count": 8
+  },
+  "dcgm_diagnostics": {
+    "run_level": "3",
+    "exit_code": 0,
+    "duration_seconds": 0,
+    "test_results": [
+      {
+        "test": "Targeted Stress",
+        "results": [
+          {
+            "gpu_id": 0,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 1,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 2,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 3,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 4,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 5,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 6,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 7,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          }
+        ]
+      },
+      {
+        "test": "Targeted Power",
+        "results": [
+          {
+            "gpu_id": 0,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 1,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 2,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 3,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 4,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 5,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 6,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 7,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          }
+        ]
+      },
+      {
+        "test": "Memory Bandwidth",
+        "results": [
+          {
+            "gpu_id": 0,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 1,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 2,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 3,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 4,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 5,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 6,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 7,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          }
+        ]
+      },
+      {
+        "test": "PCIe",
+        "results": [
+          {
+            "gpu_id": 0,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 1,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 2,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 3,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 4,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 5,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 6,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          },
+          {
+            "gpu_id": 7,
+            "status": "Pass",
+            "info": "synthetic",
+            "warnings": []
+          }
+        ]
+      }
+    ]
+  },
+  "diagnostic_artifacts": []
+}

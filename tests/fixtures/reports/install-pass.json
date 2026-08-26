@@ -1,0 +1,13 @@
+{
+  "report_metadata": {"script_version":"2.1.6","script_name":"gpu-install","generated_at":"2026-08-26T14:00:00Z","duration_seconds":410,"gpu_count_expected":8,"gpu_count_visible":8},
+  "verdict": {"overall":"PASS","issues":[]},
+  "install": {
+    "nvidia_driver_version":"595.10","cuda_version":"12.8","gpu_count":8,
+    "driver_package":"nvidia-driver-595-server-open","cuda_package":"cuda-toolkit-12-8",
+    "dcgm_available":true,"dcgm_version":"4.2.3","dcgm_gpu_count":8,
+    "nvidia_bug_report_available":true,"fieldiag_available":false,
+    "fabric_required":false,"fabric_manager_installed":true,
+    "fabric_manager_version":"595.10","fabric_manager_service_active":false,
+    "fabric_state":"N/A","fabric_ready":true
+  }
+}

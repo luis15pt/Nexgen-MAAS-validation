@@ -1,0 +1,335 @@
+{
+  "report_metadata": {
+    "script_version": "1.0.0",
+    "script_name": "gpu-burn-in",
+    "generated_at": "2026-08-26T16:27:44Z",
+    "duration_seconds": 1
+  },
+  "verdict": {
+    "overall": "PASS",
+    "issues": [
+      {
+        "issue": "BURN_MODE=characterize -- telemetry recorded, no thresholds enforced",
+        "severity": "info"
+      }
+    ]
+  },
+  "system": {
+    "nvidia_driver_version": "595.10",
+    "cuda_version": "12.8",
+    "gpu_count": 8
+  },
+  "burn_in": {
+    "tool": "dcgmproftester12",
+    "mode": "characterize",
+    "duration_requested_seconds": 2,
+    "duration_actual_seconds": 1,
+    "load_exit_code": 0,
+    "throttle_field_base": "clocks_event_reasons",
+    "telemetry": [
+      {
+        "gpu_index": 0,
+        "samples": 2,
+        "power_w": {
+          "min": 71.22,
+          "max": 71.22,
+          "mean": 71.22
+        },
+        "temp_gpu_c": {
+          "min": 34,
+          "max": 34,
+          "mean": 34
+        },
+        "temp_memory_c": {
+          "max": 40,
+          "mean": 40
+        },
+        "clocks_sm_mhz": {
+          "min": 1755,
+          "max": 1755,
+          "mean": 1755
+        },
+        "throttle_samples": {
+          "sw_power_cap": 2,
+          "hw_thermal_slowdown": 0,
+          "hw_power_brake_slowdown": 0,
+          "sw_thermal_slowdown": 0
+        }
+      },
+      {
+        "gpu_index": 1,
+        "samples": 2,
+        "power_w": {
+          "min": 71.22,
+          "max": 71.22,
+          "mean": 71.22
+        },
+        "temp_gpu_c": {
+          "min": 34,
+          "max": 34,
+          "mean": 34
+        },
+        "temp_memory_c": {
+          "max": 40,
+          "mean": 40
+        },
+        "clocks_sm_mhz": {
+          "min": 1755,
+          "max": 1755,
+          "mean": 1755
+        },
+        "throttle_samples": {
+          "sw_power_cap": 2,
+          "hw_thermal_slowdown": 0,
+          "hw_power_brake_slowdown": 0,
+          "sw_thermal_slowdown": 0
+        }
+      },
+      {
+        "gpu_index": 2,
+        "samples": 2,
+        "power_w": {
+          "min": 71.22,
+          "max": 71.22,
+          "mean": 71.22
+        },
+        "temp_gpu_c": {
+          "min": 34,
+          "max": 34,
+          "mean": 34
+        },
+        "temp_memory_c": {
+          "max": 40,
+          "mean": 40
+        },
+        "clocks_sm_mhz": {
+          "min": 1755,
+          "max": 1755,
+          "mean": 1755
+        },
+        "throttle_samples": {
+          "sw_power_cap": 2,
+          "hw_thermal_slowdown": 0,
+          "hw_power_brake_slowdown": 0,
+          "sw_thermal_slowdown": 0
+        }
+      },
+      {
+        "gpu_index": 3,
+        "samples": 2,
+        "power_w": {
+          "min": 71.22,
+          "max": 71.22,
+          "mean": 71.22
+        },
+        "temp_gpu_c": {
+          "min": 34,
+          "max": 34,
+          "mean": 34
+        },
+        "temp_memory_c": {
+          "max": 40,
+          "mean": 40
+        },
+        "clocks_sm_mhz": {
+          "min": 1755,
+          "max": 1755,
+          "mean": 1755
+        },
+        "throttle_samples": {
+          "sw_power_cap": 2,
+          "hw_thermal_slowdown": 0,
+          "hw_power_brake_slowdown": 0,
+          "sw_thermal_slowdown": 0
+        }
+      },
+      {
+        "gpu_index": 4,
+        "samples": 2,
+        "power_w": {
+          "min": 71.22,
+          "max": 71.22,
+          "mean": 71.22
+        },
+        "temp_gpu_c": {
+          "min": 34,
+          "max": 34,
+          "mean": 34
+        },
+        "temp_memory_c": {
+          "max": 40,
+          "mean": 40
+        },
+        "clocks_sm_mhz": {
+          "min": 1755,
+          "max": 1755,
+          "mean": 1755
+        },
+        "throttle_samples": {
+          "sw_power_cap": 2,
+          "hw_thermal_slowdown": 0,
+          "hw_power_brake_slowdown": 0,
+          "sw_thermal_slowdown": 0
+        }
+      },
+      {
+        "gpu_index": 5,
+        "samples": 2,
+        "power_w": {
+          "min": 71.22,
+          "max": 71.22,
+          "mean": 71.22
+        },
+        "temp_gpu_c": {
+          "min": 34,
+          "max": 34,
+          "mean": 34
+        },
+        "temp_memory_c": {
+          "max": 40,
+          "mean": 40
+        },
+        "clocks_sm_mhz": {
+          "min": 1755,
+          "max": 1755,
+          "mean": 1755
+        },
+        "throttle_samples": {
+          "sw_power_cap": 2,
+          "hw_thermal_slowdown": 0,
+          "hw_power_brake_slowdown": 0,
+          "sw_thermal_slowdown": 0
+        }
+      },
+      {
+        "gpu_index": 6,
+        "samples": 2,
+        "power_w": {
+          "min": 71.22,
+          "max": 71.22,
+          "mean": 71.22
+        },
+        "temp_gpu_c": {
+          "min": 34,
+          "max": 34,
+          "mean": 34
+        },
+        "temp_memory_c": {
+          "max": 40,
+          "mean": 40
+        },
+        "clocks_sm_mhz": {
+          "min": 1755,
+          "max": 1755,
+          "mean": 1755
+        },
+        "throttle_samples": {
+          "sw_power_cap": 2,
+          "hw_thermal_slowdown": 0,
+          "hw_power_brake_slowdown": 0,
+          "sw_thermal_slowdown": 0
+        }
+      },
+      {
+        "gpu_index": 7,
+        "samples": 2,
+        "power_w": {
+          "min": 71.22,
+          "max": 71.22,
+          "mean": 71.22
+        },
+        "temp_gpu_c": {
+          "min": 34,
+          "max": 34,
+          "mean": 34
+        },
+        "temp_memory_c": {
+          "max": 40,
+          "mean": 40
+        },
+        "clocks_sm_mhz": {
+          "min": 1755,
+          "max": 1755,
+          "mean": 1755
+        },
+        "throttle_samples": {
+          "sw_power_cap": 2,
+          "hw_thermal_slowdown": 0,
+          "hw_power_brake_slowdown": 0,
+          "sw_thermal_slowdown": 0
+        }
+      }
+    ],
+    "counter_deltas": [
+      {
+        "gpu_index": 0,
+        "ecc_corrected_aggregate_delta": 0,
+        "ecc_uncorrected_aggregate_delta": 0,
+        "pcie_replay_delta": 0,
+        "remapped_rows_correctable_delta": 0,
+        "remapped_rows_uncorrectable_delta": 0
+      },
+      {
+        "gpu_index": 1,
+        "ecc_corrected_aggregate_delta": 0,
+        "ecc_uncorrected_aggregate_delta": 0,
+        "pcie_replay_delta": 0,
+        "remapped_rows_correctable_delta": 0,
+        "remapped_rows_uncorrectable_delta": 0
+      },
+      {
+        "gpu_index": 2,
+        "ecc_corrected_aggregate_delta": 0,
+        "ecc_uncorrected_aggregate_delta": 0,
+        "pcie_replay_delta": 0,
+        "remapped_rows_correctable_delta": 0,
+        "remapped_rows_uncorrectable_delta": 0
+      },
+      {
+        "gpu_index": 3,
+        "ecc_corrected_aggregate_delta": 0,
+        "ecc_uncorrected_aggregate_delta": 0,
+        "pcie_replay_delta": 0,
+        "remapped_rows_correctable_delta": 0,
+        "remapped_rows_uncorrectable_delta": 0
+      },
+      {
+        "gpu_index": 4,
+        "ecc_corrected_aggregate_delta": 0,
+        "ecc_uncorrected_aggregate_delta": 0,
+        "pcie_replay_delta": 0,
+        "remapped_rows_correctable_delta": 0,
+        "remapped_rows_uncorrectable_delta": 0
+      },
+      {
+        "gpu_index": 5,
+        "ecc_corrected_aggregate_delta": 0,
+        "ecc_uncorrected_aggregate_delta": 0,
+        "pcie_replay_delta": 0,
+        "remapped_rows_correctable_delta": 0,
+        "remapped_rows_uncorrectable_delta": 0
+      },
+      {
+        "gpu_index": 6,
+        "ecc_corrected_aggregate_delta": 0,
+        "ecc_uncorrected_aggregate_delta": 0,
+        "pcie_replay_delta": 0,
+        "remapped_rows_correctable_delta": 0,
+        "remapped_rows_uncorrectable_delta": 0
+      },
+      {
+        "gpu_index": 7,
+        "ecc_corrected_aggregate_delta": 0,
+        "ecc_uncorrected_aggregate_delta": 0,
+        "pcie_replay_delta": 0,
+        "remapped_rows_correctable_delta": 0,
+        "remapped_rows_uncorrectable_delta": 0
+      }
+    ],
+    "xid": {
+      "critical": [],
+      "other": [],
+      "dmesg_window_b64": ""
+    }
+  }
+}
