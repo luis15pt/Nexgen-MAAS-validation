@@ -12,8 +12,9 @@ Nexgen-MAAS-validation/
 ├── commissioning-scripts/        # MAAS commissioning scripts (run in order)
 │   ├── 80-nexgen-network-cabling-verify.sh # Step 0: NetBox vs LLDP cabling check
 │   ├── 90-nexgen-gpu-install-595-13.sh     # Step 1: Driver + CUDA + DCGM + Fabric Manager
-│   ├── 98-nexgen-gpu-inventory.sh          # Step 2: GPU inventory & health check
-│   └── 99-nexgen-gpu-stress-test.sh        # Step 3: DCGM stress test
+│   ├── 91-nexgen-gpu-mig-ecc-config.sh     # Step 2: Disable MIG, enable ECC
+│   ├── 98-nexgen-gpu-inventory.sh          # Step 3: GPU inventory & health check
+│   └── 99-nexgen-gpu-stress-test.sh        # Step 4: DCGM stress test
 ├── reporting/                    # Report generation tooling
 │   └── device_certificate.py               # HTML certification report generator
 ├── reports/                      # Generated reports (git-ignored)
@@ -24,7 +25,7 @@ Nexgen-MAAS-validation/
 
 ## Commissioning Scripts
 
-All four scripts are designed to run as MAAS commissioning scripts in sequence. They follow the MAAS metadata format and output structured JSON for downstream consumption.
+All five scripts are designed to run as MAAS commissioning scripts in sequence. They follow the MAAS metadata format and output structured JSON for downstream consumption. The numeric prefix sets the execution order — `80` is independent, and every GPU script depends on `90` having run first.
 
 ### 80 - Network Cabling Verify (`v1.0.0`)
 
@@ -90,21 +91,43 @@ cards skip the fabric gate entirely.
 
 **Timeout**: 20 minutes
 
-### 98 - GPU Inventory (`v2.0.2`)
+### 91 - MIG Disable & ECC Enable (`v1.1.0`)
 
-Collects detailed GPU hardware inventory via a single bulk `nvidia-smi` query:
+Disables MIG mode and enables ECC on every GPU. Both settings live in GPU
+NVRAM, so the script writes them and then activates them with
+`nvidia-smi --gpu-reset` rather than requiring a full reboot. If the reset
+fails, the change is reported as *pending reboot* instead of being treated as
+an error.
 
-- Serial numbers and UUIDs
-- VRAM capacity and utilization
-- ECC error counters
-- PCIe link speed and width
-- NUMA topology mapping
-
-Outputs structured JSON. No packages installed -- depends on script 97.
+Requires script `90` to have run first.
 
 **Timeout**: 5 minutes
 
-### 99 - GPU Stress Test (`v2.1.2`)
+### 98 - GPU Inventory (`v2.1.0`)
+
+Collects detailed GPU hardware inventory via a single bulk `nvidia-smi` query:
+
+- Serial numbers, UUIDs, and VBIOS versions
+- VRAM capacity and free memory
+- ECC mode plus corrected/uncorrected volatile and aggregate counters
+- Remapped rows and memory bank availability
+- Temperature, power draw, and power limit
+- PCIe link generation and width (current vs. max)
+- NUMA topology mapping
+
+Extended ECC and retired-page fields are queried separately from the safe
+field set, because they do not exist on every driver version. If the extended
+query fails the script degrades to the safe set rather than failing the run.
+
+Also dumps `nvidia-smi`, `nvidia-smi -q`, and `nvidia-smi topo -m` to stderr,
+so full GPU state is recoverable from the MAAS commissioning log on nodes that
+are not SSH-reachable.
+
+Outputs structured JSON. Installs no packages — depends on script `90`.
+
+**Timeout**: 5 minutes
+
+### 99 - GPU Stress Test (`v2.1.5`)
 
 Runs DCGM diagnostics at configurable severity levels:
 
@@ -121,7 +144,7 @@ Override with: `DCGM_DIAG_LEVEL=4`
 
 ## Report Generator
 
-`reporting/device_certificate.py` (v3.2.0) generates a consolidated HTML certification report from MAAS commissioning data.
+`reporting/device_certificate.py` (v3.2.1) generates a consolidated HTML certification report from MAAS commissioning data.
 
 ### Prerequisites
 
@@ -159,7 +182,7 @@ python3 reporting/device_certificate.py --host EXAMPLE-GPU-001 -o reports/EXAMPL
 
 ```bash
 python3 reporting/device_certificate.py \
-  --install 97-output.json \
+  --install 90-output.json \
   --inventory 98-output.json \
   --stress 99-output.json \
   -o reports/report.html
@@ -168,9 +191,15 @@ python3 reporting/device_certificate.py \
 The generated report includes:
 - Machine hardware summary (CPU, RAM, storage, network)
 - Per-GPU driver, firmware, and configuration details
+- ECC counters, remapped rows, and memory bank availability
 - DCGM diagnostic results with pass/fail status
 - DIMM inventory from lshw
 - Overall validation verdict
+
+> **Known gap**: script `90` emits `fabric_required`, `fabric_manager_*`,
+> `fabric_state`, and `fabric_ready` in its JSON, but the HTML report does not
+> render them yet. On NVSwitch nodes, check the fabric verdict in the MAAS
+> commissioning output for script `90` directly.
 
 ## Example Report
 
@@ -186,20 +215,22 @@ file) -- MAAS does not inject per-script secrets:
 
 ```bash
 maas $PROFILE commissioning-scripts create \
-<<<<<<< HEAD
   name=80-nexgen-network-cabling-verify \
   script_type=commissioning \
   hardware_type=network \
   content@=commissioning-scripts/80-nexgen-network-cabling-verify.sh
 
 maas $PROFILE commissioning-scripts create \
-  name=97-nexgen-gpu-install-580-12.8 \
-=======
   name=90-nexgen-gpu-install-595-13 \
->>>>>>> ae5503c (Add Fabric Manager support and bump driver pin to 595)
   script_type=commissioning \
   hardware_type=gpu \
   content@=commissioning-scripts/90-nexgen-gpu-install-595-13.sh
+
+maas $PROFILE commissioning-scripts create \
+  name=91-nexgen-gpu-mig-ecc-config \
+  script_type=commissioning \
+  hardware_type=gpu \
+  content@=commissioning-scripts/91-nexgen-gpu-mig-ecc-config.sh
 
 maas $PROFILE commissioning-scripts create \
   name=98-nexgen-gpu-inventory \
@@ -223,7 +254,10 @@ Commission Machine in MAAS
    80 - Cabling Verify ───► NetBox planned vs. LLDP actual (fails fast)
          │
          ▼
-   97 - Install Drivers ──► nvidia-driver-580 + CUDA 12.8 + DCGM 4.x
+   90 - Install Drivers ──► nvidia-driver-595 + CUDA 12.8 + DCGM 4.x
+         │                  + Fabric Manager (NVSwitch/NVL nodes)
+         ▼
+   91 - MIG / ECC Config ─► MIG off, ECC on (via --gpu-reset)
          │
          ▼
    98 - GPU Inventory ────► JSON: serials, VRAM, ECC, PCIe, NUMA
@@ -235,13 +269,76 @@ Commission Machine in MAAS
    device_certificate.py ─► reports/<hostname>-MAAS-validation.html
 ```
 
+## Troubleshooting
+
+### `nvidia-fabricmanager` starts, then exits immediately
+
+Version mismatch. The log reads *"fabric manager version A doesn't match
+driver version B"*. FM must match the running driver on all three components
+(`X.Y.Z`), not just the branch. Check:
+
+```bash
+nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1
+dpkg-query -W -f='${Version}\n' 'nvidia-fabricmanager-*'
+```
+
+### Fabric stuck at `In Progress` and never reaches `Completed`
+
+On Blackwell (B200/B300) the fabric is trained by NVLSM, which has
+prerequisites that fail silently:
+
+```bash
+command -v ibstat          # from infiniband-diags -- FM's start wrapper
+                           # shells out to this and exits 1 without it
+lsmod | grep ib_umad       # NVLSM's management transport
+dpkg -l nvlsm libnvsdm     # the NVLSM stack itself
+grep FABRIC_MODE /usr/share/nvidia/nvswitch/fabricmanager.cfg   # want 0
+```
+
+A missing `ibstat` is the easiest one to miss: `nvidia-fabricmanager-start.sh`
+exits 1 every single time without it, so FM never launches at all and the only
+symptom is a fabric that stays `In Progress` until the timeout. `FABRIC_MODE`
+other than `0` makes FM wait for a hypervisor handshake that never arrives on
+bare metal. An all-zero Cluster UUID points at IMEX/clique configuration.
+
+Script `90` installs and checks all of these, and dumps
+`journalctl -u nvidia-fabricmanager` plus `/var/log/fabricmanager.log` to
+stderr on failure — so on a node with no SSH access, read the MAAS
+commissioning output for script `90` first.
+
+### CUDA fails with error 802 (`system not yet initialized`)
+
+Fabric not trained. See above — this is the CUDA-side symptom, not a separate
+problem.
+
+### `NVRM: BAR0 is 0M @ 0x0` and the driver refuses to load
+
+Two distinct causes with *opposite* fixes, which is why script `90` checks both
+the hardware view (`setpci`) and the kernel view (the sysfs `resource` file):
+
+- **nouveau zeroed the BARs during unload** (classic on 8× A100). PCIe links
+  are still alive, so a `remove` + `rescan` with rewritten BAR0 values
+  recovers it. Never use FLR here — a function level reset zeroes the BAR
+  registers on A100s and makes things worse.
+- **The BIOS never assigned the BARs.** No software fix exists. The script
+  deliberately does *not* attempt remove+rescan in this case, because on
+  Blackwell it makes the GPUs fall off the bus permanently. Fix it in BIOS:
+  enable *Above 4G Decoding*, and check the MMIO high base and 64-bit PCIe
+  resource allocation settings.
+
 ## Design Decisions
 
-**Three scripts, not one** -- Splitting install/inventory/stress into separate scripts means MAAS shows granular pass/fail per phase. If the driver install fails, you see that immediately without wading through inventory output.
+**Separate scripts, not one** -- Splitting install/config/inventory/stress into separate scripts means MAAS shows granular pass/fail per phase. If the driver install fails, you see that immediately without wading through inventory output.
 
-**Pinned driver versions** -- After hitting `nvidia-smi` field incompatibilities with driver 590 (removed `cuda_version` query field, changed `memory.type` behavior), we pinned to driver 580 + CUDA 12.8 and encoded versions in the filename.
+**Pinned driver versions, with a fallback** -- After hitting `nvidia-smi` field incompatibilities with driver 590 (removed `cuda_version` query field, changed `memory.type` behavior), we pin an exact driver branch and encode it in the filename. The pin is not a hard failure though: if the pinned branch has no installable candidate (a new branch that is not published for the distro yet), the script degrades to the newest available `nvidia-driver-*-server-open` rather than aborting commissioning.
 
-**ASCII-only script output** -- MAAS terminal rendering mangles UTF-8 box-drawing characters and emoji. All script output uses plain ASCII formatting.
+**Fabric Manager version is derived, not pinned** -- Fabric Manager refuses to start unless its version matches the running driver exactly, and the running driver is not necessarily the pinned one (see the fallback above). So the FM branch and exact version are read back from `nvidia-smi` at runtime instead of being assumed from the package name.
+
+**Fabric detection reads `nvidia-smi -q`, not device nodes** -- The obvious signals are unreliable on current hardware: B300/NVL systems expose no `/dev/nvidia-nvswitch*` nodes at all, and the `--query-gpu=fabric.state` CSV field does not report correctly. The `Fabric:` section of `nvidia-smi -q` is the signal that actually works across A100 SXM, B200, and B300.
+
+**A fabric that never trains is a hard FAIL** -- On a fabric-attached node, CUDA and DCGM cannot initialize without a trained NVLink fabric, so passing commissioning would certify a machine that cannot run a single job. The install JSON is written *before* the failure return, so the `fabric_*` diagnostic fields survive on a failed run.
+
+**ASCII-only script output** -- MAAS terminal rendering mangles UTF-8 box-drawing characters and emoji. All script *output* uses plain ASCII formatting. Note that UTF-8 in script *comments* is also mangled when a script is pulled back out of MAAS (it comes back latin-1 decoded, so `─` returns as `â`); check comment blocks after any MAAS round-trip.
 
 **Resilient nvidia-smi queries** -- Every field query has a fallback. If a field doesn't exist in the driver version (e.g., `retired_pages` on consumer GPUs), it degrades gracefully to "N/A" rather than crashing.
 
