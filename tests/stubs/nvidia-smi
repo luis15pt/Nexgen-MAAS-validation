@@ -80,6 +80,20 @@ if [[ "$args" == *--query-gpu=* ]]; then
   exit 0
 fi
 
-if [[ "$args" == *"-q"* && "$args" == *ECC* ]]; then cat "$E"; exit 0; fi
-if [[ "$args" == *"-q"* ]];                     then cat "$Q"; exit 0; fi
+# `nvidia-smi -i N -q` reports GPU N's own identity, so rewrite the per-GPU
+# fields to match what the CSV query returns for that index. Otherwise the
+# report's serial cross-check correctly flags the stub as inconsistent.
+_emit_q() {
+  local fixture="$1" idx="${2:-}"
+  if [[ -z "$idx" ]]; then cat "$fixture"; return; fi
+  local bus
+  bus=$(printf '%02X' $((0x1B + idx)))
+  sed -e "s/1571023456789/157102345678${idx}/g"       -e "s/GPU-3f1c8a20-1111-2222-3333-444455556666/GPU-3f1c8a20-1111-2222-3333-44445555666${idx}/g"       -e "s/00000000:1B:00\.0/00000000:${bus}:00.0/g"       "$fixture"
+}
+
+_idx=""
+if [[ "$args" =~ (^|[[:space:]])-i[[:space:]]+([0-9]+) ]]; then _idx="${BASH_REMATCH[2]}"; fi
+
+if [[ "$args" == *"-q"* && "$args" == *ECC* ]]; then _emit_q "$E" "$_idx"; exit 0; fi
+if [[ "$args" == *"-q"* ]];                     then _emit_q "$Q" "$_idx"; exit 0; fi
 exit 0

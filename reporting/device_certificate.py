@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
-__version__ = "3.2.1"
+__version__ = "3.3.0"
 
 # ---------------------------------------------------------------------------
 # .env file support — load key=value pairs into os.environ
@@ -71,12 +71,6 @@ _load_dotenv()
 # MAAS API CLIENT
 # ---------------------------------------------------------------------------
 
-GPU_SCRIPTS = [
-    "90-nexgen-gpu-install-595-13",
-    "98-nexgen-gpu-inventory",
-    "99-nexgen-gpu-stress-test",
-]
-
 # Stages whose absence makes a report incomplete rather than merely partial.
 # Install alone proves nothing about the hardware's health.
 REQUIRED_STAGES = ("Inventory", "Stress Test")
@@ -84,6 +78,8 @@ REQUIRED_STAGES = ("Inventory", "Stress Test")
 # Map short names used internally to the MAAS script names
 SCRIPT_ALIASES = {
     "install":   "90-nexgen-gpu-install-595-13.sh",
+    "config":    "91-nexgen-gpu-mig-ecc-config.sh",
+    "burnin":    "92-nexgen-gpu-burn-in.sh",
     "inventory": "98-nexgen-gpu-inventory.sh",
     "stress":    "99-nexgen-gpu-stress-test.sh",
 }
@@ -328,8 +324,14 @@ class MAASClient:
             })
         return results
 
-    def get_script_stdout_raw(self, system_id: str, script_name: str) -> str | None:
-        """Download raw stdout text for a script (no base64).
+    def get_script_stdout_raw(self, system_id: str, script_name: str,
+                              output: str = "stdout") -> str | None:
+        """Download raw text for a script (no base64).
+
+        `output` selects the stream: "stdout", "stderr" or "all".  The scripts
+        put their JSON payload on stdout and every log line, nvidia-smi dump and
+        diagnostic artifact on stderr, so "stderr" is where the evidence
+        artifacts live -- MAAS retains them as part of the commissioning result.
 
         Tries both with and without .sh extension for MAAS compatibility.
         """
@@ -344,7 +346,7 @@ class MAASClient:
                     f"nodes/{system_id}/results/current-commissioning/",
                     {
                         "op": "download",
-                        "output": "stdout",
+                        "output": output,
                         "filetype": "txt",
                         "filters": name,
                     },
@@ -399,6 +401,472 @@ def _extract_json(text: str) -> dict | None:
         # That candidate did not parse -- try the next top-level brace.
         start = text.find("{", start + 1)
     return None
+
+
+# ---------------------------------------------------------------------------
+# PER-GPU ACCEPTANCE ADJUDICATION
+# ---------------------------------------------------------------------------
+# Hardware acceptance criteria, evaluated per GPU against the evidence the
+# commissioning scripts collected.  `reject` is the numbered condition in the
+# customer specification each check implements.
+#
+# Two deliberate departures from a literal reading of that specification, both
+# to avoid failing healthy hardware:
+#
+#   * Throttling (#6). A card at sustained full load will sit against its power
+#     limiter, reporting sw_power_cap. That is the limiter working, not a
+#     defect, so only the hardware slowdowns and a sustained clock floor are
+#     treated as faults.
+#   * PCIe (#7). Links downtrain to Gen1 at idle to save power, so the idle
+#     value proves nothing. What is checked is that the link trained to the
+#     best generation BOTH ends support, and that width is full. A Gen4 host
+#     capping a Gen5 card is reported, not failed -- which is what the
+#     specification's own Gen4-host clause asks for.
+ACCEPTANCE_MAX_AGE_DAYS = 30
+ACCEPTANCE_REPLAY_DELTA_LIMIT = 10
+XID_DISQUALIFYING = {48, 63, 64, 79, 92, 94, 95}
+
+
+def _n(v):
+    """Coerce to a number, or None. Treats bools as absent."""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _crit(cid, reject, label, status, detail):
+    return {"id": cid, "reject": reject, "label": label,
+            "status": status, "detail": detail}
+
+
+def _check_identity(gpu):
+    ident = gpu.get("identity") or {}
+    serial = gpu.get("serial")
+    serial_q = ident.get("serial_from_query")
+    uuid = gpu.get("uuid")
+    out = []
+
+    missing = [n for n, v in (("serial", serial), ("UUID", uuid)) if not v]
+    if missing:
+        out.append(_crit("identity_present", 8, "Serial and UUID reported",
+                         "FAIL", "missing: " + ", ".join(missing)))
+    else:
+        out.append(_crit("identity_present", 8, "Serial and UUID reported",
+                         "PASS", f"{serial} / {uuid}"))
+
+    # Cross-check the bulk query against the -q document. Both come from
+    # nvidia-smi, so disagreement means something is genuinely inconsistent.
+    if serial and serial_q:
+        if str(serial).strip() == str(serial_q).strip():
+            out.append(_crit("serial_match", 8, "Serial consistent across sources",
+                             "PASS", f"query and -q agree: {serial}"))
+        else:
+            out.append(_crit("serial_match", 8, "Serial consistent across sources",
+                             "FAIL", f"bulk query {serial} != -q {serial_q}"))
+    else:
+        out.append(_crit("serial_match", 8, "Serial consistent across sources",
+                         "N/A", "second source unavailable"))
+
+    corrupt = ident.get("inforom_corrupted")
+    if corrupt is True:
+        out.append(_crit("inforom", 8, "InfoROM not corrupted", "FAIL",
+                         "nvidia-smi reports InfoROM corruption"))
+    elif corrupt is False:
+        irom = ident.get("inforom") or {}
+        ver = irom.get("image") or "version unreported"
+        out.append(_crit("inforom", 8, "InfoROM not corrupted", "PASS", str(ver)))
+    else:
+        out.append(_crit("inforom", 8, "InfoROM not corrupted", "N/A",
+                         "not collected"))
+    return out
+
+
+def _check_memory(gpu):
+    out = []
+    remap = gpu.get("remapped_rows")
+    if not isinstance(remap, dict):
+        out.append(_crit("remap_failure", 1, "No row-remapping failure", "N/A",
+                         "row remapper data not collected"))
+        out.append(_crit("remap_uce", 1, "No uncorrectable-error remapped rows",
+                         "N/A", "row remapper data not collected"))
+        out.append(_crit("remap_pending", 2, "No pending row remap", "N/A",
+                         "row remapper data not collected"))
+    else:
+        if remap.get("failure_occurred") is True:
+            out.append(_crit("remap_failure", 1, "No row-remapping failure",
+                             "FAIL", "Remapping Failure Occurred = Yes (RMA condition)"))
+        else:
+            out.append(_crit("remap_failure", 1, "No row-remapping failure",
+                             "PASS", "no failure"))
+
+        ruce = _n(remap.get("uncorrectable"))
+        rce = _n(remap.get("correctable"))
+        if ruce is None:
+            out.append(_crit("remap_uce", 1, "No uncorrectable-error remapped rows",
+                             "N/A", "count unavailable"))
+        elif ruce > 0:
+            out.append(_crit("remap_uce", 1, "No uncorrectable-error remapped rows",
+                             "FAIL", f"{int(ruce)} row(s) remapped for uncorrectable errors"))
+        else:
+            ce_note = f"0 uncorrectable, {int(rce)} correctable (delivery baseline)" \
+                      if rce is not None else "0 uncorrectable"
+            out.append(_crit("remap_uce", 1, "No uncorrectable-error remapped rows",
+                             "PASS", ce_note))
+
+        if remap.get("pending") is True:
+            out.append(_crit("remap_pending", 2, "No pending row remap", "FAIL",
+                             "Pending = Yes: card not reset and re-queried, test incomplete"))
+        elif remap.get("pending") is False:
+            out.append(_crit("remap_pending", 2, "No pending row remap", "PASS",
+                             "no remap pending"))
+        else:
+            out.append(_crit("remap_pending", 2, "No pending row remap", "N/A",
+                             "state unavailable"))
+
+    banks = gpu.get("bank_remap_availability")
+    if isinstance(banks, dict):
+        degraded = sum(int(_n(banks.get(k)) or 0) for k in ("partial", "low", "none"))
+        hi = ", ".join(f"{k}={int(_n(banks.get(k)) or 0)}" for k in
+                       ("max", "high", "partial", "low", "none"))
+        if degraded > 0:
+            out.append(_crit("bank_hist", 2, "Bank remap availability at Max/High",
+                             "FAIL", f"{degraded} bank(s) below High -- {hi}"))
+        else:
+            out.append(_crit("bank_hist", 2, "Bank remap availability at Max/High",
+                             "PASS", hi))
+    else:
+        out.append(_crit("bank_hist", 2, "Bank remap availability at Max/High",
+                         "N/A", "histogram not collected"))
+
+    # ECC must be on, and the counters must be the aggregate ones: volatile
+    # counters reset on reboot, so they cannot evidence a used card's history.
+    mode = gpu.get("ecc_mode")
+    ecc = gpu.get("ecc") or {}
+    if mode and str(mode).strip().lower().startswith("enabled"):
+        out.append(_crit("ecc_mode", 3, "ECC enabled during test", "PASS", str(mode)))
+    elif mode:
+        out.append(_crit("ecc_mode", 3, "ECC enabled during test", "FAIL",
+                         f"ECC mode is {mode}"))
+    else:
+        out.append(_crit("ecc_mode", 3, "ECC enabled during test", "FAIL",
+                         "ECC mode not reported (N/A is not acceptable)"))
+
+    agg_c = _n(ecc.get("corrected_aggregate"))
+    agg_u = _n(ecc.get("uncorrected_aggregate"))
+    if agg_c is None and agg_u is None:
+        out.append(_crit("ecc_aggregate", 3, "Aggregate ECC counters reported",
+                         "FAIL", "only volatile counters available"))
+    else:
+        out.append(_crit("ecc_aggregate", 3, "Aggregate ECC counters reported",
+                         "PASS",
+                         f"corrected={int(agg_c) if agg_c is not None else '?'}, "
+                         f"uncorrected={int(agg_u) if agg_u is not None else '?'}"))
+
+    if agg_u is not None and agg_u > 0:
+        out.append(_crit("ecc_uncorrected", 1, "No uncorrectable ECC errors",
+                         "FAIL", f"{int(agg_u)} aggregate uncorrectable error(s)"))
+    elif agg_u is None:
+        out.append(_crit("ecc_uncorrected", 1, "No uncorrectable ECC errors",
+                         "N/A", "aggregate count unavailable"))
+    else:
+        out.append(_crit("ecc_uncorrected", 1, "No uncorrectable ECC errors",
+                         "PASS", "0 aggregate uncorrectable"))
+
+    sram_u = _n(ecc.get("sram_uncorrected_aggregate"))
+    thresh = gpu.get("sram_threshold_exceeded")
+    if thresh is True:
+        out.append(_crit("sram", 1, "SRAM uncorrectable errors zero", "FAIL",
+                         "SRAM threshold exceeded (RMA condition)"))
+    elif sram_u is not None and sram_u > 0:
+        out.append(_crit("sram", 1, "SRAM uncorrectable errors zero", "FAIL",
+                         f"{int(sram_u)} aggregate SRAM uncorrectable error(s)"))
+    elif sram_u is None and thresh is None:
+        out.append(_crit("sram", 1, "SRAM uncorrectable errors zero", "N/A",
+                         "SRAM counters not collected"))
+    else:
+        out.append(_crit("sram", 1, "SRAM uncorrectable errors zero", "PASS",
+                         "0 SRAM uncorrectable"))
+    return out
+
+
+def _check_pcie(gpu, burn_gpu):
+    out = []
+    p = gpu.get("pcie") or {}
+    w_max = _n(p.get("width_max")) or _n(gpu.get("pcie_width_max"))
+    w_cur = _n(p.get("width_current")) or _n(gpu.get("pcie_width_current"))
+    dev_max = _n(p.get("gen_device_max"))
+    host_max = _n(p.get("gen_host_max"))
+    neg_max = _n(p.get("gen_negotiated_max")) or _n(gpu.get("pcie_gen_max"))
+
+    if w_max is None or w_cur is None:
+        out.append(_crit("pcie_width", 7, "Link width x16", "N/A",
+                         "width not reported"))
+    elif int(w_max) == 16 and int(w_cur) == 16:
+        out.append(_crit("pcie_width", 7, "Link width x16", "PASS", "x16 / x16"))
+    else:
+        out.append(_crit("pcie_width", 7, "Link width x16", "FAIL",
+                         f"trained x{int(w_cur)} of a possible x{int(w_max)}"))
+
+    # The link should reach whatever both ends support.  Comparing against a
+    # fixed Gen5 would fail every card in a Gen4 host, which is a property of
+    # the test rig and not of the card.
+    if neg_max is None:
+        out.append(_crit("pcie_gen", 7, "Link trained to host+card maximum",
+                         "N/A", "generation not reported"))
+    else:
+        ceiling = min([g for g in (dev_max, host_max) if g is not None],
+                      default=None)
+        if ceiling is None:
+            out.append(_crit("pcie_gen", 7, "Link trained to host+card maximum",
+                             "PASS", f"negotiated Gen{int(neg_max)} (no separate ceilings reported)"))
+        elif neg_max >= ceiling:
+            note = f"Gen{int(neg_max)} = min(card Gen{int(dev_max)}, host Gen{int(host_max)})" \
+                   if dev_max is not None and host_max is not None \
+                   else f"negotiated Gen{int(neg_max)}"
+            if host_max is not None and dev_max is not None and host_max < dev_max:
+                note += " -- host is the limit, not the card"
+            out.append(_crit("pcie_gen", 7, "Link trained to host+card maximum",
+                             "PASS", note))
+        else:
+            out.append(_crit("pcie_gen", 7, "Link trained to host+card maximum",
+                             "FAIL",
+                             f"negotiated Gen{int(neg_max)} below the Gen{int(ceiling)} both ends support"))
+
+    delta = _n((burn_gpu or {}).get("pcie_replay_delta"))
+    abs_replay = _n(p.get("replays_since_reset"))
+    if delta is not None:
+        if delta > ACCEPTANCE_REPLAY_DELTA_LIMIT:
+            out.append(_crit("pcie_replay", 7, "PCIe replay counter stable under load",
+                             "FAIL", f"+{int(delta)} replays across the load window"))
+        else:
+            out.append(_crit("pcie_replay", 7, "PCIe replay counter stable under load",
+                             "PASS", f"+{int(delta)} replays across the load window"))
+    elif abs_replay is not None:
+        out.append(_crit("pcie_replay", 7, "PCIe replay counter stable under load",
+                         "WARN", f"{int(abs_replay)} since reset; no load-window delta (burn-in not run)"))
+    else:
+        out.append(_crit("pcie_replay", 7, "PCIe replay counter stable under load",
+                         "N/A", "replay counter not reported"))
+    return out
+
+
+def _check_stress(gpu_index, stress, gpu_results):
+    """gpu_results: list of {test, status, info} for this GPU."""
+    diag = (stress or {}).get("dcgm_diagnostics") or {}
+    if not stress:
+        return [_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                      "FAIL", "no stress-test result at all")]
+    out = []
+    level = str(diag.get("run_level", "?"))
+    if not gpu_results:
+        out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                         "FAIL", f"level {level} run produced no result for this GPU"))
+        return out
+
+    bad = [r for r in gpu_results
+           if any(k in str(r.get("status", "")).lower()
+                  for k in ("config", "retest"))]
+    skipped = [r for r in gpu_results
+               if "skip" in str(r.get("status", "")).lower()
+               or "not run" in str(r.get("status", "")).lower()]
+    failed = [r for r in gpu_results if "fail" in str(r.get("status", "")).lower()]
+    passed = [r for r in gpu_results if "pass" in str(r.get("status", "")).lower()]
+
+    if bad:
+        out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                         "FAIL",
+                         "CONFIG/RETEST result is a rig failure, not a hardware pass: "
+                         + ", ".join(sorted({r.get("test", "?") for r in bad}))))
+    elif failed:
+        out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                         "FAIL", "failed: " + ", ".join(sorted({r.get("test", "?") for r in failed}))))
+    elif not passed:
+        out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                         "FAIL", f"{len(gpu_results)} result(s), none passed"))
+    elif skipped:
+        out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                         "WARN",
+                         f"level {level}, {len(passed)} passed but skipped: "
+                         + ", ".join(sorted({r.get("test", "?") for r in skipped}))))
+    else:
+        out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                         "PASS", f"level {level}, {len(passed)} test(s) passed"))
+
+    try:
+        lvl_ok = int(float(level)) >= 3
+    except (TypeError, ValueError):
+        lvl_ok = None
+    if lvl_ok is True:
+        out.append(_crit("stress_level", 5, "Diagnostic level 3 or higher",
+                         "PASS", f"level {level}"))
+    elif lvl_ok is False:
+        out.append(_crit("stress_level", 5, "Diagnostic level 3 or higher",
+                         "FAIL", f"level {level} is below the required minimum"))
+    else:
+        out.append(_crit("stress_level", 5, "Diagnostic level 3 or higher",
+                         "WARN", f"non-numeric level {level!r}"))
+    return out
+
+
+def _check_burn(gpu_index, burn, burn_tel, burn_delta):
+    out = []
+    if not burn:
+        out.append(_crit("burn_present", 4, "Sustained load applied", "WARN",
+                         "burn-in script not run (optional)"))
+        out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
+                         "N/A", "no sustained-load telemetry"))
+        out.append(_crit("xid", 4, "No disqualifying Xid events", "N/A",
+                         "no burn-in window to inspect"))
+        return out
+
+    b = burn.get("burn_in") or {}
+    mode = b.get("mode", "?")
+    tool = b.get("tool", "none")
+    dur = _n(b.get("duration_actual_seconds")) or 0
+    if tool == "none":
+        out.append(_crit("burn_present", 4, "Sustained load applied", "FAIL",
+                         "no load generator available -- nothing was tested"))
+    elif dur < 1800:
+        out.append(_crit("burn_present", 4, "Sustained load applied", "WARN",
+                         f"{tool} for {int(dur)}s, below the 1800s the spec asks for"))
+    else:
+        out.append(_crit("burn_present", 4, "Sustained load applied", "PASS",
+                         f"{tool} for {int(dur)}s ({mode})"))
+
+    th = (burn_tel or {}).get("throttle_samples")
+    if not isinstance(th, dict):
+        out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
+                         "N/A", "throttle reasons unavailable on this driver"))
+    else:
+        hard = {k: int(_n(th.get(k)) or 0) for k in
+                ("hw_thermal_slowdown", "hw_power_brake_slowdown", "sw_thermal_slowdown")}
+        capped = int(_n(th.get("sw_power_cap")) or 0)
+        hit = {k: v for k, v in hard.items() if v > 0}
+        # sw_power_cap is the limiter doing its job at full load, and is
+        # reported rather than penalised.
+        cap_note = f"sw_power_cap active in {capped} sample(s), which is expected at full load" \
+                   if capped else "no power capping observed"
+        if hit:
+            out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
+                             "FAIL",
+                             "; ".join(f"{k} in {v} sample(s)" for k, v in hit.items())
+                             + f" ({cap_note})"))
+        else:
+            out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
+                             "PASS", cap_note))
+
+    tel = burn_tel or {}
+    p = tel.get("power_w") or {}
+    t = tel.get("temp_gpu_c") or {}
+    c = tel.get("clocks_sm_mhz") or {}
+    if p or t:
+        out.append(_crit("load_telemetry", 4, "Loaded power and temperature recorded",
+                         "PASS",
+                         f"power max {p.get('max','?')} W, GPU temp max {t.get('max','?')} C, "
+                         f"SM clock mean {c.get('mean','?')} MHz"))
+    else:
+        out.append(_crit("load_telemetry", 4, "Loaded power and temperature recorded",
+                         "FAIL", "no telemetry captured during the load window"))
+
+    xid = b.get("xid") or {}
+    crit_list = xid.get("critical") or []
+    other = xid.get("other") or []
+    if crit_list:
+        out.append(_crit("xid", 4, "No disqualifying Xid events", "FAIL",
+                         "Xid " + ", ".join(str(x) for x in crit_list)))
+    elif other:
+        out.append(_crit("xid", 4, "No disqualifying Xid events", "WARN",
+                         "non-disqualifying Xid " + ", ".join(str(x) for x in other)))
+    else:
+        out.append(_crit("xid", 4, "No disqualifying Xid events", "PASS",
+                         "none in the burn-in window"))
+
+    d = burn_delta or {}
+    du = _n(d.get("ecc_uncorrected_aggregate_delta"))
+    dr = _n(d.get("remapped_rows_uncorrectable_delta"))
+    if du is None and dr is None:
+        out.append(_crit("load_degradation", 4, "No new faults under load", "N/A",
+                         "counter deltas unavailable"))
+    elif (du or 0) > 0 or (dr or 0) > 0:
+        out.append(_crit("load_degradation", 4, "No new faults under load", "FAIL",
+                         f"+{int(du or 0)} uncorrectable ECC, +{int(dr or 0)} uncorrectable remapped rows"))
+    else:
+        out.append(_crit("load_degradation", 4, "No new faults under load", "PASS",
+                         "no new uncorrectable errors or remapped rows"))
+    return out
+
+
+def _stress_results_for_gpu(stress, gpu_index):
+    diag = (stress or {}).get("dcgm_diagnostics") or {}
+    out = []
+    for t in diag.get("test_results") or []:
+        for r in t.get("results") or []:
+            gid = r.get("gpu_id")
+            if gid is None or int_or_none(gid) == gpu_index:
+                out.append({"test": t.get("test"), "status": r.get("status"),
+                            "info": r.get("info")})
+    return out
+
+
+def int_or_none(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _by_index(rows, key="gpu_index"):
+    out = {}
+    for r in rows or []:
+        i = int_or_none(r.get(key))
+        if i is not None:
+            out[i] = r
+    return out
+
+
+def evaluate_gpu_acceptance(gpu, stress, burn):
+    """Evaluate one GPU against the acceptance criteria."""
+    idx = int_or_none(gpu.get("gpu_index")) or 0
+    b = (burn or {}).get("burn_in") or {}
+    tel = _by_index(b.get("telemetry")).get(idx)
+    delta = _by_index(b.get("counter_deltas")).get(idx)
+
+    criteria = []
+    criteria += _check_identity(gpu)
+    criteria += _check_memory(gpu)
+    criteria += _check_pcie(gpu, delta)
+    criteria += _check_stress(idx, stress, _stress_results_for_gpu(stress, idx))
+    criteria += _check_burn(idx, burn, tel, delta)
+
+    if any(c["status"] == "FAIL" for c in criteria):
+        verdict = "REJECT"
+    elif any(c["status"] in ("WARN", "N/A") for c in criteria):
+        verdict = "REVIEW"
+    else:
+        verdict = "ACCEPT"
+
+    return {"gpu_index": idx, "serial": gpu.get("serial"),
+            "uuid": gpu.get("uuid"), "verdict": verdict, "criteria": criteria}
+
+
+def acceptance_test_age_days(inventory, stress, burn, now=None):
+    """Age in days of the newest test evidence, or None."""
+    stamps = []
+    for src in (inventory, stress, burn):
+        ts = ((src or {}).get("report_metadata") or {}).get("generated_at")
+        if not ts:
+            continue
+        try:
+            stamps.append(datetime.fromisoformat(str(ts).replace("Z", "+00:00")))
+        except ValueError:
+            continue
+    if not stamps:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return (now - max(stamps)).total_seconds() / 86400.0
 
 
 # ---------------------------------------------------------------------------
@@ -1104,6 +1572,18 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
     else:
         log("  98-inventory: not found or no JSON output")
 
+    config_data = client.get_script_json(system_id, SCRIPT_ALIASES["config"])
+    if config_data:
+        log(f"  91-config: loaded ({config_data.get('verdict', {}).get('overall', '?')})")
+    else:
+        log("  91-config: not found (optional)")
+
+    burnin_data = client.get_script_json(system_id, SCRIPT_ALIASES["burnin"])
+    if burnin_data:
+        log(f"  92-burn-in: loaded ({burnin_data.get('verdict', {}).get('overall', '?')})")
+    else:
+        log("  92-burn-in: not found (optional -- no sustained-load evidence)")
+
     stress_data = client.get_script_json(system_id, SCRIPT_ALIASES["stress"])
     if stress_data:
         log(f"  99-stress: loaded ({stress_data.get('verdict', {}).get('overall', '?')})")
@@ -1262,6 +1742,8 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
         "install": install_data,
         "inventory": inventory_data,
         "stress": stress_data,
+        "config": config_data,
+        "burnin": burnin_data,
         "machine": details,
         "hardware_info": hw_info,
         "nics": nics,
@@ -1868,6 +2350,152 @@ def render_commissioning_scripts_table(scripts: list[dict]) -> str:
 # MAIN REPORT GENERATOR
 # ---------------------------------------------------------------------------
 
+def acceptance_badge(verdict: str) -> str:
+    cls = {"ACCEPT": "pass", "REVIEW": "warn", "REJECT": "fail"}.get(verdict, "na")
+    return f'<span class="badge badge-{cls}">{escape(verdict)}</span>'
+
+
+_ACC_DOT = {"PASS": ("dot-pass", "&#10003;"), "FAIL": ("dot-fail", "&#10007;"),
+            "WARN": ("dot-warn", "!"), "N/A": ("dot-skip", "&mdash;")}
+
+
+def render_gpu_acceptance(gpus, stress, burn, inventory=None, install=None,
+                          evals=None) -> str:
+    """Per-GPU hardware acceptance matrix plus per-serial evidence."""
+    if not gpus:
+        return '<span class="dim">No GPU inventory -- acceptance cannot be evaluated</span>'
+
+    if evals is None:
+        evals = [evaluate_gpu_acceptance(g, stress, burn) for g in gpus]
+    by_idx = {e["gpu_index"]: e for e in evals}
+
+    # Union of criterion ids in first-seen order: a GPU with no stress result
+    # emits fewer criteria than one that has them.
+    order, labels, rejects = [], {}, {}
+    for e in evals:
+        for c in e["criteria"]:
+            if c["id"] not in labels:
+                order.append(c["id"])
+                labels[c["id"]] = c["label"]
+                rejects[c["id"]] = c["reject"]
+
+    n_rej = sum(1 for e in evals if e["verdict"] == "REJECT")
+    n_rev = sum(1 for e in evals if e["verdict"] == "REVIEW")
+    n_acc = sum(1 for e in evals if e["verdict"] == "ACCEPT")
+
+    idxs = sorted(by_idx)
+    head = "".join(f"<th>{i}</th>" for i in idxs)
+    rows = ""
+    for cid in order:
+        cells = ""
+        for i in idxs:
+            c = next((x for x in by_idx[i]["criteria"] if x["id"] == cid), None)
+            if c is None:
+                cells += '<td class="dot-skip">&mdash;</td>'
+            else:
+                cls, glyph = _ACC_DOT.get(c["status"], ("dot-skip", "?"))
+                cells += f'<td class="{cls}" title="{escape(c["detail"])}">{glyph}</td>'
+        rows += (f'<tr><td class="nowrap">{escape(labels[cid])}</td>'
+                 f'<td class="dim tiny nowrap">#{rejects[cid]}</td>{cells}</tr>')
+
+    verdict_row = "".join(
+        f'<td>{acceptance_badge(by_idx[i]["verdict"])}</td>' for i in idxs)
+
+    # Test age: we know when the test ran, not when the unit ships, so this is
+    # reported rather than gated.
+    age = acceptance_test_age_days(inventory, stress, burn)
+    if age is None:
+        age_note = "Test date unavailable."
+    elif age > ACCEPTANCE_MAX_AGE_DAYS:
+        age_note = (f'<span class="alert">Test evidence is {age:.0f} days old</span>, '
+                    f"beyond the {ACCEPTANCE_MAX_AGE_DAYS}-day window. Retest before shipment.")
+    else:
+        age_note = f"Test evidence is {age:.1f} day(s) old."
+
+    summary = (f'<span class="st-pass">{n_acc} accept</span> &middot; '
+               f'<span class="st-warn">{n_rev} review</span> &middot; '
+               f'<span class="st-fail">{n_rej} reject</span> &mdash; {age_note}')
+
+    # Per-serial detail, collapsed.  This is what makes the report per-GPU
+    # rather than lot-level: every serial carries its own evidence.
+    details = ""
+    for e in evals:
+        g = next((x for x in gpus
+                  if (int_or_none(x.get("gpu_index")) or 0) == e["gpu_index"]), {})
+        ident = g.get("identity") or {}
+        irom = ident.get("inforom") or {}
+        pcie = g.get("pcie") or {}
+        kv = [
+            ("Product name", ident.get("product_name") or g.get("name")),
+            ("Serial", e["serial"]),
+            ("UUID", e["uuid"]),
+            ("PCI device ID", ident.get("pci_device_id")),
+            ("Board part number", ident.get("board_part_number")),
+            ("GPU part number", ident.get("gpu_part_number")),
+            ("VBIOS", g.get("vbios_version")),
+            ("InfoROM image", irom.get("image")),
+            ("InfoROM ECC object", irom.get("ecc")),
+            ("VRAM", f'{g.get("vram_mib")} MiB' if g.get("vram_mib") else None),
+            ("PCIe", _acc_pcie_str(pcie, g)),
+            ("Bus ID", g.get("pci_bus_id")),
+        ]
+        kv_html = "".join(
+            f'<tr><td class="kv-key">{escape(k)}</td>'
+            f'<td class="mono">{escape(str(v))}</td></tr>'
+            for k, v in kv if v not in (None, "", "None"))
+
+        crit_html = ""
+        for c in e["criteria"]:
+            cls, glyph = _ACC_DOT.get(c["status"], ("dot-skip", "?"))
+            crit_html += (f'<tr><td class="{cls}">{glyph}</td>'
+                          f'<td class="nowrap">{escape(c["label"])}</td>'
+                          f'<td class="dim tiny">#{c["reject"]}</td>'
+                          f'<td class="tiny">{escape(c["detail"])}</td></tr>')
+
+        details += f'''
+        <details class="acc-detail">
+            <summary>GPU {e["gpu_index"]} &mdash; <span class="mono">{escape(str(e["serial"] or "unknown serial"))}</span> {acceptance_badge(e["verdict"])}</summary>
+            <div class="acc-body">
+                <table class="tbl kv">{kv_html}</table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody>{crit_html}</tbody>
+                </table>
+            </div>
+        </details>'''
+
+    return f'''
+    <div class="table-note">{summary}</div>
+    <div class="tbl-wrap">
+        <table class="tbl matrix">
+            <thead><tr><th>Criterion</th><th>Cond</th>{head}</tr></thead>
+            <tbody>
+                {rows}
+                <tr class="acc-verdict"><td><strong>Verdict</strong></td><td></td>{verdict_row}</tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="table-note">Reject conditions are numbered per the acceptance specification.
+    <code>sw_power_cap</code> under sustained load is reported as expected operation, not a fault;
+    PCIe is judged against the maximum both card and host support rather than the idle value.</div>
+    {details}'''
+
+
+def _acc_pcie_str(pcie, gpu):
+    dev = pcie.get("gen_device_max")
+    host = pcie.get("gen_host_max")
+    neg = pcie.get("gen_negotiated_max") or gpu.get("pcie_gen_max")
+    w = pcie.get("width_max") or gpu.get("pcie_width_max")
+    if neg is None:
+        return None
+    s = f"Gen{neg} x{w}" if w else f"Gen{neg}"
+    if dev is not None and host is not None and host != dev:
+        s += f" (card Gen{dev}, host Gen{host})"
+    elif dev is not None:
+        s += f" (card max Gen{dev})"
+    return s
+
+
 def generate_report(
     install: dict | None,
     inventory: dict | None,
@@ -1885,6 +2513,8 @@ def generate_report(
     dimms: list[dict] | None = None,
     all_scripts: list[dict] | None = None,
     hostname_override: str | None = None,
+    config: dict | None = None,
+    burnin: dict | None = None,
 ) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -1928,7 +2558,8 @@ def generate_report(
         maas_link = f'<a href="{url}" class="maas-link" target="_blank">View in MAAS &rarr;</a>'
 
     # Verdicts — collect issues first, filter false positives, then derive verdicts
-    stages = [("Install", install), ("Inventory", inventory), ("Stress Test", stress)]
+    stages = [("Install", install), ("MIG/ECC", config), ("Inventory", inventory),
+              ("Stress Test", stress), ("Burn-In", burnin)]
     all_issues = []
     for label, data in stages:
         if data:
@@ -1948,6 +2579,30 @@ def generate_report(
                       if "counters unavailable" not in i.get("issue", "").lower()]
     all_issues = [i for i in all_issues
                   if "pcie link degradation" not in i.get("issue", "").lower()]
+
+    # Per-GPU acceptance is adjudicated here rather than after rendering, so a
+    # server holding a rejectable card cannot show a PASS headline.
+    acc_evals = [evaluate_gpu_acceptance(g, stress, burnin) for g in gpus]
+    acc_reject = [e for e in acc_evals if e["verdict"] == "REJECT"]
+    acc_review = [e for e in acc_evals if e["verdict"] == "REVIEW"]
+    if acc_reject:
+        all_issues.append({
+            "severity": "critical",
+            "source": "Acceptance",
+            "issue": ("%d of %d GPU(s) fail hardware acceptance: %s"
+                      % (len(acc_reject), len(acc_evals),
+                         ", ".join(str(e["serial"] or f"GPU {e['gpu_index']}")
+                                   for e in acc_reject))),
+        })
+    if acc_review:
+        all_issues.append({
+            "severity": "warning",
+            "source": "Acceptance",
+            "issue": ("%d of %d GPU(s) need review before acceptance: %s"
+                      % (len(acc_review), len(acc_evals),
+                         ", ".join(str(e["serial"] or f"GPU {e['gpu_index']}")
+                                   for e in acc_review))),
+        })
 
     # Derive per-stage verdicts: if all issues for a stage were filtered out,
     # upgrade from WARN to PASS (FAIL stays as-is since those are real failures)
@@ -1986,6 +2641,13 @@ def generate_report(
                           + ", ".join(missing)
                           + " -- the report is incomplete"),
             })
+
+    # A server shipping with a rejectable card is not a pass, whatever the
+    # individual script stages concluded.
+    if acc_reject:
+        overall = "FAIL"
+    elif acc_review and overall == "PASS":
+        overall = "WARN"
 
     # Script metadata
     script_meta = []
@@ -2145,6 +2807,9 @@ def generate_report(
             <td class="nowrap">{bank_availability_summary(g)}</td>
             {stress_cells}
         </tr>'''
+
+    acceptance_html = render_gpu_acceptance(gpus, stress, burnin, inventory,
+                                            install, evals=acc_evals)
 
     gpu_section = ""
     if gpus:
@@ -2315,6 +2980,11 @@ def generate_report(
 </section>
 
 <section>
+    <div class="section-label">Hardware Acceptance &mdash; per GPU</div>
+    {acceptance_html}
+</section>
+
+<section>
     <div class="section-label">GPU Fleet</div>
     {gpu_section}
 </section>
@@ -2399,6 +3069,11 @@ CSS = '''
     body { font-size: 8.5pt; }
     .page { max-width: 100%; padding: .5rem; }
     section, .two-col > div { break-inside: avoid; }
+    /* Expand every collapsed evidence block when printed: a paper
+       certificate must not hide the per-serial detail. */
+    .acc-detail { break-inside: avoid; }
+    .acc-detail > summary { list-style: none; }
+    details.acc-detail > .acc-body { display: grid !important; }
     .tbl-wrap { overflow: visible; }
 }
 
@@ -2534,9 +3209,32 @@ section { margin-bottom: 2rem; }
     vertical-align: middle;
 }
 
+.acc-detail {
+    border: 1px solid var(--edge);
+    border-radius: 4px;
+    margin-top: .5rem;
+    background: var(--card);
+}
+.acc-detail > summary {
+    cursor: pointer;
+    padding: .5rem .75rem;
+    font-size: .82rem;
+    letter-spacing: .02em;
+}
+.acc-detail > summary:hover { background: var(--card2); }
+.acc-detail[open] > summary { border-bottom: 1px solid var(--edge); }
+.acc-body {
+    padding: .75rem;
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 2fr;
+    gap: 1rem;
+    align-items: start;
+}
+@media (max-width: 900px) { .acc-body { grid-template-columns: 1fr; } }
+.acc-verdict td { border-top: 2px solid var(--edge2); padding-top: .4rem; }
 .vcards {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: .75rem;
     margin-bottom: 1.2rem;
 }
@@ -2776,7 +3474,9 @@ Examples:
 
     # File-based mode (backward compat)
     file_grp = p.add_argument_group("file-based mode (backward compatible)")
-    file_grp.add_argument("--install", metavar="FILE", help="97-install JSON file")
+    file_grp.add_argument("--install", metavar="FILE", help="90-install JSON file")
+    file_grp.add_argument("--config", metavar="FILE", help="91-mig-ecc-config JSON file")
+    file_grp.add_argument("--burnin", metavar="FILE", help="92-burn-in JSON file")
     file_grp.add_argument("--inventory", metavar="FILE", help="98-inventory JSON file")
     file_grp.add_argument("--stress", metavar="FILE", help="99-stress-test JSON file")
 
@@ -2810,6 +3510,8 @@ Examples:
             install=data["install"],
             inventory=data["inventory"],
             stress=data["stress"],
+            config=data.get("config"),
+            burnin=data.get("burnin"),
             maas_url=maas_url,
             system_id=data["system_id"],
             machine=data["machine"],
@@ -2824,14 +3526,16 @@ Examples:
             hostname_override=data["hostname"],
         )
 
-    elif any([args.install, args.inventory, args.stress]):
+    elif any([args.install, args.inventory, args.stress, args.config, args.burnin]):
         # === FILE-BASED MODE (backward compatible) ===
         log("File-based mode (no MAAS API)")
         install = load_json_file(args.install)
         inventory = load_json_file(args.inventory)
         stress = load_json_file(args.stress)
+        config = load_json_file(args.config)
+        burnin = load_json_file(args.burnin)
 
-        if not any([install, inventory, stress]):
+        if not any([install, inventory, stress, config, burnin]):
             print("Error: No valid JSON loaded from files", file=sys.stderr)
             sys.exit(1)
 
@@ -2839,6 +3543,8 @@ Examples:
             install=install,
             inventory=inventory,
             stress=stress,
+            config=config,
+            burnin=burnin,
             maas_url=args.maas_url,
         )
 
