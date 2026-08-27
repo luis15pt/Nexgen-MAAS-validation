@@ -428,55 +428,29 @@ Or see the source at [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/
 
 ## Adding Scripts to MAAS
 
-> **The embedded metadata block must use MAAS's exact delimiter.** MAAS matches
-> `# --- Start MAAS 1.0 script metadata ---` (regex:
-> `#\s*-+\s*(Start|End) MAAS \d+\.\d+ script metadata\s+-+`) and **silently
-> ignores** the block otherwise — no error, no warning. This repo shipped
-> `# --- Start MAAS Metadata ---` for a long time, so no title, description,
-> timeout or `hardware_type` was ever applied; the scripts still worked only
-> because `name` and `script_type` come from the upload command. Note the
-> `timeout` default is **0, meaning no timeout**, so the declared limits were not
-> being enforced either. `tests/validate-maas-metadata.py` now checks this.
+> **The metadata comment block is documentation only — MAAS does not parse it.**
+> It uses `# --- Start MAAS Metadata ---`, and MAAS matches
+> `# --- Start MAAS 1.0 script metadata ---`, so MAAS ignores the block and takes
+> `name`, `script_type` and everything else from the upload command.
 >
-> **`name` in the block must equal the filename stem, and must equal whatever the
-> upload command passes.** MAAS treats the embedded metadata as authoritative, and
-> the two failure modes sit either side of that:
+> That is deliberate, and was arrived at the hard way. Switching to the delimiter
+> MAAS parses made MAAS start *validating* the block, and uploads stopped working
+> against MAAS 3.1.4 in this environment — first with *"May not override values
+> defined in embedded YAML"* when a supplied `name=` differed from the embedded
+> one, then with *"This field is required"* when the embedded `name` was removed,
+> and then still failing once both were consistent. Reverting to the ignored
+> delimiter restored working uploads. Which key MAAS 3.1.4 objected to was never
+> established.
 >
-> - Omit `name` from the block and an uploader that does not pass `name=` fails
->   with *"This field is required"* — MAAS has nowhere to get it.
-> - Declare a `name` that differs from a supplied `name=` and the form raises
->   *"May not override values defined in embedded YAML"* and rejects the upload.
+> **Consequence worth knowing:** the declared `timeout` values are therefore *not*
+> enforced by MAAS. `Script.timeout` defaults to 0, which means no timeout. The
+> real protection is the in-script `timeout` wrappers around `dcgmi diag` and the
+> load generator, which bound the two phases that can actually hang. Titles and
+> descriptions likewise do not appear in the MAAS UI.
 >
-> So the block declares it, pinned to the filename, and the upload command must
-> either omit `name=` or pass exactly that value. The validator enforces the pin,
-> which also makes a half-finished renumber impossible: rename the file and the
-> check fails until the metadata follows.
-
-### If the scripts do not appear in MAAS
-
-Check they are actually registered, and under what name:
-
-```bash
-maas $PROFILE commissioning-scripts read | jq -r '.[] | "\(.name)  \(.title // "<no title>")"'
-```
-
-If a script is missing, re-upload it and read the error rather than the exit
-code — a rejected upload is easy to miss in a loop:
-
-```bash
-maas $PROFILE commissioning-scripts create \
-  name=92-nexgen-gpu-inventory script_type=commissioning hardware_type=gpu \
-  content@=commissioning-scripts/92-nexgen-gpu-inventory.sh
-```
-
-Two things to watch:
-
-- **Renumbering leaves the old registrations behind.** `92-nexgen-gpu-inventory`
-  and a stale `98-nexgen-gpu-inventory` can both exist and both run. Delete the
-  old ones: `maas $PROFILE commissioning-script delete <old-name>`.
-- The scripts must be **selected for the commissioning run**; MAAS does not run
-  a newly uploaded commissioning script on a machine that is already
-  commissioning.
+> `tests/validate-maas-metadata.py` checks the block is internally consistent and
+> that `name` matches the filename — a stale name silently registers a second
+> script — and fails if the live MAAS delimiter reappears.
 
 Upload the commissioning scripts via the MAAS CLI. **Before uploading the
 80- script**, edit its `NETBOX_URL` / `NETBOX_TOKEN` defaults (top of the

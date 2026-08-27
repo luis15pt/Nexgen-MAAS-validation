@@ -1,9 +1,8 @@
 #!/bin/bash
-# --- Start MAAS 1.0 script metadata ---
+# --- Start MAAS Metadata ---
 # name: 80-nexgen-network-cabling-verify
 # title: NexGen Network Cabling Verification
-# description: >-
-#   Verifies physical network cabling matches NetBox by
+# description: Verifies physical network cabling matches NetBox by
 #   identifying the host (by DMI serial, fallback hostname), pulling
 #   the planned per-interface cable destinations from NetBox 4.x,
 #   and comparing them against live LLDP neighbours on every
@@ -15,7 +14,7 @@
 # timeout: 00:05:00
 # destructive: false
 # may_reboot: false
-# --- End MAAS 1.0 script metadata ---
+# --- End MAAS Metadata ---
 
 set -o pipefail
 trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR

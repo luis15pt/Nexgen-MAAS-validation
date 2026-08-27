@@ -1,20 +1,18 @@
 #!/bin/bash
-# --- Start MAAS 1.0 script metadata ---
+# --- Start MAAS Metadata ---
 # name: 90-nexgen-gpu-install-595-13
 # title: NexGen GPU Driver 595 + CUDA 13 + DCGM 4.x Installation
-# description: >-
-#   Installs nvidia-driver-595-server-open, cuda-toolkit-12-8,
+# description: Installs nvidia-driver-595-server-open, cuda-toolkit-12-8,
 #   DCGM 4.x (datacenter-gpu-manager-4-cuda13), and support tools.
 #   Enables persistence mode, loads kernel modules, starts DCGM service.
 #   Must run before 92-inventory, 98-stress-test and 99-burn-in.
 #   Override at runtime: NVIDIA_DRIVER=... CUDA_TOOLKIT=... DCGM_CUDA_MAJOR=...
 # script_type: commissioning
-# parallel: disabled
 # hardware_type: gpu
 # timeout: 00:20:00
 # destructive: false
 # may_reboot: false
-# --- End MAAS 1.0 script metadata ---
+# --- End MAAS Metadata ---
 
 set -o pipefail
 trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR

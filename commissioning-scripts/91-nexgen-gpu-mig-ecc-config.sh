@@ -1,19 +1,17 @@
 #!/bin/bash
-# --- Start MAAS 1.0 script metadata ---
+# --- Start MAAS Metadata ---
 # name: 91-nexgen-gpu-mig-ecc-config
 # title: NexGen GPU MIG Disable & ECC Enable
-# description: >-
-#   Disables MIG mode and enables ECC on all NVIDIA GPUs.
+# description: Disables MIG mode and enables ECC on all NVIDIA GPUs.
 #   Changes are written to GPU NVRAM, then activated via nvidia-smi --gpu-reset
 #   (no full reboot needed). Falls back to "pending reboot" if reset fails.
 #   Requires 90-nexgen-gpu-install to run first.
 # script_type: commissioning
-# parallel: disabled
 # hardware_type: gpu
 # timeout: 00:05:00
 # destructive: false
 # may_reboot: false
-# --- End MAAS 1.0 script metadata ---
+# --- End MAAS Metadata ---
 
 set -o pipefail
 trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
