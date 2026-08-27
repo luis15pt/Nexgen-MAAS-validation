@@ -38,7 +38,11 @@ BURN_SAMPLE_INTERVAL="${BURN_SAMPLE_INTERVAL:-10}"
 BURN_LOADED_POWER_FRAC="${BURN_LOADED_POWER_FRAC:-0.5}"
 # Fraction of BURN_DURATION each GPU must actually spend under load.
 BURN_COVERAGE_FRAC="${BURN_COVERAGE_FRAC:-0.9}"
-BURN_TOOL="${BURN_TOOL:-auto}"   # auto | dcgmi-diag | dcgmproftester | gpu-burn
+BURN_TOOL="${BURN_TOOL:-auto}"   # auto | gpu-burn | dcgmi-diag | dcgmproftester
+# Extra gpu-burn arguments. "-tc" uses the tensor cores, "-d" double precision.
+# Plain SGEMM is the default because it is the most portable and already pulls an
+# H100 PCIe to its power limit.
+BURN_GPU_BURN_ARGS="${BURN_GPU_BURN_ARGS:-}"
 # characterize: measure and report, gate on nothing.  Run this first on
 # known-good, properly-cooled cards to find out whether they ever reach thermal
 # slowdown and what their sustained clock floor actually is -- the enforce
@@ -50,7 +54,7 @@ BURN_MIN_SM_CLOCK_MHZ="${BURN_MIN_SM_CLOCK_MHZ:-}"
 BURN_MIN_POWER_W="${BURN_MIN_POWER_W:-}"
 GPU_BURN_REPO="${GPU_BURN_REPO:-https://github.com/wilicc/gpu-burn}"
 WORK_DIR="/tmp/gpu-burnin-$$"
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.4.0"
 
 # Xid events the acceptance spec treats as disqualifying.  Others (13, 31, 43)
 # are typically application faults raised by the load itself, not hardware.
@@ -170,20 +174,41 @@ snapshot_counters() {
 # needs outbound network and adds a failure mode -- hence not the default.
 # LOAD_MODE=per-gpu  one process per GPU, launched concurrently
 # LOAD_MODE=single    one process that loads every GPU itself
+# LOAD_MODE=gpu-burn     one process, loads every GPU itself, per-GPU verdict
+# LOAD_MODE=dcgmi-diag   NVIDIA's targeted_stress plugin, one invocation
+# LOAD_MODE=per-gpu      one process per GPU, launched concurrently
 select_load_tool() {
-    LOAD_TOOL="" LOAD_BIN="" LOAD_MODE=""
-    local cand
+    LOAD_TOOL="" LOAD_BIN="" LOAD_MODE="" LOAD_DIR=""
 
-    # DCGM's Targeted Stress plugin is NVIDIA's own sustained-load path: it is
-    # part of the level-3 diagnostic, it covers every GPU in one invocation, and
-    # its duration is a documented parameter (default 30s). It also yields
-    # NVIDIA's per-GPU pass/fail for the load phase, which dcgmproftester does
-    # not. Preferred for exactly those reasons.
+    # gpu-burn first: it is what the acceptance specification names for the
+    # sustained phase, it loads every GPU in one process by design, and it
+    # reports a per-GPU OK/FAULTY verdict plus a computation error count -- which
+    # is stronger evidence than telemetry alone.
+    if [[ "$BURN_TOOL" == "auto" || "$BURN_TOOL" == "gpu-burn" ]]; then
+        if command -v gpu_burn &>/dev/null; then
+            LOAD_TOOL="gpu-burn"; LOAD_BIN="$(command -v gpu_burn)"
+            LOAD_DIR="$(dirname "$LOAD_BIN")"; LOAD_MODE="gpu-burn"
+            log "Load tool: gpu-burn (preinstalled)"
+            return 0
+        fi
+        if build_gpu_burn; then
+            LOAD_TOOL="gpu-burn"; LOAD_BIN="$WORK_DIR/gpu-burn/gpu_burn"
+            LOAD_DIR="$WORK_DIR/gpu-burn"; LOAD_MODE="gpu-burn"
+            log "Load tool: gpu-burn (built from source)"
+            return 0
+        fi
+        if [[ "$BURN_TOOL" == "gpu-burn" ]]; then
+            warn "gpu-burn requested but unavailable and could not be built"
+            return 1
+        fi
+        warn "gpu-burn unavailable -- falling back to DCGM targeted_stress"
+    fi
+
+    # NVIDIA's own sustained-load plugin: level-3 diagnostic, every GPU in one
+    # invocation, duration via a documented parameter.
     if [[ "$BURN_TOOL" == "auto" || "$BURN_TOOL" == "dcgmi-diag" ]]; then
         if command -v dcgmi &>/dev/null; then
-            LOAD_TOOL="dcgmi-diag"
-            LOAD_BIN="dcgmi"
-            LOAD_MODE="dcgmi-diag"
+            LOAD_TOOL="dcgmi-diag"; LOAD_BIN="dcgmi"; LOAD_MODE="dcgmi-diag"
             log "Load tool: dcgmi diag targeted_stress (all GPUs, one invocation)"
             return 0
         fi
@@ -191,65 +216,72 @@ select_load_tool() {
             { warn "dcgmi requested but not found"; return 1; }
     fi
 
+    # Last resort. NVIDIA documents dcgmproftester as a load generator for
+    # validating DCGM's *measurement* path, not as a stress tool, and handed a
+    # multi-GPU id list it loads the cards in sequential BATCHES: a real 8-GPU
+    # run drove 4 cards for 1780s, re-initialised, then started the other 4 and
+    # got 280s into them. -t 1004 is DCGM_FI_PROF_PIPE_TENSOR_ACTIVE, a
+    # half-precision matrix-multiply-accumulate on the tensor cores. Launched as
+    # one process per GPU so every card is loaded for the whole window.
     if [[ "$BURN_TOOL" == "auto" || "$BURN_TOOL" == "dcgmproftester" ]]; then
+        local cand
         for cand in dcgmproftester13 dcgmproftester12 dcgmproftester11 dcgmproftester; do
             if command -v "$cand" &>/dev/null; then
-                LOAD_TOOL="$cand"
-                # -t 1004 drives the FP32 pipe, which is what pulls a card to
-                # its power limit.  --no-dcgm-validation keeps this a pure load
-                # generator: pass/fail is decided from our own telemetry, not
-                # from dcgmproftester's thresholds.
-                # Fallback, not the preferred path: dcgmproftester is documented
-                # as a load generator for validating DCGM's *measurement* path,
-                # not as a stress or burn-in tool. -t 1004 is
-                # DCGM_FI_PROF_PIPE_TENSOR_ACTIVE, i.e. it drives a
-                # half-precision matrix-multiply-accumulate on the tensor cores
-                # (hence "TensorEngineActive" in its output) -- not the FP32
-                # pipe, as an earlier version of this comment claimed.
-                #
-                # Handed a multi-GPU id list, dcgmproftester loads the cards in
-                # sequential BATCHES rather than all at once: a real 8-GPU run
-                # drove 4 cards for 1780s, re-initialised, then started the
-                # other 4 and got 280s into them before the ceiling. The two
-                # groups summed to the whole window, and the membership changed
-                # between runs. One process per GPU is what actually puts every
-                # card under load simultaneously.
-                LOAD_BIN="$cand"
-                LOAD_MODE="per-gpu"
-                log "Load tool: $cand (no build required)"
+                LOAD_TOOL="$cand"; LOAD_BIN="$cand"; LOAD_MODE="per-gpu"
+                log "Load tool: $cand (one process per GPU)"
                 return 0
             fi
         done
         [[ "$BURN_TOOL" == "dcgmproftester" ]] && \
             { warn "dcgmproftester requested but not found"; return 1; }
     fi
-
-    if [[ "$BURN_TOOL" == "auto" || "$BURN_TOOL" == "gpu-burn" ]]; then
-        if command -v gpu_burn &>/dev/null; then
-            LOAD_TOOL="gpu-burn"; LOAD_BIN="gpu_burn"; LOAD_MODE="single"
-            log "Load tool: gpu-burn (preinstalled, loads all GPUs itself)"
-            return 0
-        fi
-        if [[ "$BURN_TOOL" == "gpu-burn" ]]; then
-            log "Building gpu-burn from source..."
-            if ! command -v nvcc &>/dev/null; then
-                warn "nvcc not on PATH -- cannot build gpu-burn"
-                [[ -x /usr/local/cuda/bin/nvcc ]] && export PATH="/usr/local/cuda/bin:$PATH"
-            fi
-            if command -v git &>/dev/null && command -v nvcc &>/dev/null \
-               && git clone --depth 1 "$GPU_BURN_REPO" "$WORK_DIR/gpu-burn" >&2 2>&1 \
-               && make -C "$WORK_DIR/gpu-burn" >&2 2>&1 \
-               && [[ -x "$WORK_DIR/gpu-burn/gpu_burn" ]]; then
-                LOAD_TOOL="gpu-burn"
-                LOAD_BIN="$WORK_DIR/gpu-burn/gpu_burn"
-                LOAD_MODE="single"
-                log "Load tool: gpu-burn (built from source, loads all GPUs itself)"
-                return 0
-            fi
-            warn "gpu-burn build failed (needs git, nvcc and outbound network)"
-        fi
-    fi
     return 1
+}
+
+# Build gpu-burn from source. Needs a compiler, make, git and outbound network;
+# script 90 has already installed the CUDA toolkit that provides nvcc. Every
+# failure path is logged, because a silent build failure here would downgrade
+# the run to a weaker load source without anyone noticing.
+build_gpu_burn() {
+    log "Building gpu-burn from source..."
+    local cudapath=""
+    local c
+    for c in /usr/local/cuda /usr/local/cuda-13.0 /usr/local/cuda-12.8 /usr; do
+        [[ -x "$c/bin/nvcc" ]] && { cudapath="$c"; break; }
+    done
+    if [[ -z "$cudapath" ]] && command -v nvcc &>/dev/null; then
+        cudapath="$(dirname "$(dirname "$(command -v nvcc)")")"
+    fi
+    if [[ -z "$cudapath" ]]; then
+        warn "  nvcc not found -- cannot build gpu-burn (is cuda-toolkit installed by script 90?)"
+        return 1
+    fi
+    log "  CUDA at $cudapath"
+
+    local missing=""
+    command -v git  &>/dev/null || missing+=" git"
+    command -v make &>/dev/null || missing+=" make"
+    command -v g++  &>/dev/null || missing+=" g++"
+    if [[ -n "$missing" ]]; then
+        log "  Installing build prerequisites:$missing"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $missing 2>&1 | tail -3 >&2 \
+            || warn "  apt-get failed for:$missing"
+    fi
+    for c in git make g++; do
+        command -v "$c" &>/dev/null || { warn "  $c still unavailable -- cannot build gpu-burn"; return 1; }
+    done
+
+    if ! git clone --depth 1 "$GPU_BURN_REPO" "$WORK_DIR/gpu-burn" >&2 2>&1; then
+        warn "  git clone failed (no outbound network to ${GPU_BURN_REPO}?)"
+        return 1
+    fi
+    if ! make -C "$WORK_DIR/gpu-burn" CUDAPATH="$cudapath" >&2 2>&1; then
+        warn "  make failed"
+        return 1
+    fi
+    [[ -x "$WORK_DIR/gpu-burn/gpu_burn" ]] || { warn "  gpu_burn binary not produced"; return 1; }
+    log "  gpu-burn built"
+    return 0
 }
 
 ###############################################################################
@@ -260,6 +292,18 @@ select_load_tool() {
 apply_load() {
     local ceiling=$(( BURN_DURATION + 300 ))
     local rc=0
+
+    if [[ "$LOAD_MODE" == "gpu-burn" ]]; then
+        # gpu-burn loads every GPU itself and prints a per-GPU OK/FAULTY summary.
+        # Run from its own directory: it loads compare.ptx relative to the binary.
+        log "  gpu_burn ${BURN_GPU_BURN_ARGS} ${BURN_DURATION}"
+        ( cd "$LOAD_DIR" && timeout "$ceiling" "$LOAD_BIN" $BURN_GPU_BURN_ARGS "$BURN_DURATION" ) \
+            > "$WORK_DIR/gpu-burn.out" 2>&1 || rc=$?
+        log "  ---------- begin gpu-burn output ----------"
+        head -c 500000 "$WORK_DIR/gpu-burn.out" >&2 2>/dev/null || true
+        log "  ---------- end gpu-burn output ----------"
+        return $rc
+    fi
 
     if [[ "$LOAD_MODE" == "dcgmi-diag" ]]; then
         # One invocation, every GPU, duration set through the documented
@@ -303,6 +347,32 @@ apply_load() {
     done
     [[ ${#failed[@]} -gt 0 ]] && warn "  Load process exits: ${failed[*]}"
     return $rc
+}
+
+###############################################################################
+# GPU-BURN RESULT PARSING
+###############################################################################
+# gpu-burn ends with, e.g.:
+#     Tested 8 GPUs:
+#         GPU 0: OK
+#         GPU 1: FAULTY
+# and reports a running "errors: N" per GPU. A FAULTY card produced wrong
+# arithmetic under load, which is a hardware verdict and not something the
+# telemetry can show.
+parse_gpu_burn_results() {
+    local out="$WORK_DIR/gpu-burn.out"
+    [[ -s "$out" ]] || { echo "[]"; return; }
+    sed -nE 's/^[[:space:]]*GPU[[:space:]]+([0-9]+):[[:space:]]*(OK|FAULTY).*/\1 \2/p' "$out" \
+    | awk '{ printf "%s{\"gpu_index\":%s,\"status\":\"%s\"}", (n++?",":"["), $1, $2 }
+            END { printf "%s", (n?"]":"[]") }'
+}
+
+# Highest "errors: N" seen in the run, which is non-zero only on a real fault.
+gpu_burn_error_total() {
+    local out="$WORK_DIR/gpu-burn.out"
+    [[ -s "$out" ]] || { echo "0"; return; }
+    grep -oE 'errors:[[:space:]]*[0-9]+' "$out" 2>/dev/null \
+        | grep -oE '[0-9]+' | sort -rn | head -1 || echo "0"
 }
 
 ###############################################################################
@@ -671,6 +741,43 @@ main() {
         err "Load coverage shortfall: $under_detail (need ${required_loaded}s each)"
     fi
 
+    # gpu-burn's own per-GPU verdict
+    local burn_results burn_errors faulty
+    burn_results="[]"; burn_errors=0
+    if [[ "$LOAD_MODE" == "gpu-burn" ]]; then
+        burn_results=$(parse_gpu_burn_results)
+        burn_errors=$(gpu_burn_error_total)
+        faulty=$(printf '%s' "$burn_results" | jq '[.[] | select(.status == "FAULTY")] | length')
+        if [[ "${faulty:-0}" -gt 0 ]]; then
+            overall="FAIL"
+            local faulty_list
+            faulty_list=$(printf '%s' "$burn_results" | jq -r \
+                '[.[] | select(.status == "FAULTY") | "GPU \(.gpu_index)"] | join(", ")')
+            issues=$(printf '%s' "$issues" | jq \
+                --argjson n "$faulty" --arg d "$faulty_list" \
+                '. + [{"issue":"gpu-burn reported \($n) GPU(s) FAULTY -- wrong arithmetic under sustained load","severity":"critical","details":$d}]')
+            err "gpu-burn FAULTY: $faulty_list"
+        fi
+        if [[ "${burn_errors:-0}" -gt 0 ]]; then
+            overall="FAIL"
+            issues=$(printf '%s' "$issues" | jq --argjson e "$burn_errors" \
+                '. + [{"issue":"gpu-burn counted \($e) computation error(s) under load","severity":"critical"}]')
+        fi
+        # A run that produced no per-GPU summary did not complete its check.
+        local reported
+        reported=$(printf '%s' "$burn_results" | jq 'length')
+        if [[ "${reported:-0}" -eq 0 ]]; then
+            [[ "$overall" == "PASS" ]] && overall="WARN"
+            issues=$(printf '%s' "$issues" | jq \
+                '. + [{"issue":"gpu-burn produced no per-GPU OK/FAULTY summary -- its own verdict is unavailable","severity":"warning"}]')
+        elif [[ "${reported:-0}" -lt "${SMI_GPU_COUNT:-0}" ]]; then
+            overall="FAIL"
+            issues=$(printf '%s' "$issues" | jq \
+                --argjson r "$reported" --argjson g "${SMI_GPU_COUNT:-0}" \
+                '. + [{"issue":"gpu-burn reported on \($r) of \($g) GPU(s) -- the rest were not tested","severity":"critical"}]')
+        fi
+    fi
+
     local sample_total
     sample_total=$(printf '%s' "$telemetry" | jq '[.[].samples] | add // 0')
     if [[ "$tool" != "none" && "$sample_total" -eq 0 ]]; then
@@ -679,10 +786,12 @@ main() {
             '. + [{"issue":"No telemetry samples captured during the load window -- the run cannot be evidenced","severity":"critical"}]')
     fi
 
-    local xid_b64 diag_b64=""
+    local xid_b64 diag_b64="" burn_b64=""
     xid_b64=$(grep -iE 'NVRM|Xid' "$WORK_DIR/dmesg-window.txt" 2>/dev/null | base64 2>/dev/null | tr -d '\n' || true)
     [[ -s "$WORK_DIR/diag.json" ]] && \
         diag_b64=$(base64 < "$WORK_DIR/diag.json" 2>/dev/null | tr -d '\n' || true)
+    [[ -s "$WORK_DIR/gpu-burn.out" ]] && \
+        burn_b64=$(base64 < "$WORK_DIR/gpu-burn.out" 2>/dev/null | tr -d '\n' || true)
 
     jq -n \
         --arg ver "$SCRIPT_VERSION" --arg name "gpu-burn-in" \
@@ -694,6 +803,9 @@ main() {
         --arg tool "$tool" --arg mode "$BURN_MODE" \
         --arg loadmode "${LOAD_MODE:-none}" \
         --arg diagraw "$diag_b64" \
+        --arg burnraw "$burn_b64" \
+        --argjson burnres "${burn_results:-[]}" \
+        --argjson burnerrs "${burn_errors:-0}" \
         --argjson requested "$BURN_DURATION" --argjson actual "$load_dur" \
         --argjson load_exit "$load_exit" \
         --argjson telemetry "$telemetry" --argjson deltas "$deltas" \
@@ -713,7 +825,10 @@ main() {
                 telemetry:$telemetry,
                 counter_deltas:$deltas,
                 xid:{critical:$xidcrit, other:$xidother, dmesg_window_b64:$xidraw},
-                dcgmi_diag_b64:$diagraw
+                dcgmi_diag_b64:$diagraw,
+                gpu_burn_results:$burnres,
+                gpu_burn_error_count:$burnerrs,
+                gpu_burn_output_b64:$burnraw
             }
         }'
 

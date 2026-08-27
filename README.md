@@ -199,6 +199,11 @@ Outputs structured JSON. Installs no packages — depends on script `90`.
 
 ### 98 - GPU Stress Test (`v2.2.0`)
 
+The DCGM diagnostic. This is the *diagnostic* half of the acceptance
+specification's load requirement; the sustained burn-in in script `99` is the
+other half, and neither replaces the other.
+
+
 Runs DCGM diagnostics at configurable severity levels:
 
 | Level | Duration | Scope |
@@ -226,7 +231,7 @@ either way.
 
 **Timeout**: 2 hours
 
-### 99 - Sustained Burn-In (`v1.3.0`, optional)
+### 99 - Sustained Burn-In (`v1.4.0`, optional)
 
 Applies a sustained full-power load and records what the GPUs actually did
 under it. A DCGM diagnostic characterises a card for minutes; reballed and
@@ -249,7 +254,8 @@ typically application faults raised by the load itself.
 |---|---|---|
 | `BURN_DURATION` | `300` | Seconds of sustained load. **5 minutes is a pipeline-validation setting**; acceptance needs ≥ 1800, and the report marks anything shorter for review rather than accepting it |
 | `BURN_MODE` | `characterize` | `characterize` measures and gates on nothing; `enforce` applies the floors below |
-| `BURN_TOOL` | `auto` | `auto` prefers `dcgmi-diag`; then `dcgmproftester`; `gpu-burn` builds from source |
+| `BURN_TOOL` | `auto` | `auto` prefers `gpu-burn`; then `dcgmi-diag`; then `dcgmproftester` |
+| `BURN_GPU_BURN_ARGS` | (empty) | Extra gpu-burn flags — `-tc` for tensor cores, `-d` for double precision |
 | `BURN_MIN_SM_CLOCK_MHZ` | (unset) | Sustained SM clock floor, `enforce` only |
 | `BURN_MIN_POWER_W` | (unset) | Minimum peak power, `enforce` only |
 | `BURN_SAMPLE_INTERVAL` | `10` | Seconds between telemetry samples |
@@ -272,14 +278,31 @@ without a floor warns rather than silently passing.
 
 #### Load source
 
-**`dcgmi diag -r targeted_stress` is the default.** It is NVIDIA's own
-sustained-load path: part of the level-3 diagnostic, covering every GPU in a
-single invocation, with the duration set through a documented parameter
-(`targeted_stress.test_duration`, default 30s). It also yields NVIDIA's own
-per-GPU pass/fail for the load phase, so a non-zero exit is treated as a
-hardware verdict rather than a tool quirk.
+**`gpu-burn` is the default**, because it is what the acceptance specification
+names for the sustained phase, it loads every GPU in one process by design, and
+— uniquely among the options — it reports a **per-GPU `OK`/`FAULTY` verdict** plus
+a computation error count. That is arithmetic verification, which no amount of
+power and temperature telemetry can substitute for: a card can sit at 350W and
+71°C and still return wrong results.
+
+The report therefore treats it as the strongest single piece of burn-in
+evidence. A `FAULTY` card, any non-zero error count, a GPU gpu-burn did not
+report on, and a run that produced no summary at all are each a failure.
+
+It is built from source on the node when not already installed, which needs
+`git`, `make`, `g++`, `nvcc` (from the CUDA toolkit script `90` installs) and
+outbound network to GitHub. Every failure path in the build is logged — a silent
+build failure would otherwise downgrade the run to a weaker load source without
+anyone noticing.
 
 Two fallbacks exist, in order:
+
+- **`dcgmi diag -r targeted_stress`** (`BURN_TOOL=dcgmi-diag`). NVIDIA's own
+  sustained-load path: part of the level-3 diagnostic, every GPU in one
+  invocation, duration via a documented parameter
+  (`targeted_stress.test_duration`, default 30s). Its non-zero exit is a
+  hardware verdict, so it is treated as one — but it gives no per-GPU
+  arithmetic result.
 
 - **`dcgmproftester`** (`BURN_TOOL=dcgmproftester`). Worth knowing what this
   actually is: NVIDIA documents it as a load generator for validating DCGM's
@@ -289,10 +312,6 @@ Two fallbacks exist, in order:
   multi-GPU id list — a real 8-GPU run drove four cards for 1780s, then
   re-initialised and started the other four, getting 280s into them before the
   ceiling. It is therefore launched as **one process per GPU, concurrently**.
-- **`gpu-burn`** (`BURN_TOOL=gpu-burn`), a genuinely independent load source
-  that covers all GPUs in one process, but built from source on the node, which
-  needs git, nvcc and outbound network.
-
 If no load generator can be found the run **fails**: no load applied means
 nothing was tested.
 

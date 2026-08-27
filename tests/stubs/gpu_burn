@@ -1,0 +1,22 @@
+#!/bin/bash
+# Test stub mimicking gpu-burn's output shape.
+#   STUB_GPU_BURN_FAULTY  comma list of GPUs to mark FAULTY
+#   STUB_GPU_BURN_ERRORS  computation error count to report
+#   STUB_GPU_BURN_PARTIAL number of GPUs to report on (default all)
+N="${STUB_GPU_COUNT:-8}"
+secs="${!#}"
+for ((g=0; g<N; g++)); do
+  echo "GPU $g: NVIDIA H100 PCIe (UUID: GPU-synthetic-$g)"
+done
+[[ -n "$STUB_LOADED_FILE" ]] && for ((g=0; g<N; g++)); do echo "$g" >> "$STUB_LOADED_FILE"; done
+[[ -n "$STUB_LOAD_LOG" ]] && echo "gpu-burn-all" >> "$STUB_LOAD_LOG"
+sleep "${STUB_LOAD_SLEEP:-1}"
+echo "100.0%  proc'd: 4096 (398000 Gflop/s)   errors: ${STUB_GPU_BURN_ERRORS:-0}   temps: 71 C"
+report="${STUB_GPU_BURN_PARTIAL:-$N}"
+echo "Tested $N GPUs:"
+for ((g=0; g<report; g++)); do
+  if [[ ",${STUB_GPU_BURN_FAULTY}," == *",$g,"* ]]; then echo "	GPU $g: FAULTY"
+  else echo "	GPU $g: OK"; fi
+done
+[[ -n "$STUB_GPU_BURN_FAULTY" ]] && exit 1
+exit "${STUB_LOAD_EXIT:-0}"

@@ -206,6 +206,25 @@ CASES.append(("#4 5-minute validation window", "REVIEW", 4,
 CASES.append(("#4 full 30-minute window", "ACCEPT", 4,
               lambda: (INV["gpus"][0], STRESS, _burn_window(1800, 1800)), None, None))
 
+def _burn_gb(results, errors=0, tool="gpu-burn"):
+    b = copy.deepcopy(BURN)
+    b["burn_in"]["tool"] = tool
+    b["burn_in"]["gpu_burn_results"] = results
+    b["burn_in"]["gpu_burn_error_count"] = errors
+    return b
+
+
+_ALL_OK = [{"gpu_index": g, "status": "OK"} for g in range(8)]
+CASES.append(("#4 gpu-burn OK on this GPU", "ACCEPT", 4,
+              lambda: (INV["gpus"][0], STRESS, _burn_gb(_ALL_OK)), None, None))
+CASES.append(("#4 gpu-burn FAULTY on this GPU", "REJECT", 4,
+              lambda: (INV["gpus"][0], STRESS,
+                       _burn_gb([{"gpu_index": 0, "status": "FAULTY"}] + _ALL_OK[1:])), None, None))
+CASES.append(("#4 gpu-burn computation errors", "REJECT", 4,
+              lambda: (INV["gpus"][0], STRESS, _burn_gb(_ALL_OK, errors=17)), None, None))
+CASES.append(("#4 gpu-burn no verdict for this GPU", "REJECT", 4,
+              lambda: (INV["gpus"][0], STRESS, _burn_gb(_ALL_OK[1:])), None, None))
+
 EXTRA = [
     ("#3 ECC already on before commissioning", "ACCEPT", _with_cfg(CFG_ON)),
     ("#3 ECC enabled by script 91 this run", "REJECT", _with_cfg(CFG_ENABLED_NOW)),

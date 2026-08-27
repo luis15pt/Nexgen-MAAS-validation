@@ -37,7 +37,9 @@ check "disqualifying Xid 94"                 FAIL  STUB_DMESG_XID=94
 check "non-disqualifying Xid 13"             WARN  STUB_DMESG_XID=13
 check "new uncorrectable ECC under load"     FAIL  STUB_ECC_UCE_AGG_POST=2
 check "new uncorrectable remapped row"       FAIL  STUB_REMAP_UCE_POST=1
-check "no load generator available"          FAIL  BURN_TOOL=gpu-burn
+noload=$(mktemp -d)
+for t in nvidia-smi dmesg systemctl lspci; do ln -sf "$PWD/tests/stubs/$t" "$noload/$t"; done
+check "no load generator available"          FAIL  PATH="$noload:/usr/bin:/bin"
 check "killed short of the required window"   FAIL  STUB_LOAD_EXIT=124
 # Regressions from a real run: a tool that overruns its own -d but delivered the
 # full window is a tool quirk, and a load that covered only some GPUs means the
@@ -49,10 +51,16 @@ check "load covered every GPU"               PASS  STUB_LOADED_GPUS=0,1 STUB_POW
 # Structural: one load process per GPU, launched concurrently. Handed a
 # multi-GPU id list, dcgmproftester batches instead -- a real 8-GPU run loaded
 # 4 cards for 1780s and the other 4 for 280s.
+echo "gpu-burn (the load source the specification names):"
+check "gpu-burn all OK"                      PASS
+check "gpu-burn reports a FAULTY GPU"        FAIL  STUB_GPU_BURN_FAULTY=1
+check "gpu-burn counts computation errors"   FAIL  STUB_GPU_BURN_ERRORS=17
+check "gpu-burn covers only half the GPUs"   FAIL  STUB_GPU_BURN_PARTIAL=1 STUB_GPU_COUNT=2
+
 echo "Load tool selection:"
 rm -f /tmp/stub-*
 lf=$(mktemp)
-o=$(env STUB_GPU_COUNT=8 STUB_LOADED_FILE="$lf" BURN_DURATION=2 \
+o=$(env STUB_GPU_COUNT=8 STUB_LOADED_FILE="$lf" BURN_TOOL=dcgmi-diag BURN_DURATION=2 \
         BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 bash "$SCRIPT" 2>/dev/null)
 mode=$(printf '%s' "$o" | jq -r '.burn_in.load_mode')
 covered=$(printf '%s' "$o" | jq '[.burn_in.telemetry[]|select(.loaded_seconds>0)]|length')
@@ -63,8 +71,8 @@ else
 fi
 # NVIDIA's own load test failing is a hardware verdict, not a tool quirk
 rm -f /tmp/stub-*
-o=$(env STUB_GPU_COUNT=8 STUB_LOADED_FILE="$(mktemp)" STUB_LOAD_EXIT=1 BURN_DURATION=2 \
-        BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 bash "$SCRIPT" 2>/dev/null)
+o=$(env STUB_GPU_COUNT=8 STUB_LOADED_FILE="$(mktemp)" BURN_TOOL=dcgmi-diag STUB_LOAD_EXIT=1 \
+        BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 bash "$SCRIPT" 2>/dev/null)
 if [[ "$(printf '%s' "$o" | jq -r '.verdict.overall')" == "FAIL" ]]; then
     printf '  ok    a targeted_stress failure fails the run\n'
 else

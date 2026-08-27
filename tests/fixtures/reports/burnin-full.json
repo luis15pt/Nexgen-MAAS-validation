@@ -1,8 +1,8 @@
 {
   "report_metadata": {
-    "script_version": "1.2.0",
+    "script_version": "1.4.0",
     "script_name": "gpu-burn-in",
-    "generated_at": "2026-08-27T13:19:49Z",
+    "generated_at": "2026-08-27T13:41:37Z",
     "duration_seconds": 2
   },
   "verdict": {
@@ -20,9 +20,9 @@
     "gpu_count": 8
   },
   "burn_in": {
-    "tool": "dcgmproftester13",
+    "tool": "gpu-burn",
     "mode": "characterize",
-    "load_mode": "per-gpu",
+    "load_mode": "gpu-burn",
     "duration_requested_seconds": 1800,
     "duration_actual_seconds": 1803,
     "load_exit_code": 0,
@@ -363,6 +363,43 @@
       "critical": [],
       "other": [],
       "dmesg_window_b64": ""
-    }
+    },
+    "dcgmi_diag_b64": "",
+    "gpu_burn_results": [
+      {
+        "gpu_index": 0,
+        "status": "OK"
+      },
+      {
+        "gpu_index": 1,
+        "status": "OK"
+      },
+      {
+        "gpu_index": 2,
+        "status": "OK"
+      },
+      {
+        "gpu_index": 3,
+        "status": "OK"
+      },
+      {
+        "gpu_index": 4,
+        "status": "OK"
+      },
+      {
+        "gpu_index": 5,
+        "status": "OK"
+      },
+      {
+        "gpu_index": 6,
+        "status": "OK"
+      },
+      {
+        "gpu_index": 7,
+        "status": "OK"
+      }
+    ],
+    "gpu_burn_error_count": 0,
+    "gpu_burn_output_b64": "R1BVIDA6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMCkKR1BVIDE6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMSkKR1BVIDI6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMikKR1BVIDM6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMykKR1BVIDQ6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNCkKR1BVIDU6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNSkKR1BVIDY6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNikKR1BVIDc6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNykKMTAwLjAlICBwcm9jJ2Q6IDQwOTYgKDM5ODAwMCBHZmxvcC9zKSAgIGVycm9yczogMCAgIHRlbXBzOiA3MSBDClRlc3RlZCA4IEdQVXM6CglHUFUgMDogT0sKCUdQVSAxOiBPSwoJR1BVIDI6IE9LCglHUFUgMzogT0sKCUdQVSA0OiBPSwoJR1BVIDU6IE9LCglHUFUgNjogT0sKCUdQVSA3OiBPSwo="
   }
 }

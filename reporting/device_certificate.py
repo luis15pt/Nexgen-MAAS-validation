@@ -821,6 +821,38 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta):
         out.append(_crit("load_telemetry", 4, "Loaded power and temperature recorded",
                          "FAIL", "no telemetry captured during the load window"))
 
+    # gpu-burn's own per-GPU verdict. A FAULTY card produced wrong arithmetic
+    # under sustained load, which telemetry cannot show -- this is the strongest
+    # single piece of evidence the burn-in phase produces.
+    gb = {int_or_none(r.get("gpu_index")): r
+          for r in (b.get("gpu_burn_results") or [])
+          if int_or_none(r.get("gpu_index")) is not None}
+    gb_errors = _n(b.get("gpu_burn_error_count"))
+    if gpu_index in gb:
+        st = str(gb[gpu_index].get("status", "")).upper()
+        if st == "FAULTY":
+            out.append(_crit("compute_correct", 4, "Arithmetic correct under load",
+                             "FAIL", "gpu-burn reported this GPU FAULTY"))
+        elif st == "OK":
+            note = "gpu-burn: OK"
+            if gb_errors:
+                note += f" (run-wide error count {int(gb_errors)})"
+            out.append(_crit("compute_correct", 4, "Arithmetic correct under load",
+                             "PASS", note))
+        else:
+            out.append(_crit("compute_correct", 4, "Arithmetic correct under load",
+                             "WARN", f"gpu-burn status {st!r} not recognised"))
+    elif b.get("tool") == "gpu-burn":
+        out.append(_crit("compute_correct", 4, "Arithmetic correct under load",
+                         "FAIL", "gpu-burn produced no verdict for this GPU"))
+    else:
+        out.append(_crit("compute_correct", 4, "Arithmetic correct under load",
+                         "N/A", f"load source {b.get('tool', '?')} reports no "
+                                "per-GPU arithmetic verdict"))
+    if gb_errors and gb_errors > 0:
+        out.append(_crit("compute_errors", 4, "No computation errors under load",
+                         "FAIL", f"{int(gb_errors)} computation error(s) counted"))
+
     xid = b.get("xid") or {}
     crit_list = xid.get("critical") or []
     other = xid.get("other") or []
