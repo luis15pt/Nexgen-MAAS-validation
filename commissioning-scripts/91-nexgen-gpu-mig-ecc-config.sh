@@ -1,6 +1,5 @@
 #!/bin/bash
 # --- Start MAAS 1.0 script metadata ---
-# name: 91-nexgen-gpu-mig-ecc-config
 # title: NexGen GPU MIG Disable & ECC Enable
 # description: >-
 #   Disables MIG mode and enables ECC on all NVIDIA GPUs.

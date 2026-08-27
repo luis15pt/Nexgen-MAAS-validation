@@ -1,6 +1,5 @@
 #!/bin/bash
 # --- Start MAAS 1.0 script metadata ---
-# name: 99-nexgen-gpu-burn-in
 # title: NexGen GPU Sustained Burn-In (optional)
 # description: >-
 #   Applies a sustained full-power load and records what the GPUs

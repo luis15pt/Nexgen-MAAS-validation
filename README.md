@@ -438,9 +438,39 @@ Or see the source at [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/
 > `timeout` default is **0, meaning no timeout**, so the declared limits were not
 > being enforced either. `tests/validate-maas-metadata.py` now checks this.
 >
-> Because the block carries `name`, `name=` on the command line is now
-> redundant — but harmless as long as the two agree, which the validator
-> enforces.
+> **The block deliberately does not declare `name`.** MAAS treats the embedded
+> metadata as authoritative: if an embedded `name` differs from the `name=` given
+> on the upload command, the form raises *"May not override values defined in
+> embedded YAML"* and **rejects the upload entirely**. Declaring it would turn any
+> rename, renumber or stale upload command into a hard failure for no benefit, so
+> the upload command is the single source of the name. The validator enforces its
+> absence.
+
+### If the scripts do not appear in MAAS
+
+Check they are actually registered, and under what name:
+
+```bash
+maas $PROFILE commissioning-scripts read | jq -r '.[] | "\(.name)  \(.title // "<no title>")"'
+```
+
+If a script is missing, re-upload it and read the error rather than the exit
+code — a rejected upload is easy to miss in a loop:
+
+```bash
+maas $PROFILE commissioning-scripts create \
+  name=92-nexgen-gpu-inventory script_type=commissioning hardware_type=gpu \
+  content@=commissioning-scripts/92-nexgen-gpu-inventory.sh
+```
+
+Two things to watch:
+
+- **Renumbering leaves the old registrations behind.** `92-nexgen-gpu-inventory`
+  and a stale `98-nexgen-gpu-inventory` can both exist and both run. Delete the
+  old ones: `maas $PROFILE commissioning-script delete <old-name>`.
+- The scripts must be **selected for the commissioning run**; MAAS does not run
+  a newly uploaded commissioning script on a machine that is already
+  commissioning.
 
 Upload the commissioning scripts via the MAAS CLI. **Before uploading the
 80- script**, edit its `NETBOX_URL` / `NETBOX_TOKEN` defaults (top of the

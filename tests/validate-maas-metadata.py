@@ -26,7 +26,7 @@ except ImportError:
 MAAS_RE = re.compile(
     r"\s*#\s*-+\s*(Start|End) MAAS (?P<version>\d+\.\d+) script metadata\s+-+"
 )
-REQUIRED = ("name", "title", "description", "script_type", "timeout")
+REQUIRED = ("title", "description", "script_type", "timeout")
 TIMEOUT_RE = re.compile(r"^\d{1,2}:\d{2}:\d{2}$")
 
 root = pathlib.Path(__file__).resolve().parent.parent
@@ -56,11 +56,13 @@ for p in sorted((root / "commissioning-scripts").glob("*.sh")):
         continue
 
     problems = [f"missing {k}" for k in REQUIRED if not meta.get(k)]
-    # The declared name must match the filename, since MAAS keys on the name and
-    # a mismatch silently registers a second script.
-    stem = p.stem
-    if meta.get("name") != stem:
-        problems.append(f"name {meta.get('name')!r} != filename stem {stem!r}")
+    # `name` must NOT be declared here. MAAS rejects the whole upload with "May
+    # not override values defined in embedded YAML" whenever the embedded name
+    # and the name given on the upload command differ -- so declaring it turns
+    # any rename, renumber or stale automation into a hard upload failure for no
+    # benefit. The upload command is the single source of the name.
+    if "name" in meta:
+        problems.append("declares 'name', which conflicts with the upload command")
     if meta.get("script_type") != "commissioning":
         problems.append(f"script_type is {meta.get('script_type')!r}")
     if not TIMEOUT_RE.match(str(meta.get("timeout", ""))):
@@ -72,7 +74,7 @@ for p in sorted((root / "commissioning-scripts").glob("*.sh")):
         print(f"  FAIL {p.name}: " + "; ".join(problems))
         rc = 1
     else:
-        print(f"  ok   {p.name:38} {meta['name']} ({meta['timeout']})")
+        print(f"  ok   {p.name:38} {meta['timeout']}  {meta['title'][:46]}")
 
 print("\n" + ("metadata OK" if rc == 0 else "METADATA PROBLEMS"))
 sys.exit(rc)

@@ -1,6 +1,5 @@
 #!/bin/bash
 # --- Start MAAS 1.0 script metadata ---
-# name: 80-nexgen-network-cabling-verify
 # title: NexGen Network Cabling Verification
 # description: >-
 #   Verifies physical network cabling matches NetBox by
