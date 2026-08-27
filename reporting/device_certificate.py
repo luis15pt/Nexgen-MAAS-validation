@@ -741,6 +741,67 @@ def _check_stress(gpu_index, stress, gpu_results):
     return out
 
 
+def _check_cumulative(gpu_index, stress, burn):
+    """Faults accumulated across the whole test sequence, not one window.
+
+    A delta measured only across the burn-in window cannot see an error raised
+    by the DCGM diagnostic, because that error is already in the window's own
+    baseline. Scripts 98 and 99 both compare against the pre-load baseline that
+    script 92 writes, so the last phase to run carries the cumulative figure.
+    """
+    src = None
+    for cand in (((burn or {}).get("burn_in") or {}).get("counters_since_baseline"),
+                 (stress or {}).get("counters_since_baseline")):
+        if isinstance(cand, dict):
+            src = cand
+            break
+    if src is None:
+        return [_crit("cumulative_faults", 1,
+                      "No new faults across the whole test sequence", "N/A",
+                      "no post-test counter check in this report")]
+    if not src.get("baseline_available"):
+        return [_crit("cumulative_faults", 1,
+                      "No new faults across the whole test sequence", "WARN",
+                      "no pre-load baseline was written, so cumulative deltas "
+                      "are unavailable; absolute counters only")]
+
+    row = next((d for d in src.get("deltas") or []
+                if int_or_none(d.get("gpu_index")) == gpu_index), None)
+    if row is None:
+        return [_crit("cumulative_faults", 1,
+                      "No new faults across the whole test sequence", "FAIL",
+                      "this GPU is absent from the post-test counter check")]
+
+    bad = []
+    uce = _n(row.get("ecc_uncorrected_delta"))
+    ruce = _n(row.get("remapped_rows_uncorrectable_delta"))
+    if uce and uce > 0:
+        bad.append(f"+{int(uce)} uncorrectable ECC")
+    if ruce and ruce > 0:
+        bad.append(f"+{int(ruce)} uncorrectable remapped rows")
+    if row.get("remapped_rows_failure_now") is True:
+        bad.append("remap failure now set")
+    if row.get("remapped_rows_pending_now") is True:
+        bad.append("remap pending now set")
+    if bad:
+        return [_crit("cumulative_faults", 1,
+                      "No new faults across the whole test sequence", "FAIL",
+                      "since the pre-load baseline: " + ", ".join(bad))]
+
+    ce = _n(row.get("ecc_corrected_delta"))
+    rep = _n(row.get("replay_delta"))
+    note = "no new uncorrectable errors or remapped rows"
+    extra = []
+    if ce is not None:
+        extra.append(f"corrected ECC +{int(ce)}")
+    if rep is not None:
+        extra.append(f"PCIe replays +{int(rep)}")
+    if extra:
+        note += " (" + ", ".join(extra) + ")"
+    return [_crit("cumulative_faults", 1,
+                  "No new faults across the whole test sequence", "PASS", note)]
+
+
 def _check_burn(gpu_index, burn, burn_tel, burn_delta):
     out = []
     if not burn:
@@ -923,6 +984,7 @@ def evaluate_gpu_acceptance(gpu, stress, burn, config=None):
     criteria += _check_pcie(gpu, delta)
     criteria += _check_stress(idx, stress, _stress_results_for_gpu(stress, idx))
     criteria += _check_burn(idx, burn, tel, delta)
+    criteria += _check_cumulative(idx, stress, burn)
 
     if any(c["status"] == "FAIL" for c in criteria):
         verdict = "REJECT"

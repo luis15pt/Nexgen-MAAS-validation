@@ -157,7 +157,7 @@ real evidence of past damage; a zero is ambiguous.
 
 **Timeout**: 5 minutes
 
-### 92 - GPU Inventory (`v2.2.0`)
+### 92 - GPU Inventory (`v2.3.0`)
 
 Runs before any load phase, so its counters are the **pre-load delivery
 baseline**. Collects detailed GPU hardware inventory via a single bulk
@@ -197,7 +197,7 @@ Outputs structured JSON. Installs no packages — depends on script `90`.
 
 **Timeout**: 5 minutes
 
-### 98 - GPU Stress Test (`v2.2.0`)
+### 98 - GPU Stress Test (`v2.3.0`)
 
 The DCGM diagnostic. This is the *diagnostic* half of the acceptance
 specification's load requirement; the sustained burn-in in script `99` is the
@@ -231,7 +231,7 @@ either way.
 
 **Timeout**: 2 hours
 
-### 99 - Sustained Burn-In (`v1.4.0`, optional)
+### 99 - Sustained Burn-In (`v1.5.0`, optional)
 
 Applies a sustained full-power load and records what the GPUs actually did
 under it. A DCGM diagnostic characterises a card for minutes; reballed and
@@ -536,6 +536,43 @@ The acceptance matrix (`tests/run-acceptance.py`) asserts every reject condition
 card, a Gen5 card in a Gen4 host, an idle link at Gen1, and a fully healthy
 card must all be accepted. Those inverses matter as much as the positives: a
 check that fails good hardware is worse than no check.
+
+## Error counters across the pipeline
+
+Every phase after the inventory re-reads the ECC, remapped-row and PCIe replay
+counters and compares them against a **pre-load baseline**, so a fault is
+attributed to the phase that induced it.
+
+```
+92  inventory   writes the baseline   /run/nexgen-gpu-counter-baseline.json
+98  stress      delta vs baseline  +  final nvidia-smi -q
+99  burn-in     delta vs baseline  +  delta across its own load window
+```
+
+This exists because a window-only delta is not enough. The DCGM diagnostic in
+script `98` is itself roughly 35 minutes of load on an 8-GPU host, and an error
+it induces is invisible to both of the other measurements: script `92` ran
+before it, so its absolutes are clean, and the burn-in subtracts a baseline
+taken *after* `98`, so the error is already in it and the delta comes out zero.
+Both `98` and `99` therefore compare against `92`'s baseline, which also means
+the check still happens when the optional burn-in is not uploaded.
+
+Each of these fails the run and rejects the card: **new uncorrectable ECC
+errors**, **new uncorrectable remapped rows**, or a **remap pending or remap
+failure flag that was not set at baseline**. Corrected-error and replay deltas
+are reported rather than gated — they are the delivery baseline, not a fault.
+
+A missing baseline is reported as such, never treated as clean. Counters are
+read from `nvidia-smi -q` text rather than `--query-gpu`, because several
+counter fields are absent on current drivers and one missing field takes the
+whole query with it.
+
+Both phases also dump a closing `nvidia-smi -q` to stderr, so the final state
+of every card is retained in the MAAS commissioning log as the last word on it.
+
+| Env Override | Default | Description |
+|---|---|---|
+| `NEXGEN_BASELINE_FILE` | `/run/nexgen-gpu-counter-baseline.json` | Baseline path, shared by scripts 92/98/99 |
 
 ## Troubleshooting
 

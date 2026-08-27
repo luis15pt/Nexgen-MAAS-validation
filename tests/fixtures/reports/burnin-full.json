@@ -1,9 +1,9 @@
 {
   "report_metadata": {
-    "script_version": "1.4.0",
+    "script_version": "1.5.0",
     "script_name": "gpu-burn-in",
-    "generated_at": "2026-08-27T13:41:37Z",
-    "duration_seconds": 2
+    "generated_at": "2026-08-27T13:51:38Z",
+    "duration_seconds": 3
   },
   "verdict": {
     "overall": "PASS",
@@ -400,6 +400,174 @@
       }
     ],
     "gpu_burn_error_count": 0,
-    "gpu_burn_output_b64": "R1BVIDA6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMCkKR1BVIDE6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMSkKR1BVIDI6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMikKR1BVIDM6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMykKR1BVIDQ6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNCkKR1BVIDU6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNSkKR1BVIDY6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNikKR1BVIDc6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNykKMTAwLjAlICBwcm9jJ2Q6IDQwOTYgKDM5ODAwMCBHZmxvcC9zKSAgIGVycm9yczogMCAgIHRlbXBzOiA3MSBDClRlc3RlZCA4IEdQVXM6CglHUFUgMDogT0sKCUdQVSAxOiBPSwoJR1BVIDI6IE9LCglHUFUgMzogT0sKCUdQVSA0OiBPSwoJR1BVIDU6IE9LCglHUFUgNjogT0sKCUdQVSA3OiBPSwo="
+    "gpu_burn_output_b64": "R1BVIDA6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMCkKR1BVIDE6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMSkKR1BVIDI6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMikKR1BVIDM6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtMykKR1BVIDQ6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNCkKR1BVIDU6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNSkKR1BVIDY6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNikKR1BVIDc6IE5WSURJQSBIMTAwIFBDSWUgKFVVSUQ6IEdQVS1zeW50aGV0aWMtNykKMTAwLjAlICBwcm9jJ2Q6IDQwOTYgKDM5ODAwMCBHZmxvcC9zKSAgIGVycm9yczogMCAgIHRlbXBzOiA3MSBDClRlc3RlZCA4IEdQVXM6CglHUFUgMDogT0sKCUdQVSAxOiBPSwoJR1BVIDI6IE9LCglHUFUgMzogT0sKCUdQVSA0OiBPSwoJR1BVIDU6IE9LCglHUFUgNjogT0sKCUdQVSA3OiBPSwo=",
+    "counters_since_baseline": {
+      "baseline_available": true,
+      "deltas": [
+        {
+          "gpu_index": 0,
+          "ecc_corrected_delta": 0,
+          "ecc_uncorrected_delta": 0,
+          "remapped_rows_correctable_delta": 0,
+          "remapped_rows_uncorrectable_delta": 0,
+          "replay_delta": 0,
+          "remapped_rows_pending_now": false,
+          "remapped_rows_failure_now": false
+        },
+        {
+          "gpu_index": 1,
+          "ecc_corrected_delta": 0,
+          "ecc_uncorrected_delta": 0,
+          "remapped_rows_correctable_delta": 0,
+          "remapped_rows_uncorrectable_delta": 0,
+          "replay_delta": 0,
+          "remapped_rows_pending_now": false,
+          "remapped_rows_failure_now": false
+        },
+        {
+          "gpu_index": 2,
+          "ecc_corrected_delta": 0,
+          "ecc_uncorrected_delta": 0,
+          "remapped_rows_correctable_delta": 0,
+          "remapped_rows_uncorrectable_delta": 0,
+          "replay_delta": 0,
+          "remapped_rows_pending_now": false,
+          "remapped_rows_failure_now": false
+        },
+        {
+          "gpu_index": 3,
+          "ecc_corrected_delta": 0,
+          "ecc_uncorrected_delta": 0,
+          "remapped_rows_correctable_delta": 0,
+          "remapped_rows_uncorrectable_delta": 0,
+          "replay_delta": 0,
+          "remapped_rows_pending_now": false,
+          "remapped_rows_failure_now": false
+        },
+        {
+          "gpu_index": 4,
+          "ecc_corrected_delta": 0,
+          "ecc_uncorrected_delta": 0,
+          "remapped_rows_correctable_delta": 0,
+          "remapped_rows_uncorrectable_delta": 0,
+          "replay_delta": 0,
+          "remapped_rows_pending_now": false,
+          "remapped_rows_failure_now": false
+        },
+        {
+          "gpu_index": 5,
+          "ecc_corrected_delta": 0,
+          "ecc_uncorrected_delta": 0,
+          "remapped_rows_correctable_delta": 0,
+          "remapped_rows_uncorrectable_delta": 0,
+          "replay_delta": 0,
+          "remapped_rows_pending_now": false,
+          "remapped_rows_failure_now": false
+        },
+        {
+          "gpu_index": 6,
+          "ecc_corrected_delta": 0,
+          "ecc_uncorrected_delta": 0,
+          "remapped_rows_correctable_delta": 0,
+          "remapped_rows_uncorrectable_delta": 0,
+          "replay_delta": 0,
+          "remapped_rows_pending_now": false,
+          "remapped_rows_failure_now": false
+        },
+        {
+          "gpu_index": 7,
+          "ecc_corrected_delta": 0,
+          "ecc_uncorrected_delta": 0,
+          "remapped_rows_correctable_delta": 0,
+          "remapped_rows_uncorrectable_delta": 0,
+          "replay_delta": 0,
+          "remapped_rows_pending_now": false,
+          "remapped_rows_failure_now": false
+        }
+      ],
+      "final": [
+        {
+          "gpu_index": 0,
+          "ecc_corrected_aggregate": 352,
+          "ecc_uncorrected_aggregate": 0,
+          "remapped_rows_correctable": 3,
+          "remapped_rows_uncorrectable": 0,
+          "remapped_rows_pending": false,
+          "remapped_rows_failure": false,
+          "replays_since_reset": 0
+        },
+        {
+          "gpu_index": 1,
+          "ecc_corrected_aggregate": 352,
+          "ecc_uncorrected_aggregate": 0,
+          "remapped_rows_correctable": 3,
+          "remapped_rows_uncorrectable": 0,
+          "remapped_rows_pending": false,
+          "remapped_rows_failure": false,
+          "replays_since_reset": 0
+        },
+        {
+          "gpu_index": 2,
+          "ecc_corrected_aggregate": 352,
+          "ecc_uncorrected_aggregate": 0,
+          "remapped_rows_correctable": 3,
+          "remapped_rows_uncorrectable": 0,
+          "remapped_rows_pending": false,
+          "remapped_rows_failure": false,
+          "replays_since_reset": 0
+        },
+        {
+          "gpu_index": 3,
+          "ecc_corrected_aggregate": 352,
+          "ecc_uncorrected_aggregate": 0,
+          "remapped_rows_correctable": 3,
+          "remapped_rows_uncorrectable": 0,
+          "remapped_rows_pending": false,
+          "remapped_rows_failure": false,
+          "replays_since_reset": 0
+        },
+        {
+          "gpu_index": 4,
+          "ecc_corrected_aggregate": 352,
+          "ecc_uncorrected_aggregate": 0,
+          "remapped_rows_correctable": 3,
+          "remapped_rows_uncorrectable": 0,
+          "remapped_rows_pending": false,
+          "remapped_rows_failure": false,
+          "replays_since_reset": 0
+        },
+        {
+          "gpu_index": 5,
+          "ecc_corrected_aggregate": 352,
+          "ecc_uncorrected_aggregate": 0,
+          "remapped_rows_correctable": 3,
+          "remapped_rows_uncorrectable": 0,
+          "remapped_rows_pending": false,
+          "remapped_rows_failure": false,
+          "replays_since_reset": 0
+        },
+        {
+          "gpu_index": 6,
+          "ecc_corrected_aggregate": 352,
+          "ecc_uncorrected_aggregate": 0,
+          "remapped_rows_correctable": 3,
+          "remapped_rows_uncorrectable": 0,
+          "remapped_rows_pending": false,
+          "remapped_rows_failure": false,
+          "replays_since_reset": 0
+        },
+        {
+          "gpu_index": 7,
+          "ecc_corrected_aggregate": 352,
+          "ecc_uncorrected_aggregate": 0,
+          "remapped_rows_correctable": 3,
+          "remapped_rows_uncorrectable": 0,
+          "remapped_rows_pending": false,
+          "remapped_rows_failure": false,
+          "replays_since_reset": 0
+        }
+      ],
+      "new_faults": 0
+    }
   }
 }

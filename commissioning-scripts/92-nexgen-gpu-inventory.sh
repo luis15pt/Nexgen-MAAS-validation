@@ -24,7 +24,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 WORK_DIR="/tmp/gpu-inventory-$$"
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.3.0"
 
 ###############################################################################
 # LOGGING
@@ -859,6 +859,62 @@ assemble_report() {
 }
 
 ###############################################################################
+# CUMULATIVE COUNTER CHECK
+###############################################################################
+# Counters are read from `nvidia-smi -q` text rather than --query-gpu, because
+# several counter fields are absent on current drivers (remapped_rows.
+# uncorrectable is unsupported on 595) and one missing field takes the whole
+# --query-gpu call with it.
+#
+# Script 92 writes a baseline BEFORE any load runs; every later phase compares
+# against it. That attributes a fault to the phase that induced it, and means
+# the check still happens when the optional burn-in is not uploaded. A delta
+# measured only across the burn-in window cannot see an error raised by the
+# DCGM diagnostic, because that error is already in the window's own baseline.
+NEXGEN_BASELINE_FILE="${NEXGEN_BASELINE_FILE:-/run/nexgen-gpu-counter-baseline.json}"
+
+# Per-GPU aggregate error counters, as a JSON array.
+snapshot_gpu_counters() {
+    local n gi out agg remap pci first=1
+    n="${SMI_GPU_COUNT:-0}"
+    # Do not depend on a caller having populated SMI_GPU_COUNT: an empty count
+    # silently yields "[]", which looks like a valid baseline and makes every
+    # later delta null.
+    if [[ -z "$n" || "$n" == "0" ]]; then
+        n=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | head -1)
+        n="${n//[^0-9]/}"
+        n="${n:-0}"
+    fi
+    printf '['
+    for (( gi = 0; gi < n; gi++ )); do
+        out=$(nvidia-smi -i "$gi" -q 2>/dev/null || true)
+        [[ -z "$out" ]] && continue
+        agg=$(printf   '%s\n' "$out" | smi_section "ECC Errors" | smi_section "Aggregate")
+        remap=$(printf '%s\n' "$out" | smi_section "Remapped Rows")
+        pci=$(printf   '%s\n' "$out" | smi_section "PCI")
+        [[ $first -eq 0 ]] && printf ','
+        first=0
+        printf '{"gpu_index":%d' "$gi"
+        printf ',"ecc_corrected_aggregate":%s' \
+            "$(to_json_num "$(sum_or_empty \
+                "$(printf '%s\n' "$agg" | smi_field 'DRAM Correctable')" \
+                "$(printf '%s\n' "$agg" | smi_field 'SRAM Correctable')")")"
+        printf ',"ecc_uncorrected_aggregate":%s' \
+            "$(to_json_num "$(sum_or_empty \
+                "$(printf '%s\n' "$agg" | smi_field 'DRAM Uncorrectable')" \
+                "$(printf '%s\n' "$agg" | smi_field 'SRAM Uncorrectable')")")"
+        printf ',"remapped_rows_correctable":%s'   "$(to_json_num  "$(printf '%s\n' "$remap" | smi_field 'Correctable Error')")"
+        printf ',"remapped_rows_uncorrectable":%s' "$(to_json_num  "$(printf '%s\n' "$remap" | smi_field 'Uncorrectable Error')")"
+        printf ',"remapped_rows_pending":%s'       "$(to_json_bool "$(printf '%s\n' "$remap" | smi_field 'Pending')")"
+        printf ',"remapped_rows_failure":%s'       "$(to_json_bool "$(printf '%s\n' "$remap" | smi_field 'Remapping Failure Occurred')")"
+        printf ',"replays_since_reset":%s'         "$(to_json_num  "$(printf '%s\n' "$pci"   | smi_field 'Replays Since Reset')")"
+        printf '}'
+    done
+    printf ']'
+}
+
+
+###############################################################################
 # HALT GATE
 ###############################################################################
 # Script 91 halts the run when it has had to enable ECC.  Every ECC counter
@@ -905,7 +961,21 @@ main() {
 
     preflight
     dump_smi_verbose
+
     collect_system_context
+
+    # Pre-load counter baseline for the later phases. Written here because 92
+    # runs before anything applies load, so this is the delivery baseline and
+    # every subsequent delta is measured from it. After collect_system_context,
+    # which is what populates the GPU count.
+    if snapshot_gpu_counters > "$NEXGEN_BASELINE_FILE" 2>/dev/null \
+       && [[ "$(jq 'length' "$NEXGEN_BASELINE_FILE" 2>/dev/null || echo 0)" -gt 0 ]]; then
+        log "Counter baseline written to $NEXGEN_BASELINE_FILE ($(jq 'length' "$NEXGEN_BASELINE_FILE") GPU(s))"
+    else
+        warn "Could not write a usable counter baseline to $NEXGEN_BASELINE_FILE"
+        warn "  Later phases will report absolute counters but no deltas."
+        rm -f "$NEXGEN_BASELINE_FILE"
+    fi
     collect_gpu_data
     local inventory_ok=true
     if ! assemble_report; then

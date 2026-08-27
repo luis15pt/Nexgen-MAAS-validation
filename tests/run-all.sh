@@ -60,6 +60,30 @@ check_report "stress returned CONFIG" FAIL --install $F/install-pass.json --inve
 check_report "evidence missing"       WARN --install $F/install-pass.json
 check_report "no burn-in evidence"    WARN --install $F/install-pass.json --inventory $F/inventory-healthy.json --stress $F/stress-pass.json
 
+hdr "Post-test counter check across the whole sequence"
+BL=$(mktemp); MK=/tmp/nexgen-baseline-written
+rm -f "$BL" "$MK" /tmp/stub-*
+NEXGEN_BASELINE_FILE="$BL" bash commissioning-scripts/92-nexgen-gpu-inventory.sh >/dev/null 2>&1
+n=$(jq 'length' "$BL" 2>/dev/null || echo 0)
+if [[ "$n" == "$STUB_GPU_COUNT" ]]; then echo "  ok    92 writes a baseline for $n GPU(s)"
+else echo "  FAIL  92 baseline has $n entries, expected $STUB_GPU_COUNT"; rc=1; fi
+touch "$MK"
+for spec in "clean:PASS:" "fault after baseline:FAIL:STUB_ECC_UCE_AFTER=6"; do
+    lbl="${spec%%:*}"; rest="${spec#*:}"; want="${rest%%:*}"; envs="${rest#*:}"
+    rm -f /tmp/stub-*
+    got=$(env NEXGEN_BASELINE_FILE="$BL" $envs DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json \
+          bash commissioning-scripts/98-nexgen-gpu-stress-test.sh 2>/dev/null | jq -r '.verdict.overall')
+    if [[ "$got" == "$want" ]]; then printf '  ok    98 %-24s -> %s\n' "$lbl" "$got"
+    else printf '  FAIL  98 %-24s -> got %s, want %s\n' "$lbl" "$got" "$want"; rc=1; fi
+done
+rm -f /tmp/stub-*
+got=$(env NEXGEN_BASELINE_FILE=/tmp/definitely-absent.json DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json \
+      bash commissioning-scripts/98-nexgen-gpu-stress-test.sh 2>/dev/null \
+      | jq -r '.counters_since_baseline.baseline_available')
+if [[ "$got" == "false" ]]; then echo "  ok    a missing baseline is reported, not assumed clean"
+else echo "  FAIL  missing baseline reported as $got"; rc=1; fi
+rm -f "$BL" "$MK"
+
 hdr "ECC revalidation gate (run 1 halts, run 2 proceeds)"
 export NEXGEN_HALT_FILE=/tmp/nexgen-halt-test.$$
 rm -f "$NEXGEN_HALT_FILE" /tmp/stub-*

@@ -27,7 +27,7 @@ DCGM_DIAG_LEVEL="${DCGM_DIAG_LEVEL:-3}"
 # either way.  Level 4 can legitimately take ~90 min, hence the wide default.
 DCGM_DIAG_TIMEOUT="${DCGM_DIAG_TIMEOUT:-6000}"
 WORK_DIR="/tmp/gpu-stress-$$"
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.3.0"
 
 ###############################################################################
 # LOGGING
@@ -491,6 +491,25 @@ run_diagnostics() {
         collect_failure_diagnostics
     fi
 
+    # The diagnostic is itself a substantial load -- level 3 runs ~35 min on an
+    # 8-GPU host -- so any fault it induces must be caught here. Nothing else
+    # would: 92 ran before it, and the burn-in's own window delta subtracts a
+    # baseline already containing whatever happened during this phase.
+    post_test_counter_check
+    if [[ "${POST_NEW_FAULTS:-0}" -gt 0 ]]; then
+        overall="FAIL"
+        local pf_detail
+        pf_detail=$(printf '%s' "$POST_COUNTERS" | jq -r '[.deltas[]
+            | select(((.ecc_uncorrected_delta // 0) > 0)
+                     or ((.remapped_rows_uncorrectable_delta // 0) > 0)
+                     or (.remapped_rows_failure_now == true)
+                     or (.remapped_rows_pending_now == true))
+            | "GPU \(.gpu_index)"] | join(", ")')
+        issues=$(echo "$issues" | jq --argjson n "${POST_NEW_FAULTS}" --arg d "$pf_detail" \
+            '. + [{"issue":"\($n) GPU(s) gained uncorrectable ECC errors, uncorrectable remapped rows, a pending remap or a remap failure during the diagnostic","severity":"critical","details":$d}]')
+        err "New memory faults during the diagnostic: $pf_detail"
+    fi
+
     log "=== STRESS TEST COMPLETE -- Verdict: $overall (${diag_dur}s) ==="
 
     # Final report
@@ -504,16 +523,186 @@ run_diagnostics() {
         --arg level "$DCGM_DIAG_LEVEL" --argjson exit_code "$diag_exit" \
         --argjson diag_dur "$diag_dur" --argjson results "$test_results" \
         --argjson artifacts "${DIAG_ARTIFACTS:-[]}" \
+        --argjson counters "${POST_COUNTERS:-null}" \
         '{
             report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts, duration_seconds:$dur},
             verdict:{overall:$verdict, issues:$issues},
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus},
             dcgm_diagnostics:{run_level:$level, exit_code:$exit_code, duration_seconds:$diag_dur, test_results:$results},
-            diagnostic_artifacts:$artifacts
+            diagnostic_artifacts:$artifacts,
+            counters_since_baseline:$counters
         }'
 
     [[ "$overall" == "FAIL" ]] && return 1
     return 0
+}
+
+###############################################################################
+# CUMULATIVE COUNTER CHECK
+###############################################################################
+# Counters are read from `nvidia-smi -q` text rather than --query-gpu, because
+# several counter fields are absent on current drivers (remapped_rows.
+# uncorrectable is unsupported on 595) and one missing field takes the whole
+# --query-gpu call with it.
+#
+# Script 92 writes a baseline BEFORE any load runs; every later phase compares
+# against it. That attributes a fault to the phase that induced it, and means
+# the check still happens when the optional burn-in is not uploaded. A delta
+# measured only across the burn-in window cannot see an error raised by the
+# DCGM diagnostic, because that error is already in the window's own baseline.
+NEXGEN_BASELINE_FILE="${NEXGEN_BASELINE_FILE:-/run/nexgen-gpu-counter-baseline.json}"
+
+smi_section() {
+    awk -v want="$1" '
+        !found {
+            h = $0
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", h)
+            if (h == want) { match($0, /^ */); ind = RLENGTH; found = 1 }
+            next
+        }
+        found {
+            if ($0 ~ /^[[:space:]]*$/) next
+            match($0, /^ */)
+            if (RLENGTH <= ind) exit
+            print
+        }
+    '
+}
+
+smi_field() {
+    awk -v want="$1" '
+        {
+            p = index($0, ":")
+            if (p == 0) next
+            k = substr($0, 1, p - 1); v = substr($0, p + 1)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+            if (k == want) { print v; exit }
+        }
+    '
+}
+
+to_json_num() {
+    local v="${1//,/}" n
+    case "$v" in
+        ""|*N/A*|*"Not Supported"*|*"Not Available"*|*Unknown*|*Disabled*) echo "null"; return ;;
+    esac
+    n=$(printf '%s' "$v" | grep -oE '^-?[0-9]+(\.[0-9]+)?' | head -1)
+    [[ -z "$n" ]] && { echo "null"; return; }
+    echo "$n"
+}
+
+to_json_bool() {
+    case "$1" in
+        Yes|yes|YES|True|true) echo "true"  ;;
+        No|no|NO|False|false)  echo "false" ;;
+        *)                     echo "null"  ;;
+    esac
+}
+
+sum_or_empty() {
+    local a b
+    a=$(printf '%s' "${1:-}" | grep -oE '[0-9]+' | head -1)
+    b=$(printf '%s' "${2:-}" | grep -oE '[0-9]+' | head -1)
+    if [[ -z "$a" && -z "$b" ]]; then echo ""; else echo $(( ${a:-0} + ${b:-0} )); fi
+}
+
+# Per-GPU aggregate error counters, as a JSON array.
+snapshot_gpu_counters() {
+    local n gi out agg remap pci first=1
+    n="${SMI_GPU_COUNT:-0}"
+    # Do not depend on a caller having populated SMI_GPU_COUNT: an empty count
+    # silently yields "[]", which looks like a valid baseline and makes every
+    # later delta null.
+    if [[ -z "$n" || "$n" == "0" ]]; then
+        n=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | head -1)
+        n="${n//[^0-9]/}"
+        n="${n:-0}"
+    fi
+    printf '['
+    for (( gi = 0; gi < n; gi++ )); do
+        out=$(nvidia-smi -i "$gi" -q 2>/dev/null || true)
+        [[ -z "$out" ]] && continue
+        agg=$(printf   '%s\n' "$out" | smi_section "ECC Errors" | smi_section "Aggregate")
+        remap=$(printf '%s\n' "$out" | smi_section "Remapped Rows")
+        pci=$(printf   '%s\n' "$out" | smi_section "PCI")
+        [[ $first -eq 0 ]] && printf ','
+        first=0
+        printf '{"gpu_index":%d' "$gi"
+        printf ',"ecc_corrected_aggregate":%s' \
+            "$(to_json_num "$(sum_or_empty \
+                "$(printf '%s\n' "$agg" | smi_field 'DRAM Correctable')" \
+                "$(printf '%s\n' "$agg" | smi_field 'SRAM Correctable')")")"
+        printf ',"ecc_uncorrected_aggregate":%s' \
+            "$(to_json_num "$(sum_or_empty \
+                "$(printf '%s\n' "$agg" | smi_field 'DRAM Uncorrectable')" \
+                "$(printf '%s\n' "$agg" | smi_field 'SRAM Uncorrectable')")")"
+        printf ',"remapped_rows_correctable":%s'   "$(to_json_num  "$(printf '%s\n' "$remap" | smi_field 'Correctable Error')")"
+        printf ',"remapped_rows_uncorrectable":%s' "$(to_json_num  "$(printf '%s\n' "$remap" | smi_field 'Uncorrectable Error')")"
+        printf ',"remapped_rows_pending":%s'       "$(to_json_bool "$(printf '%s\n' "$remap" | smi_field 'Pending')")"
+        printf ',"remapped_rows_failure":%s'       "$(to_json_bool "$(printf '%s\n' "$remap" | smi_field 'Remapping Failure Occurred')")"
+        printf ',"replays_since_reset":%s'         "$(to_json_num  "$(printf '%s\n' "$pci"   | smi_field 'Replays Since Reset')")"
+        printf '}'
+    done
+    printf ']'
+}
+
+# Compare a fresh snapshot against the pre-load baseline.
+counters_since_baseline() {
+    local now="$1"
+    if [[ ! -s "$NEXGEN_BASELINE_FILE" ]]; then
+        jq -n --argjson now "$now" \
+            '{baseline_available:false, deltas:[], new_faults:0, final:$now}'
+        return
+    fi
+    jq -n --slurpfile base "$NEXGEN_BASELINE_FILE" --argjson now "$now" '
+        def d($a; $b): if ($a != null and $b != null) then $a - $b else null end;
+        (($base[0] // []) | map({key:(.gpu_index|tostring), value:.}) | from_entries) as $bm
+        | [ $now[] | . as $n | ($bm[($n.gpu_index|tostring)] // null) as $p | {
+              gpu_index: $n.gpu_index,
+              ecc_corrected_delta:               d($n.ecc_corrected_aggregate;   ($p.ecc_corrected_aggregate // null)),
+              ecc_uncorrected_delta:             d($n.ecc_uncorrected_aggregate; ($p.ecc_uncorrected_aggregate // null)),
+              remapped_rows_correctable_delta:   d($n.remapped_rows_correctable;  ($p.remapped_rows_correctable // null)),
+              remapped_rows_uncorrectable_delta: d($n.remapped_rows_uncorrectable;($p.remapped_rows_uncorrectable // null)),
+              replay_delta:                      d($n.replays_since_reset;       ($p.replays_since_reset // null)),
+              remapped_rows_pending_now: $n.remapped_rows_pending,
+              remapped_rows_failure_now: $n.remapped_rows_failure
+          } ] as $dl
+        | {
+            baseline_available: true,
+            deltas: $dl,
+            final: $now,
+            new_faults: ([ $dl[] | select(
+                ((.ecc_uncorrected_delta // 0) > 0)
+                or ((.remapped_rows_uncorrectable_delta // 0) > 0)
+                or (.remapped_rows_failure_now == true)
+                or (.remapped_rows_pending_now == true)) ] | length)
+          }'
+}
+
+# Emits the cumulative block on stdout capture; sets POST_NEW_FAULTS.
+# Also dumps the closing `nvidia-smi -q` to stderr, so the final state of every
+# card is retained in the MAAS commissioning log as the last word on it.
+post_test_counter_check() {
+    local now
+    log "=== Post-test counter check ==="
+    now=$(snapshot_gpu_counters)
+    POST_COUNTERS=$(counters_since_baseline "$now")
+    POST_NEW_FAULTS=$(printf '%s' "$POST_COUNTERS" | jq '.new_faults // 0')
+    if [[ "$(printf '%s' "$POST_COUNTERS" | jq -r '.baseline_available')" != "true" ]]; then
+        warn "  No pre-load baseline at $NEXGEN_BASELINE_FILE -- deltas unavailable"
+        warn "  (script 92 writes it; absolute counters are still reported)"
+    else
+        log "  Cumulative deltas since the pre-load baseline:"
+        printf '%s' "$POST_COUNTERS" | jq -r '.deltas[] |
+            "    GPU \(.gpu_index): eccUCE+\(.ecc_uncorrected_delta // "?") " +
+            "eccCE+\(.ecc_corrected_delta // "?") " +
+            "remapUCE+\(.remapped_rows_uncorrectable_delta // "?") " +
+            "replay+\(.replay_delta // "?")"' >&2 || true
+    fi
+    log "---------- begin final nvidia-smi -q ----------"
+    nvidia-smi -q >&2 2>&1 || warn "final nvidia-smi -q failed"
+    log "---------- end final nvidia-smi -q ----------"
 }
 
 ###############################################################################

@@ -113,5 +113,14 @@ _idx=""
 if [[ "$args" =~ (^|[[:space:]])-i[[:space:]]+([0-9]+) ]]; then _idx="${BASH_REMATCH[2]}"; fi
 
 if [[ "$args" == *"-q"* && "$args" == *ECC* ]]; then _emit_q "$E" "$_idx"; exit 0; fi
-if [[ "$args" == *"-q"* ]];                     then _emit_q "$Q" "$_idx"; exit 0; fi
+if [[ "$args" == *"-q"* ]]; then
+  # STUB_ECC_UCE_AFTER simulates a counter rising once the baseline exists,
+  # i.e. a fault induced by a later phase.
+  if [[ -n "$STUB_ECC_UCE_AFTER" && -e "${STUB_BASELINE_MARKER:-/tmp/nexgen-baseline-written}" ]]; then
+    _emit_q "$Q" "$_idx" | sed -E "s/^([[:space:]]+)DRAM Uncorrectable([[:space:]]+): 0$/\1DRAM Uncorrectable\2: ${STUB_ECC_UCE_AFTER}/"
+  else
+    _emit_q "$Q" "$_idx"
+  fi
+  exit 0
+fi
 exit 0

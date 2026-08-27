@@ -225,6 +225,34 @@ CASES.append(("#4 gpu-burn computation errors", "REJECT", 4,
 CASES.append(("#4 gpu-burn no verdict for this GPU", "REJECT", 4,
               lambda: (INV["gpus"][0], STRESS, _burn_gb(_ALL_OK[1:])), None, None))
 
+def _burn_cum(**kw):
+    b = copy.deepcopy(BURN)
+    c = b["burn_in"].get("counters_since_baseline") or {}
+    c = copy.deepcopy(c)
+    c.setdefault("baseline_available", True)
+    rows = c.get("deltas") or [{"gpu_index": g} for g in range(8)]
+    for r in rows:
+        if r.get("gpu_index") == 0:
+            r.update(kw)
+    c["deltas"] = rows
+    b["burn_in"]["counters_since_baseline"] = c
+    return b
+
+
+# A fault accumulated anywhere in the sequence, not just inside the burn-in
+# window. A window-only delta cannot see an error raised by the DCGM diagnostic.
+CASES.append(("#1 cumulative: clean", "ACCEPT", 1,
+              lambda: (INV["gpus"][0], STRESS, _burn_cum(ecc_uncorrected_delta=0,
+                                                         remapped_rows_uncorrectable_delta=0)), None, None))
+CASES.append(("#1 cumulative: new uncorrectable ECC", "REJECT", 1,
+              lambda: (INV["gpus"][0], STRESS, _burn_cum(ecc_uncorrected_delta=3)), None, None))
+CASES.append(("#1 cumulative: new remapped row", "REJECT", 1,
+              lambda: (INV["gpus"][0], STRESS,
+                       _burn_cum(remapped_rows_uncorrectable_delta=1)), None, None))
+CASES.append(("#1 cumulative: remap pending appeared", "REJECT", 1,
+              lambda: (INV["gpus"][0], STRESS,
+                       _burn_cum(remapped_rows_pending_now=True)), None, None))
+
 EXTRA = [
     ("#3 ECC already on before commissioning", "ACCEPT", _with_cfg(CFG_ON)),
     ("#3 ECC enabled by script 91 this run", "REJECT", _with_cfg(CFG_ENABLED_NOW)),

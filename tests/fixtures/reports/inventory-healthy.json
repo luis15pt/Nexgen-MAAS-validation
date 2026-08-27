@@ -1,8 +1,8 @@
 {
   "report_metadata": {
-    "script_version": "2.2.0",
+    "script_version": "2.3.0",
     "script_name": "gpu-inventory",
-    "generated_at": "2026-08-26T16:33:49Z",
+    "generated_at": "2026-08-27T13:51:31Z",
     "test_duration_seconds": 6,
     "data_hash_sha256": "0b502125557b72c087e8ba2e0420d9dc73dffd5976aca99ab397a40ef2f44cf2",
     "gpu_count_expected": 8,
