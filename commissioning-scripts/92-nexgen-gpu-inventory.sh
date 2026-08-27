@@ -1,10 +1,11 @@
 #!/bin/bash
 # --- Start MAAS Metadata ---
-# name: 98-nexgen-gpu-inventory
+# name: 92-nexgen-gpu-inventory
 # title: NexGen GPU Inventory & Health Check
 # description: Collects GPU inventory (serials, UUIDs, VRAM, ECC counters,
 #   PCIe link status, NUMA topology) using a single bulk nvidia-smi query.
-#   No packages installed -- requires 90-nexgen-gpu-install to run first.
+#   Runs before any load phase, so its counters are the pre-load delivery
+#   baseline. No packages installed -- requires 90-nexgen-gpu-install first.
 #   Designed to run every commissioning cycle. Outputs structured JSON.
 #   Resilient to nvidia-smi field changes across driver versions.
 # script_type: commissioning

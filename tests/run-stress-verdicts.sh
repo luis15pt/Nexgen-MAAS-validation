@@ -1,9 +1,9 @@
 #!/bin/bash
-# Drives 99-nexgen-gpu-stress-test.sh against DCGM fixtures using stub tools,
+# Drives the DCGM stress-test script against DCGM fixtures using stub tools,
 # asserting the verdict each one must produce.  No GPU required.
 cd "$(dirname "$0")/.." || exit 1
 export PATH="$PWD/tests/stubs:$PATH"
-SCRIPT=commissioning-scripts/99-nexgen-gpu-stress-test.sh
+SCRIPT=commissioning-scripts/98-nexgen-gpu-stress-test.sh
 rc=0
 
 check() { # $1=fixture  $2=expected verdict  $3=exit code to simulate
@@ -20,7 +20,7 @@ check() { # $1=fixture  $2=expected verdict  $3=exit code to simulate
     fi
 }
 
-echo "Script 99 verdict matrix:"
+echo "Stress-test verdict matrix:"
 check all-pass        PASS
 check one-fail        FAIL
 check all-config      FAIL     # REJECT #5: config log is not a hardware pass

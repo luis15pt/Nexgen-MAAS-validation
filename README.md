@@ -13,15 +13,15 @@ Nexgen-MAAS-validation/
 │   ├── 80-nexgen-network-cabling-verify.sh # Step 0: NetBox vs LLDP cabling check
 │   ├── 90-nexgen-gpu-install-595-13.sh     # Step 1: Driver + CUDA + DCGM + Fabric Manager
 │   ├── 91-nexgen-gpu-mig-ecc-config.sh     # Step 2: Disable MIG, enable ECC
-│   ├── 92-nexgen-gpu-burn-in.sh            # Step 3: Sustained load (optional)
-│   ├── 98-nexgen-gpu-inventory.sh          # Step 4: GPU inventory & health check
-│   └── 99-nexgen-gpu-stress-test.sh        # Step 5: DCGM stress test
+│   ├── 92-nexgen-gpu-inventory.sh          # Step 3: GPU inventory & health check
+│   ├── 98-nexgen-gpu-stress-test.sh        # Step 4: DCGM stress test
+│   └── 99-nexgen-gpu-burn-in.sh            # Step 5: Sustained load (optional)
 ├── reporting/                    # Report generation tooling
 │   └── device_certificate.py               # HTML certification report generator
 ├── tests/                        # Offline test suite (no GPU required)
 │   ├── run-all.sh                          # Everything
-│   ├── run-99-verdicts.sh                  # DCGM verdict matrix
-│   ├── run-92-burnin.sh                    # Burn-in verdict matrix
+│   ├── run-stress-verdicts.sh              # DCGM verdict matrix
+│   ├── run-burnin-verdicts.sh              # Burn-in verdict matrix
 │   ├── run-acceptance.py                   # Acceptance adjudication matrix
 │   ├── stubs/                              # Fake nvidia-smi, dcgmi, dmesg, lspci
 │   └── fixtures/                           # Captured and synthetic evidence
@@ -33,7 +33,7 @@ Nexgen-MAAS-validation/
 
 ## Commissioning Scripts
 
-All six scripts are designed to run as MAAS commissioning scripts in sequence. They follow the MAAS metadata format and output structured JSON for downstream consumption. The numeric prefix sets the execution order — `80` is independent, `92` is optional, and every GPU script depends on `90` having run first.
+All six scripts are designed to run as MAAS commissioning scripts in sequence. They follow the MAAS metadata format and output structured JSON for downstream consumption. The numeric prefix sets the execution order — `80` is independent, `99` is optional, and every GPU script depends on `90` having run first. Cheap phases run first so a failure costs the least: inventory (`92`) before any load, then the DCGM diagnostic (`98`), then the ~30-minute burn-in (`99`) last.
 
 ### 80 - Network Cabling Verify (`v1.0.0`)
 
@@ -123,7 +123,7 @@ enabled, so finding it off means someone turned it off — often to free the ~6.
 of VRAM that ECC reserves.)
 
 Script 91 writes a halt marker to `/run/nexgen-commissioning-halt`; scripts `92`,
-`98` and `99` check it and exit in well under a second, reporting
+`92`, `98` and `99` check it and exit in well under a second, reporting
 `skipped: true`. The report shows a prominent **action required** banner and
 refuses to read as an acceptance certificate.
 
@@ -142,7 +142,7 @@ The marker is race-free because commissioning scripts run serially in
 name-sorted order: `Script.parallel` defaults to `SCRIPT_PARALLEL.DISABLED`, and
 those are exactly the scripts `run_serial_scripts()` handles. All five GPU
 scripts now declare `parallel: disabled` explicitly rather than relying on that
-default — the pipeline already depends on ordering (`98` needs the driver `90`
+default — the pipeline already depends on ordering (`92` needs the driver `90`
 installs), so the dependency is better stated than assumed.
 
 Two things still survive an ECC-disabled history and remain trustworthy:
@@ -156,48 +156,11 @@ real evidence of past damage; a zero is ambiguous.
 
 **Timeout**: 5 minutes
 
-### 92 - Sustained Burn-In (`v1.0.0`, optional)
+### 92 - GPU Inventory (`v2.2.0`)
 
-Applies a sustained full-power load and records what the GPUs actually did
-under it. A DCGM diagnostic characterises a card for minutes; reballed and
-reflowed cards pass cold and fail hot, so only sustained load exposes them.
-
-Optional by construction — skip it by not uploading it to MAAS.
-
-Per GPU it records min/max/mean power, GPU and memory temperature, SM clock,
-and per-reason throttle sample counts. ECC, remapped-row and PCIe replay
-counters are snapshotted either side of the window and reported as **deltas**,
-because an absolute replay count can include boot-time link training that is
-not a defect. `dmesg` is diffed across the window and Xid events are split into
-the disqualifying set (48/63/64/79/92/94/95) and the rest — 13/31/43 are
-typically application faults raised by the load itself.
-
-| Env Override | Default | Description |
-|---|---|---|
-| `BURN_DURATION` | `1800` | Seconds of sustained load |
-| `BURN_MODE` | `characterize` | `characterize` measures and gates on nothing; `enforce` applies the floors below |
-| `BURN_TOOL` | `auto` | `auto` prefers `dcgmproftester`; `gpu-burn` builds from source |
-| `BURN_MIN_SM_CLOCK_MHZ` | (unset) | Sustained SM clock floor, `enforce` only |
-| `BURN_MIN_POWER_W` | (unset) | Minimum peak power, `enforce` only |
-| `BURN_SAMPLE_INTERVAL` | `10` | Seconds between telemetry samples |
-
-**Run `characterize` first.** The throttle and clock thresholds should come from
-measurement, not assumption: run it across known-good, properly-cooled cards to
-find out whether they ever reach thermal slowdown and what their sustained clock
-floor actually is, then set `BURN_MIN_SM_CLOCK_MHZ` from that data. `enforce`
-without a floor warns rather than silently passing.
-
-`dcgmproftester` is the default load source because it ships with DCGM, which
-script `90` already installs — no compilation, no network. `gpu-burn` is
-available as a genuinely independent load source but is built from source on the
-node, which needs git, nvcc and outbound network. If no load generator can be
-found the run **fails**: no load applied means nothing was tested.
-
-**Timeout**: 90 minutes
-
-### 98 - GPU Inventory (`v2.2.0`)
-
-Collects detailed GPU hardware inventory via a single bulk `nvidia-smi` query:
+Runs before any load phase, so its counters are the **pre-load delivery
+baseline**. Collects detailed GPU hardware inventory via a single bulk
+`nvidia-smi` query:
 
 - Serial numbers, UUIDs, and VBIOS versions
 - VRAM capacity and free memory
@@ -233,7 +196,7 @@ Outputs structured JSON. Installs no packages — depends on script `90`.
 
 **Timeout**: 5 minutes
 
-### 99 - GPU Stress Test (`v2.2.0`)
+### 98 - GPU Stress Test (`v2.2.0`)
 
 Runs DCGM diagnostics at configurable severity levels:
 
@@ -261,6 +224,48 @@ script timeout with no JSON emitted at all, so the run yields no evidence
 either way.
 
 **Timeout**: 2 hours
+
+### 99 - Sustained Burn-In (`v1.0.0`, optional)
+
+Applies a sustained full-power load and records what the GPUs actually did
+under it. A DCGM diagnostic characterises a card for minutes; reballed and
+reflowed cards pass cold and fail hot, so only sustained load exposes them.
+
+Runs **last**: it is by far the longest phase, so anything that can fail
+cheaply has already failed by the time it starts.
+
+Optional by construction — skip it by not uploading it to MAAS.
+
+Per GPU it records min/max/mean power, GPU and memory temperature, SM clock,
+and per-reason throttle sample counts. ECC, remapped-row and PCIe replay
+counters are snapshotted either side of the window and reported as **deltas**,
+because an absolute replay count can include boot-time link training that is
+not a defect. `dmesg` is diffed across the window and Xid events are split into
+the disqualifying set (48/63/64/79/92/94/95) and the rest — 13/31/43 are
+typically application faults raised by the load itself.
+
+| Env Override | Default | Description |
+|---|---|---|
+| `BURN_DURATION` | `1800` | Seconds of sustained load |
+| `BURN_MODE` | `characterize` | `characterize` measures and gates on nothing; `enforce` applies the floors below |
+| `BURN_TOOL` | `auto` | `auto` prefers `dcgmproftester`; `gpu-burn` builds from source |
+| `BURN_MIN_SM_CLOCK_MHZ` | (unset) | Sustained SM clock floor, `enforce` only |
+| `BURN_MIN_POWER_W` | (unset) | Minimum peak power, `enforce` only |
+| `BURN_SAMPLE_INTERVAL` | `10` | Seconds between telemetry samples |
+
+**Run `characterize` first.** The throttle and clock thresholds should come from
+measurement, not assumption: run it across known-good, properly-cooled cards to
+find out whether they ever reach thermal slowdown and what their sustained clock
+floor actually is, then set `BURN_MIN_SM_CLOCK_MHZ` from that data. `enforce`
+without a floor warns rather than silently passing.
+
+`dcgmproftester` is the default load source because it ships with DCGM, which
+script `90` already installs — no compilation, no network. `gpu-burn` is
+available as a genuinely independent load source but is built from source on the
+node, which needs git, nvcc and outbound network. If no load generator can be
+found the run **fails**: no load applied means nothing was tested.
+
+**Timeout**: 90 minutes
 
 ## Report Generator
 
@@ -315,7 +320,7 @@ The generated report includes:
 - Per-GPU identity, driver, firmware, and configuration details
 - ECC counters, remapped rows, and memory bank availability
 - DCGM diagnostic results with pass/fail status
-- Sustained-load telemetry and counter deltas, when script `92` ran
+- Sustained-load telemetry and counter deltas, when script `99` ran
 - DIMM inventory from lshw
 - Overall validation verdict
 
@@ -396,24 +401,24 @@ maas $PROFILE commissioning-scripts create \
   hardware_type=gpu \
   content@=commissioning-scripts/91-nexgen-gpu-mig-ecc-config.sh
 
+maas $PROFILE commissioning-scripts create \
+  name=92-nexgen-gpu-inventory \
+  script_type=commissioning \
+  hardware_type=gpu \
+  content@=commissioning-scripts/92-nexgen-gpu-inventory.sh
+
+maas $PROFILE commissioning-scripts create \
+  name=98-nexgen-gpu-stress-test \
+  script_type=commissioning \
+  hardware_type=gpu \
+  content@=commissioning-scripts/98-nexgen-gpu-stress-test.sh
+
 # Optional -- omit this one to skip the sustained burn-in entirely
 maas $PROFILE commissioning-scripts create \
-  name=92-nexgen-gpu-burn-in \
+  name=99-nexgen-gpu-burn-in \
   script_type=commissioning \
   hardware_type=gpu \
-  content@=commissioning-scripts/92-nexgen-gpu-burn-in.sh
-
-maas $PROFILE commissioning-scripts create \
-  name=98-nexgen-gpu-inventory \
-  script_type=commissioning \
-  hardware_type=gpu \
-  content@=commissioning-scripts/98-nexgen-gpu-inventory.sh
-
-maas $PROFILE commissioning-scripts create \
-  name=99-nexgen-gpu-stress-test \
-  script_type=commissioning \
-  hardware_type=gpu \
-  content@=commissioning-scripts/99-nexgen-gpu-stress-test.sh
+  content@=commissioning-scripts/99-nexgen-gpu-burn-in.sh
 ```
 
 ## Workflow
@@ -431,13 +436,14 @@ Commission Machine in MAAS
    91 - MIG / ECC Config ─► MIG off, ECC on (via --gpu-reset)
          │
          ▼
-   92 - Burn-In (opt.) ───► sustained load: power, temp, clocks,
-         │                  throttle reasons, Xid, counter deltas
+   92 - GPU Inventory ────► JSON: identity, ECC, remapped rows, PCIe, NUMA
+         │                  (pre-load delivery baseline)
          ▼
-   98 - GPU Inventory ────► JSON: identity, ECC, remapped rows, PCIe, NUMA
+   98 - Stress Test ──────► DCGM diagnostics (level 1-4)
          │
          ▼
-   99 - Stress Test ──────► DCGM diagnostics (level 1-4)
+   99 - Burn-In (opt.) ───► sustained load: power, temp, clocks,
+         │                  throttle reasons, Xid, counter deltas
          │
          ▼
    device_certificate.py ─► reports/<hostname>-MAAS-validation.html
@@ -452,8 +458,8 @@ The whole suite runs offline against fixtures and stub tooling — no GPU, no MA
 ```
 
 It covers shell and Python syntax; that every script's stdout is parseable JSON
-with nothing leaked ahead of it; the script `99` verdict matrix; the script `92`
-burn-in matrix; the acceptance adjudication matrix; end-to-end report rendering;
+with nothing leaked ahead of it; the stress-test verdict matrix; the burn-in
+matrix; the acceptance adjudication matrix; end-to-end report rendering;
 and an HTML well-formedness check.
 
 `tests/stubs/` holds fixture-driven fakes for `nvidia-smi`, `dcgmi`, `dmesg` and

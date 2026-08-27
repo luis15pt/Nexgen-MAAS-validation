@@ -79,9 +79,9 @@ REQUIRED_STAGES = ("Inventory", "Stress Test")
 SCRIPT_ALIASES = {
     "install":   "90-nexgen-gpu-install-595-13.sh",
     "config":    "91-nexgen-gpu-mig-ecc-config.sh",
-    "burnin":    "92-nexgen-gpu-burn-in.sh",
-    "inventory": "98-nexgen-gpu-inventory.sh",
-    "stress":    "99-nexgen-gpu-stress-test.sh",
+    "inventory": "92-nexgen-gpu-inventory.sh",
+    "stress":    "98-nexgen-gpu-stress-test.sh",
+    "burnin":    "99-nexgen-gpu-burn-in.sh",
 }
 
 

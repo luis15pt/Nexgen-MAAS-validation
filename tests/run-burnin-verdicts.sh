@@ -1,9 +1,9 @@
 #!/bin/bash
-# Drives 92-nexgen-gpu-burn-in.sh against stubbed telemetry, asserting the
+# Drives the burn-in script against stubbed telemetry, asserting the
 # verdict for each scenario. No GPU required.
 cd "$(dirname "$0")/.." || exit 1
 export PATH="$PWD/tests/stubs:$PATH" STUB_GPU_COUNT=2
-SCRIPT=commissioning-scripts/92-nexgen-gpu-burn-in.sh
+SCRIPT=commissioning-scripts/99-nexgen-gpu-burn-in.sh
 rc=0
 
 check() { # $1=label  $2=expected verdict  rest=env assignments
@@ -22,7 +22,7 @@ check() { # $1=label  $2=expected verdict  rest=env assignments
     fi
 }
 
-echo "Script 92 burn-in verdict matrix:"
+echo "Burn-in verdict matrix:"
 check "healthy, power-capped, characterize"  PASS
 check "healthy, power-capped, enforce"       WARN  BURN_MODE=enforce
 check "power cap + clock floor met"          PASS  BURN_MODE=enforce BURN_MIN_SM_CLOCK_MHZ=1500

@@ -16,9 +16,9 @@ hdr "Script stdout must be parseable JSON with nothing leaked ahead of it"
 export PATH="$PWD/tests/stubs:$PATH" STUB_GPU_COUNT=2
 rm -f /tmp/stub-*
 for spec in "91-nexgen-gpu-mig-ecc-config.sh:" \
-            "98-nexgen-gpu-inventory.sh:" \
-            "99-nexgen-gpu-stress-test.sh:DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json" \
-            "92-nexgen-gpu-burn-in.sh:BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1"; do
+            "92-nexgen-gpu-inventory.sh:" \
+            "98-nexgen-gpu-stress-test.sh:DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json" \
+            "99-nexgen-gpu-burn-in.sh:BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1"; do
     s="${spec%%:*}"; envs="${spec#*:}"
     rm -f /tmp/stub-*
     if env $envs bash "commissioning-scripts/$s" 2>/dev/null | jq -e . >/dev/null 2>&1; then
@@ -28,11 +28,11 @@ for spec in "91-nexgen-gpu-mig-ecc-config.sh:" \
     fi
 done
 
-hdr "Script 99 verdict matrix"
-./tests/run-99-verdicts.sh || rc=1
+hdr "Stress-test verdict matrix"
+./tests/run-stress-verdicts.sh || rc=1
 
-hdr "Script 92 burn-in matrix"
-./tests/run-92-burnin.sh || rc=1
+hdr "Burn-in verdict matrix"
+./tests/run-burnin-verdicts.sh || rc=1
 
 hdr "Acceptance adjudication matrix"
 python3 tests/run-acceptance.py || rc=1
@@ -67,7 +67,7 @@ if [[ "$v" == "FAIL" && "$r" == "true" && -f "$NEXGEN_HALT_FILE" ]]; then
 else
     echo "  FAIL  run 1: verdict=$v revalidation=$r marker=$([[ -f $NEXGEN_HALT_FILE ]] && echo yes || echo no)"; rc=1
 fi
-for s2 in 92-nexgen-gpu-burn-in 98-nexgen-gpu-inventory 99-nexgen-gpu-stress-test; do
+for s2 in 92-nexgen-gpu-inventory 98-nexgen-gpu-stress-test 99-nexgen-gpu-burn-in; do
     rm -f /tmp/stub-*
     t0=$(date +%s%N)
     o=$(DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json BURN_DURATION=1800 \
@@ -87,7 +87,7 @@ else
     echo "  FAIL  run 2: 91 did not pass cleanly with ECC already enabled"; rc=1
 fi
 rm -f /tmp/stub-*
-if [[ "$(bash commissioning-scripts/98-nexgen-gpu-inventory.sh 2>/dev/null | jq -r '.skipped // false')" == "false" ]]; then
+if [[ "$(bash commissioning-scripts/92-nexgen-gpu-inventory.sh 2>/dev/null | jq -r '.skipped // false')" == "false" ]]; then
     echo "  ok    run 2: later scripts run normally"
 else
     echo "  FAIL  run 2: later scripts still skipping"; rc=1

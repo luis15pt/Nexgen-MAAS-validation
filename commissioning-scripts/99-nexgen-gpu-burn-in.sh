@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- Start MAAS Metadata ---
-# name: 92-nexgen-gpu-burn-in
+# name: 99-nexgen-gpu-burn-in
 # title: NexGen GPU Sustained Burn-In (optional)
 # description: Applies a sustained full-power load and records what the GPUs
 #   actually did under it: power, temperature, SM clock, throttle reasons, ECC
@@ -8,7 +8,8 @@
 #   during the window.  A DCGM diagnostic is a diagnostic, not a burn-in --
 #   reballed and reflowed cards pass cold and fail hot, so only sustained load
 #   exposes them.  Optional: simply do not upload this script to skip it.
-#   Requires 90-nexgen-gpu-install to have run first.
+#   Runs last: it is the longest phase, so a failure earlier in the pipeline
+#   costs the least time. Requires 90-nexgen-gpu-install to have run first.
 #   Override: BURN_DURATION=1800 BURN_MODE=characterize|enforce BURN_TOOL=auto|dcgmproftester|gpu-burn
 # script_type: commissioning
 # parallel: disabled

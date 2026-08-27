@@ -383,7 +383,7 @@ main() {
     needs_reboot=$(cat "$WORK_DIR/needs_reboot.txt" 2>/dev/null || echo "false")
 
     # If NVRAM changes were made, activate them via GPU reset (no full reboot).
-    # This keeps the MAAS ephemeral environment intact so scripts 98/99 can run.
+    # This keeps the MAAS ephemeral environment intact so scripts 92/98/99 can run.
     if [[ "$needs_reboot" == "true" ]]; then
         reset_and_verify
     fi

@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- Start MAAS Metadata ---
-# name: 99-nexgen-gpu-stress-test
+# name: 98-nexgen-gpu-stress-test
 # title: NexGen GPU Stress Test (DCGM Diagnostics)
 # description: Runs DCGM diagnostics at configurable levels (1-4).
 #   Requires 90-nexgen-gpu-install to have installed DCGM 4.x.

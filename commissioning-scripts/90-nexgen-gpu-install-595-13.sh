@@ -5,7 +5,7 @@
 # description: Installs nvidia-driver-595-server-open, cuda-toolkit-12-8,
 #   DCGM 4.x (datacenter-gpu-manager-4-cuda13), and support tools.
 #   Enables persistence mode, loads kernel modules, starts DCGM service.
-#   Must run before 98-inventory and 99-stress-test.
+#   Must run before 92-inventory, 98-stress-test and 99-burn-in.
 #   Override at runtime: NVIDIA_DRIVER=... CUDA_TOOLKIT=... DCGM_CUDA_MAJOR=...
 # script_type: commissioning
 # parallel: disabled
@@ -432,7 +432,7 @@ install_packages() {
         "datacenter-gpu-manager-4-cuda${DCGM_CUDA_MAJOR}" 2>&1 | tail -5 >&2 || {
         warn "DCGM cuda${DCGM_CUDA_MAJOR} failed -- trying without cuda suffix..."
         apt-get install -y -qq datacenter-gpu-manager-4 2>&1 | tail -5 >&2 || {
-            warn "DCGM install failed -- stress test (99) will be unavailable"
+            warn "DCGM install failed -- stress test (98) will be unavailable"
         }
     }
 
@@ -1002,7 +1002,7 @@ output_report() {
         if [[ "$dcgm_avail" == "true" || "$dcgm_ver" != "not installed" ]]; then
             [[ "$overall" != "FAIL" ]] && overall="WARN"
             issues=$(echo "$issues" | jq \
-                --arg m "DCGM $dcgm_ver sees $dcgm_gpus GPUs while nvidia-smi sees $actual_gpus -- stress test (99) may not work" \
+                --arg m "DCGM $dcgm_ver sees $dcgm_gpus GPUs while nvidia-smi sees $actual_gpus -- stress test (98) may not work" \
                 '. + [{"issue":$m,"severity":"warning"}]')
         fi
     fi
