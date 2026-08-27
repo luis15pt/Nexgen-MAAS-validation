@@ -32,7 +32,10 @@ if [[ "$args" == *--query-gpu=* ]]; then
   _only=""
   if [[ "$args" =~ (^|[[:space:]])-i[[:space:]]+([0-9]+) ]]; then _only="${BASH_REMATCH[2]}"; fi
   # Snapshot query signature: serve POST values from the 2nd call onward.
-  if [[ "$fields" == *ecc.errors.corrected.aggregate.total* ]]; then
+  # Must NOT match the single-field capability probes, which query one field at a
+  # time -- otherwise probing consumes the pre/post transition.
+  if [[ "$fields" == *ecc.errors.corrected.aggregate.total* \
+     && "$fields" == *pcie.replay_counter* ]]; then
     _m="${STUB_SNAP_MARKER:-/tmp/stub-snap-called.$PPID}"
     if [[ -e "$_m" ]]; then
       STUB_ECC_UCE_AGG="${STUB_ECC_UCE_AGG_POST:-${STUB_ECC_UCE_AGG:-0}}"
@@ -58,8 +61,14 @@ if [[ "$args" == *--query-gpu=* ]]; then
         pcie.link.width.current) v="16" ;;
         pcie.link.width.max)     v="16" ;;
         temperature.gpu)         v="34" ;;
-        power.draw)              v="${STUB_POWER:-71.22}" ;;
-        power.limit)             v="350.00" ;;
+        power.draw)
+            # STUB_LOADED_GPUS: comma list of GPUs that draw load power. Anything
+            # else idles, which simulates a load generator covering only some cards.
+            if [[ -n "$STUB_LOADED_GPUS" ]]; then
+              case ",$STUB_LOADED_GPUS," in *",$i,"*) v="${STUB_POWER_LOADED:-340.00}" ;;
+                                            *)       v="${STUB_POWER:-71.22}" ;; esac
+            else v="${STUB_POWER:-71.22}"; fi ;;
+        power.limit)             v="${STUB_POWER_LIMIT:-350.00}" ;;
         vbios_version)           v="96.00.61.00.01" ;;
         ecc.mode.current)        v="${STUB_ECC_MODE:-Enabled}" ;;
         mig.mode.current)        v="${STUB_MIG_MODE:-Disabled}" ;;

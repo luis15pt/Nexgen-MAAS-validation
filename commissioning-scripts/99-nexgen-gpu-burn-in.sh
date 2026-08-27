@@ -27,6 +27,11 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 ###############################################################################
 BURN_DURATION="${BURN_DURATION:-1800}"     # seconds of sustained load
 BURN_SAMPLE_INTERVAL="${BURN_SAMPLE_INTERVAL:-10}"
+# A GPU counts as under load when it draws at least this fraction of its own
+# power limit. Used to prove the load actually reached every card.
+BURN_LOADED_POWER_FRAC="${BURN_LOADED_POWER_FRAC:-0.5}"
+# Fraction of BURN_DURATION each GPU must actually spend under load.
+BURN_COVERAGE_FRAC="${BURN_COVERAGE_FRAC:-0.9}"
 BURN_TOOL="${BURN_TOOL:-auto}"             # auto | dcgmproftester | gpu-burn
 # characterize: measure and report, gate on nothing.  Run this first on
 # known-good, properly-cooled cards to find out whether they ever reach thermal
@@ -39,7 +44,7 @@ BURN_MIN_SM_CLOCK_MHZ="${BURN_MIN_SM_CLOCK_MHZ:-}"
 BURN_MIN_POWER_W="${BURN_MIN_POWER_W:-}"
 GPU_BURN_REPO="${GPU_BURN_REPO:-https://github.com/wilicc/gpu-burn}"
 WORK_DIR="/tmp/gpu-burnin-$$"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 
 # Xid events the acceptance spec treats as disqualifying.  Others (13, 31, 43)
 # are typically application faults raised by the load itself, not hardware.
@@ -107,19 +112,47 @@ detect_throttle_fields() {
 ###############################################################################
 # PRE/POST COUNTER SNAPSHOT
 ###############################################################################
+# Probe each counter field once and keep only those this driver accepts.  A
+# single unsupported field makes the whole --query-gpu call fail, and these
+# field names do get removed and renamed between driver branches, so the set is
+# discovered rather than assumed.  SNAP_FIELDS is the surviving list.
+SNAP_FIELDS=""
+SNAP_MISSING=""
+probe_counter_fields() {
+    local f
+    SNAP_FIELDS="index"
+    for f in ecc.errors.corrected.aggregate.total \
+             ecc.errors.uncorrected.aggregate.total \
+             pcie.replay_counter \
+             remapped_rows.correctable \
+             remapped_rows.uncorrectable; do
+        if nvidia-smi --query-gpu="index,$f" --format=csv,noheader,nounits &>/dev/null; then
+            SNAP_FIELDS+=",$f"
+        else
+            SNAP_MISSING+="${SNAP_MISSING:+,}$f"
+        fi
+    done
+    if [[ -n "$SNAP_MISSING" ]]; then
+        warn "Counter fields unsupported on driver ${SMI_DRIVER}: $SNAP_MISSING"
+        warn "  Their deltas will be reported as null rather than losing the whole snapshot."
+    fi
+    log "Counter snapshot fields: $SNAP_FIELDS"
+}
+
 # Absolute counters are not the interesting quantity: a replay count can carry
 # boot-time link-training events that are not defects.  What matters is the
 # delta across the load window, so each counter is snapshotted either side.
 snapshot_counters() {
-    local out="$1" fields
-    fields="index,ecc.errors.corrected.aggregate.total,ecc.errors.uncorrected.aggregate.total"
-    fields+=",pcie.replay_counter,remapped_rows.correctable,remapped_rows.uncorrectable"
-    if ! nvidia-smi --query-gpu="$fields" --format=csv,noheader,nounits > "$out" 2>/dev/null; then
-        # One unsupported field would otherwise cost us the whole snapshot
-        warn "Full counter snapshot failed -- retrying with ECC and replay only"
-        nvidia-smi --query-gpu="index,ecc.errors.corrected.aggregate.total,ecc.errors.uncorrected.aggregate.total,pcie.replay_counter" \
-            --format=csv,noheader,nounits > "$out" 2>/dev/null || : > "$out"
+    local out="$1" err="$1.err"
+    : > "$out"
+    if ! nvidia-smi --query-gpu="$SNAP_FIELDS" --format=csv,noheader,nounits \
+            > "$out" 2>"$err"; then
+        warn "Counter snapshot failed even with the probed field set"
+        [[ -s "$err" ]] && { warn "  nvidia-smi said:"; head -3 "$err" >&2; }
+        : > "$out"
     fi
+    # Header order for the delta pass, so it does not assume fixed columns.
+    printf '%s\n' "$SNAP_FIELDS" > "${out}.fields"
 }
 
 ###############################################################################
@@ -141,7 +174,13 @@ select_load_tool() {
                 # its power limit.  --no-dcgm-validation keeps this a pure load
                 # generator: pass/fail is decided from our own telemetry, not
                 # from dcgmproftester's thresholds.
-                LOAD_CMD="$cand --no-dcgm-validation -t 1004 -d $BURN_DURATION"
+                # Without an explicit id list the tool may cover only some of
+                # the GPUs. A real run loaded 4 of 8 for the full window and the
+                # other 4 for ~290s, while still reporting success.
+                local ids
+                ids=$(seq -s, 0 $(( ${SMI_GPU_COUNT:-1} - 1 )) 2>/dev/null || echo 0)
+                LOAD_CMD="$cand --no-dcgm-validation -t 1004 -d $BURN_DURATION -i $ids"
+                LOAD_CMD_FALLBACK="$cand --no-dcgm-validation -t 1004 -d $BURN_DURATION"
                 log "Load tool: $cand (no build required)"
                 return 0
             fi
@@ -184,7 +223,7 @@ start_sampler() {
     local out="$1"
     (
         while :; do
-            nvidia-smi --query-gpu="index,power.draw,temperature.gpu,temperature.memory,clocks.sm${THROTTLE_FIELDS}" \
+            nvidia-smi --query-gpu="index,power.draw,power.limit,temperature.gpu,temperature.memory,clocks.sm${THROTTLE_FIELDS}" \
                 --format=csv,noheader,nounits 2>/dev/null \
                 | sed "s/^/$(date +%s), /" >> "$out" || true
             sleep "$BURN_SAMPLE_INTERVAL"
@@ -198,50 +237,73 @@ stop_sampler() {
     wait "${SAMPLER_PID:-}" 2>/dev/null || true
 }
 
-# Aggregate samples per GPU into min/max/mean plus throttle-reason counts.
-# Emits a JSON array.
+# Aggregate samples per GPU.
+#
+# awk is used ONLY to extract fields and coerce them to JSON literals; every
+# comparison and aggregation happens in jq, where types are explicit.
+#
+# An earlier version compared values inside awk and reported min > max on real
+# hardware -- e.g. clocks "min":1005,"max":990 and power "min":334.44,"max":49.14.
+# Both are exactly the *lexicographic* extremes of the sampled values, i.e. awk
+# compared them as text. Whether awk compares numerically depends on how the
+# value was produced and on the awk implementation, so the comparison has been
+# moved somewhere it cannot be ambiguous rather than patched in place.
 aggregate_samples() {
     local csv="$1" have_throttle="$2"
     [[ ! -s "$csv" ]] && { echo "[]"; return; }
     awk -F',' -v ht="$have_throttle" '
-        function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+        function num(s) {
+            gsub(/^[ \t]+|[ \t]+$/, "", s)
+            return (s ~ /^-?[0-9]+([.][0-9]+)?$/) ? s + 0 : "null"
+        }
+        function act(s) {
+            gsub(/^[ \t]+|[ \t]+$/, "", s)
+            return (s == "Active") ? "true" : "false"
+        }
         {
-            gi = trim($2) + 0
-            p  = trim($3); t = trim($4); tm = trim($5); c = trim($6)
-            n[gi]++
-            if (p  ~ /^[0-9.]+$/) { ps[gi]+=p; if (pmin[gi]==""||p<pmin[gi]) pmin[gi]=p; if (p>pmax[gi]) pmax[gi]=p }
-            if (t  ~ /^[0-9.]+$/) { ts[gi]+=t; if (tmin[gi]==""||t<tmin[gi]) tmin[gi]=t; if (t>tmax[gi]) tmax[gi]=t }
-            if (tm ~ /^[0-9.]+$/) { ms[gi]+=tm; if (mmax[gi]==""||tm>mmax[gi]) mmax[gi]=tm }
-            if (c  ~ /^[0-9.]+$/) { cs[gi]+=c; if (cmin[gi]==""||c<cmin[gi]) cmin[gi]=c; if (c>cmax[gi]) cmax[gi]=c }
-            if (ht == "1") {
-                if (trim($7)  ~ /Active/ && trim($7)  !~ /Not/) swpc[gi]++
-                if (trim($8)  ~ /Active/ && trim($8)  !~ /Not/) hwth[gi]++
-                if (trim($9)  ~ /Active/ && trim($9)  !~ /Not/) hwpb[gi]++
-                if (trim($10) ~ /Active/ && trim($10) !~ /Not/) swth[gi]++
-            }
-            if (gi > maxi) maxi = gi
+            gi = num($2); if (gi == "null") next
+            printf "{\"gpu_index\":%s,\"power_w\":%s,\"power_limit_w\":%s", gi, num($3), num($4)
+            printf ",\"temp_gpu_c\":%s,\"temp_mem_c\":%s,\"clocks_sm_mhz\":%s", num($5), num($6), num($7)
+            if (ht == "1")
+                printf ",\"swpc\":%s,\"hwth\":%s,\"hwpb\":%s,\"swth\":%s", \
+                       act($8), act($9), act($10), act($11)
+            printf "}\n"
         }
-        END {
-            printf "["
-            first = 1
-            for (i = 0; i <= maxi; i++) {
-                if (!(i in n)) continue
-                if (!first) printf ","
-                first = 0
-                printf "{\"gpu_index\":%d,\"samples\":%d", i, n[i]
-                printf ",\"power_w\":{\"min\":%.2f,\"max\":%.2f,\"mean\":%.2f}", pmin[i], pmax[i], (n[i]?ps[i]/n[i]:0)
-                printf ",\"temp_gpu_c\":{\"min\":%.1f,\"max\":%.1f,\"mean\":%.1f}", tmin[i], tmax[i], (n[i]?ts[i]/n[i]:0)
-                printf ",\"temp_memory_c\":{\"max\":%.1f,\"mean\":%.1f}", mmax[i], (n[i]?ms[i]/n[i]:0)
-                printf ",\"clocks_sm_mhz\":{\"min\":%.0f,\"max\":%.0f,\"mean\":%.0f}", cmin[i], cmax[i], (n[i]?cs[i]/n[i]:0)
-                if (ht == "1")
-                    printf ",\"throttle_samples\":{\"sw_power_cap\":%d,\"hw_thermal_slowdown\":%d,\"hw_power_brake_slowdown\":%d,\"sw_thermal_slowdown\":%d}", swpc[i]+0, hwth[i]+0, hwpb[i]+0, swth[i]+0
-                else
-                    printf ",\"throttle_samples\":null"
-                printf "}"
-            }
-            printf "]"
-        }
-    ' "$csv"
+    ' "$csv" \
+    | jq -s \
+        --argjson ht "${have_throttle:-0}" \
+        --argjson interval "${BURN_SAMPLE_INTERVAL:-10}" \
+        --argjson frac "${BURN_LOADED_POWER_FRAC:-0.5}" '
+        def r2: . * 100 | round / 100;
+        def stats(f):
+            (map(f) | map(select(. != null))) as $v
+            | if ($v | length) == 0 then null
+              else {min: ($v | min), max: ($v | max), mean: (($v | add) / ($v | length) | r2)}
+              end;
+        group_by(.gpu_index)
+        | map(. as $s
+            # "Loaded" = drawing at least $frac of its own power limit. Counting
+            # this per GPU is what reveals a load generator that only covered
+            # some of the cards -- the run looks fine in aggregate otherwise.
+            | ([$s[] | select(.power_w != null and .power_limit_w != null
+                              and .power_w >= (.power_limit_w * $frac))] | length) as $loaded
+            | {
+                gpu_index:     $s[0].gpu_index,
+                samples:       ($s | length),
+                loaded_samples: $loaded,
+                loaded_seconds: ($loaded * $interval),
+                power_w:       ($s | stats(.power_w)),
+                power_limit_w: ($s | stats(.power_limit_w) | if . then .max else null end),
+                temp_gpu_c:    ($s | stats(.temp_gpu_c)),
+                temp_memory_c: ($s | stats(.temp_mem_c)),
+                clocks_sm_mhz: ($s | stats(.clocks_sm_mhz)),
+                throttle_samples: (if $ht == 1 then {
+                    sw_power_cap:            ([$s[] | select(.swpc)] | length),
+                    hw_thermal_slowdown:     ([$s[] | select(.hwth)] | length),
+                    hw_power_brake_slowdown: ([$s[] | select(.hwpb)] | length),
+                    sw_thermal_slowdown:     ([$s[] | select(.swth)] | length)
+                } else null end)
+              })'
 }
 
 ###############################################################################
@@ -298,6 +360,7 @@ main() {
     get_smi_header_info
     log "Driver $SMI_DRIVER, CUDA $SMI_CUDA, $SMI_GPU_COUNT GPU(s)"
     detect_throttle_fields
+    probe_counter_fields
 
     local issues="[]" overall="PASS"
 
@@ -317,6 +380,15 @@ main() {
         # be left to be killed by MAAS, which would emit no report at all.
         timeout $(( BURN_DURATION + 300 )) $LOAD_CMD >&2 2>&1 || load_exit=$?
         load_dur=$(( $(date +%s) - t0 ))
+        # A rejected -i list fails fast; distinguish that from a real load fault
+        # and retry without it rather than losing the whole burn-in.
+        if [[ "$load_exit" -ne 0 && "$load_dur" -lt 30 && -n "${LOAD_CMD_FALLBACK:-}" ]]; then
+            warn "Load generator exited $load_exit after ${load_dur}s -- retrying without an explicit GPU list"
+            load_exit=0
+            t0=$(date +%s)
+            timeout $(( BURN_DURATION + 300 )) $LOAD_CMD_FALLBACK >&2 2>&1 || load_exit=$?
+            load_dur=$(( $(date +%s) - t0 ))
+        fi
         stop_sampler
         log "Load finished after ${load_dur}s (exit $load_exit)"
     else
@@ -460,13 +532,46 @@ main() {
     fi
 
     if [[ "$load_exit" -eq 124 ]]; then
-        overall="FAIL"
-        issues=$(printf '%s' "$issues" | jq \
-            '. + [{"issue":"Load generator exceeded its timeout and was killed -- burn-in incomplete","severity":"critical"}]')
+        # Distinguish "the load did not run long enough" from "the tool would not
+        # stop on its own". The second is a tool quirk, not missing evidence:
+        # dcgmproftester can keep looping past its -d and get killed by our
+        # ceiling having already delivered the full window.
+        if [[ "$load_dur" -ge "$BURN_DURATION" ]]; then
+            [[ "$overall" == "PASS" ]] && overall="WARN"
+            issues=$(printf '%s' "$issues" | jq \
+                --argjson d "$load_dur" --argjson r "$BURN_DURATION" \
+                '. + [{"issue":"Load generator ran \($d)s (>= the \($r)s required) but did not exit on its own and was killed at the ceiling -- the load window is complete, the tool did not self-terminate","severity":"warning"}]')
+        else
+            overall="FAIL"
+            issues=$(printf '%s' "$issues" | jq \
+                --argjson d "$load_dur" --argjson r "$BURN_DURATION" \
+                '. + [{"issue":"Load generator was killed after \($d)s, short of the \($r)s required -- burn-in incomplete","severity":"critical"}]')
+        fi
     elif [[ "$load_exit" -ne 0 && "$tool" != "none" ]]; then
         [[ "$overall" == "PASS" ]] && overall="WARN"
         issues=$(printf '%s' "$issues" | jq --argjson e "$load_exit" \
             '. + [{"issue":"Load generator exited \($e)","severity":"warning"}]')
+    fi
+
+    # Per-GPU load coverage.  Aggregate success hides a load generator that only
+    # covered some cards: a real run loaded 4 of 8 GPUs for the full window and
+    # the other 4 for ~290s, and reported PASS. A card that was not loaded was
+    # not tested, so this fails in either mode.
+    local required_loaded under_loaded
+    required_loaded=$(awk -v d="$BURN_DURATION" -v f="${BURN_COVERAGE_FRAC:-0.9}" \
+        'BEGIN{printf "%d", d * f}')
+    under_loaded=$(printf '%s' "$telemetry" | jq --argjson r "$required_loaded" \
+        '[.[] | select((.loaded_seconds // 0) < $r)] | length')
+    if [[ "${under_loaded:-0}" -gt 0 && "$tool" != "none" ]]; then
+        overall="FAIL"
+        local under_detail
+        under_detail=$(printf '%s' "$telemetry" | jq -r --argjson r "$required_loaded" \
+            '[.[] | select((.loaded_seconds // 0) < $r)
+              | "GPU \(.gpu_index): \(.loaded_seconds // 0)s"] | join(", ")')
+        issues=$(printf '%s' "$issues" | jq \
+            --argjson n "$under_loaded" --argjson r "$required_loaded" --arg d "$under_detail" \
+            '. + [{"issue":"\($n) GPU(s) were not under load for the required \($r)s -- the load generator did not cover them, so they were not tested","severity":"critical","details":$d}]')
+        err "Load coverage shortfall: $under_detail (need ${required_loaded}s each)"
     fi
 
     local sample_total

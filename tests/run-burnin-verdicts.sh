@@ -10,7 +10,8 @@ check() { # $1=label  $2=expected verdict  rest=env assignments
     local label="$1" want="$2"; shift 2
     rm -f /tmp/stub-dmesg-called.* /tmp/stub-snap-called.*
     local out got
-    out=$(env BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 "$@" \
+    out=$(env BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 \
+              STUB_LOADED_GPUS=0,1 STUB_POWER_LOADED=340.00 "$@" \
           bash "$SCRIPT" 2>/dev/null)
     got=$(printf '%s' "$out" | jq -r '.verdict.overall' 2>/dev/null)
     if [[ "$got" == "$want" ]]; then
@@ -30,12 +31,18 @@ check "sustained clock below floor"          FAIL  BURN_MODE=enforce BURN_MIN_SM
 check "hw thermal slowdown, characterize"    PASS  STUB_TH_HWTH=Active
 check "hw thermal slowdown, enforce"         FAIL  BURN_MODE=enforce BURN_MIN_SM_CLOCK_MHZ=1500 STUB_TH_HWTH=Active
 check "power brake slowdown, enforce"        FAIL  BURN_MODE=enforce BURN_MIN_SM_CLOCK_MHZ=1500 STUB_TH_HWPB=Active
-check "load never reached power floor"       FAIL  BURN_MODE=enforce BURN_MIN_SM_CLOCK_MHZ=1500 BURN_MIN_POWER_W=300
+check "load present but below power floor"    FAIL  BURN_MODE=enforce BURN_MIN_SM_CLOCK_MHZ=1500 BURN_MIN_POWER_W=300 STUB_POWER_LOADED=200.00
 check "disqualifying Xid 79"                 FAIL  STUB_DMESG_XID=79
 check "disqualifying Xid 94"                 FAIL  STUB_DMESG_XID=94
 check "non-disqualifying Xid 13"             WARN  STUB_DMESG_XID=13
 check "new uncorrectable ECC under load"     FAIL  STUB_ECC_UCE_AGG_POST=2
 check "new uncorrectable remapped row"       FAIL  STUB_REMAP_UCE_POST=1
 check "no load generator available"          FAIL  BURN_TOOL=gpu-burn
-check "load generator killed by timeout"     FAIL  STUB_LOAD_EXIT=124
+check "killed short of the required window"   FAIL  STUB_LOAD_EXIT=124
+# Regressions from a real run: a tool that overruns its own -d but delivered the
+# full window is a tool quirk, and a load that covered only some GPUs means the
+# uncovered ones were never tested.
+check "overran -d but window complete"       WARN  STUB_LOAD_EXIT=124 STUB_LOAD_SLEEP=3 BURN_DURATION=2
+check "load covered only half the GPUs"      FAIL  STUB_LOADED_GPUS=0 STUB_POWER=71.22
+check "load covered every GPU"               PASS  STUB_LOADED_GPUS=0,1 STUB_POWER_LOADED=340.00
 exit $rc

@@ -174,6 +174,21 @@ def _with_cfg(cfg):
     return fn
 
 
+def _burn_loaded(secs, gpu=0):
+    b = copy.deepcopy(BURN)
+    for t in b["burn_in"]["telemetry"]:
+        if t["gpu_index"] == gpu:
+            t["loaded_seconds"] = secs
+    return b
+
+
+# Regression from a real run: the load generator covered only some GPUs while
+# the run's wall-clock duration looked correct.
+CASES.append(("#4 this GPU barely loaded", "REJECT", 4,
+              lambda: (INV["gpus"][0], STRESS, _burn_loaded(290)), None, None))
+CASES.append(("#4 this GPU fully loaded", "ACCEPT", 4,
+              lambda: (INV["gpus"][0], STRESS, _burn_loaded(1810)), None, None))
+
 EXTRA = [
     ("#3 ECC already on before commissioning", "ACCEPT", _with_cfg(CFG_ON)),
     ("#3 ECC enabled by script 91 this run", "REJECT", _with_cfg(CFG_ENABLED_NOW)),

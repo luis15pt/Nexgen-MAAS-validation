@@ -225,7 +225,7 @@ either way.
 
 **Timeout**: 2 hours
 
-### 99 - Sustained Burn-In (`v1.0.0`, optional)
+### 99 - Sustained Burn-In (`v1.1.0`, optional)
 
 Applies a sustained full-power load and records what the GPUs actually did
 under it. A DCGM diagnostic characterises a card for minutes; reballed and
@@ -252,6 +252,16 @@ typically application faults raised by the load itself.
 | `BURN_MIN_SM_CLOCK_MHZ` | (unset) | Sustained SM clock floor, `enforce` only |
 | `BURN_MIN_POWER_W` | (unset) | Minimum peak power, `enforce` only |
 | `BURN_SAMPLE_INTERVAL` | `10` | Seconds between telemetry samples |
+| `BURN_LOADED_POWER_FRAC` | `0.5` | Fraction of a GPU's own power limit that counts as "under load" |
+| `BURN_COVERAGE_FRAC` | `0.9` | Fraction of `BURN_DURATION` each GPU must actually spend under load |
+
+**Load coverage is measured per GPU, not per run.** A real run had
+`dcgmproftester` cover four of eight cards for the full window and the other four
+for roughly 290 seconds, while the run's own duration looked correct — so the
+report would have claimed a sustained load on cards that never got one. Each
+GPU's `loaded_seconds` is now counted from its own power draw, and a card that
+falls short fails in either mode: a card that was not loaded was not tested. The
+tool is also given an explicit GPU id list rather than being left to choose.
 
 **Run `characterize` first.** The throttle and clock thresholds should come from
 measurement, not assumption: run it across known-good, properly-cooled cards to

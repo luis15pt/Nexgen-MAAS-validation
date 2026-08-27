@@ -756,15 +756,35 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta):
     mode = b.get("mode", "?")
     tool = b.get("tool", "none")
     dur = _n(b.get("duration_actual_seconds")) or 0
+    required = _n(b.get("duration_requested_seconds")) or 1800
+    # Prefer how long THIS GPU was actually drawing load over the run's
+    # wall-clock. A real run had a load generator that covered 4 of 8 cards for
+    # the full window and the rest for ~290s, while the run duration looked fine.
+    loaded = _n((burn_tel or {}).get("loaded_seconds"))
     if tool == "none":
         out.append(_crit("burn_present", 4, "Sustained load applied", "FAIL",
                          "no load generator available -- nothing was tested"))
+    elif loaded is not None:
+        if loaded < required * 0.9:
+            out.append(_crit("burn_present", 4, "Sustained load applied", "FAIL",
+                             f"this GPU drew load for only {int(loaded)}s of the "
+                             f"{int(required)}s required -- the load generator did "
+                             f"not cover it, so it was not tested"))
+        elif loaded < 1800:
+            out.append(_crit("burn_present", 4, "Sustained load applied", "WARN",
+                             f"{tool}, this GPU under load {int(loaded)}s, "
+                             f"below the 1800s the spec asks for"))
+        else:
+            out.append(_crit("burn_present", 4, "Sustained load applied", "PASS",
+                             f"{tool}, this GPU under load {int(loaded)}s ({mode})"))
     elif dur < 1800:
         out.append(_crit("burn_present", 4, "Sustained load applied", "WARN",
-                         f"{tool} for {int(dur)}s, below the 1800s the spec asks for"))
+                         f"{tool} for {int(dur)}s, below the 1800s the spec asks for; "
+                         "per-GPU load coverage not reported"))
     else:
         out.append(_crit("burn_present", 4, "Sustained load applied", "PASS",
-                         f"{tool} for {int(dur)}s ({mode})"))
+                         f"{tool} for {int(dur)}s ({mode}); "
+                         "per-GPU load coverage not reported"))
 
     th = (burn_tel or {}).get("throttle_samples")
     if not isinstance(th, dict):
