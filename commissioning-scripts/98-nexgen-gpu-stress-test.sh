@@ -1,8 +1,9 @@
 #!/bin/bash
-# --- Start MAAS Metadata ---
+# --- Start MAAS 1.0 script metadata ---
 # name: 98-nexgen-gpu-stress-test
 # title: NexGen GPU Stress Test (DCGM Diagnostics)
-# description: Runs DCGM diagnostics at configurable levels (1-4).
+# description: >-
+#   Runs DCGM diagnostics at configurable levels (1-4).
 #   Requires 90-nexgen-gpu-install to have installed DCGM 4.x.
 #   Level 1: ~1 min quick check. Level 4: ~90 min full validation.
 #   Override level: DCGM_DIAG_LEVEL=4
@@ -12,7 +13,7 @@
 # timeout: 02:00:00
 # destructive: false
 # may_reboot: false
-# --- End MAAS Metadata ---
+# --- End MAAS 1.0 script metadata ---
 
 set -o pipefail
 trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR

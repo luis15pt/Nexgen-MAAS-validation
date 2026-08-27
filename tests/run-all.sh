@@ -12,6 +12,9 @@ done
 python3 -m py_compile reporting/device_certificate.py \
     && echo "  ok    reporting/device_certificate.py" || rc=1
 
+hdr "MAAS metadata block is parseable by MAAS"
+python3 tests/validate-maas-metadata.py || rc=1
+
 hdr "Script stdout must be parseable JSON with nothing leaked ahead of it"
 export PATH="$PWD/tests/stubs:$PATH" STUB_GPU_COUNT=2
 rm -f /tmp/stub-*

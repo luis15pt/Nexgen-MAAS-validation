@@ -1,8 +1,9 @@
 #!/bin/bash
-# --- Start MAAS Metadata ---
+# --- Start MAAS 1.0 script metadata ---
 # name: 92-nexgen-gpu-inventory
 # title: NexGen GPU Inventory & Health Check
-# description: Collects GPU inventory (serials, UUIDs, VRAM, ECC counters,
+# description: >-
+#   Collects GPU inventory (serials, UUIDs, VRAM, ECC counters,
 #   PCIe link status, NUMA topology) using a single bulk nvidia-smi query.
 #   Runs before any load phase, so its counters are the pre-load delivery
 #   baseline. No packages installed -- requires 90-nexgen-gpu-install first.
@@ -14,7 +15,7 @@
 # timeout: 00:05:00
 # destructive: false
 # may_reboot: false
-# --- End MAAS Metadata ---
+# --- End MAAS 1.0 script metadata ---
 
 set -o pipefail
 trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR

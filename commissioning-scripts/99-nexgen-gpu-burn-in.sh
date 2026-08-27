@@ -1,8 +1,9 @@
 #!/bin/bash
-# --- Start MAAS Metadata ---
+# --- Start MAAS 1.0 script metadata ---
 # name: 99-nexgen-gpu-burn-in
 # title: NexGen GPU Sustained Burn-In (optional)
-# description: Applies a sustained full-power load and records what the GPUs
+# description: >-
+#   Applies a sustained full-power load and records what the GPUs
 #   actually did under it: power, temperature, SM clock, throttle reasons, ECC
 #   and remapped-row deltas, PCIe replay deltas, and any Xid events raised
 #   during the window.  A DCGM diagnostic is a diagnostic, not a burn-in --
@@ -17,7 +18,7 @@
 # timeout: 01:30:00
 # destructive: false
 # may_reboot: false
-# --- End MAAS Metadata ---
+# --- End MAAS 1.0 script metadata ---
 
 set -o pipefail
 trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR

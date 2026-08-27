@@ -23,6 +23,7 @@ Nexgen-MAAS-validation/
 │   ├── run-stress-verdicts.sh              # DCGM verdict matrix
 │   ├── run-burnin-verdicts.sh              # Burn-in verdict matrix
 │   ├── run-acceptance.py                   # Acceptance adjudication matrix
+│   ├── validate-maas-metadata.py           # Metadata block parses as MAAS parses it
 │   ├── stubs/                              # Fake nvidia-smi, dcgmi, dmesg, lspci
 │   └── fixtures/                           # Captured and synthetic evidence
 ├── reports/                      # Generated reports (git-ignored)
@@ -388,6 +389,20 @@ Or see the source at [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/
 
 ## Adding Scripts to MAAS
 
+> **The embedded metadata block must use MAAS's exact delimiter.** MAAS matches
+> `# --- Start MAAS 1.0 script metadata ---` (regex:
+> `#\s*-+\s*(Start|End) MAAS \d+\.\d+ script metadata\s+-+`) and **silently
+> ignores** the block otherwise — no error, no warning. This repo shipped
+> `# --- Start MAAS Metadata ---` for a long time, so no title, description,
+> timeout or `hardware_type` was ever applied; the scripts still worked only
+> because `name` and `script_type` come from the upload command. Note the
+> `timeout` default is **0, meaning no timeout**, so the declared limits were not
+> being enforced either. `tests/validate-maas-metadata.py` now checks this.
+>
+> Because the block carries `name`, `name=` on the command line is now
+> redundant — but harmless as long as the two agree, which the validator
+> enforces.
+
 Upload the commissioning scripts via the MAAS CLI. **Before uploading the
 80- script**, edit its `NETBOX_URL` / `NETBOX_TOKEN` defaults (top of the
 file) -- MAAS does not inject per-script secrets:
@@ -467,7 +482,7 @@ The whole suite runs offline against fixtures and stub tooling — no GPU, no MA
 ./tests/run-all.sh
 ```
 
-It covers shell and Python syntax; that every script's stdout is parseable JSON
+It covers shell and Python syntax; that each script's MAAS metadata block parses the way MAAS parses it; that every script's stdout is parseable JSON
 with nothing leaked ahead of it; the stress-test verdict matrix; the burn-in
 matrix; the acceptance adjudication matrix; end-to-end report rendering;
 and an HTML well-formedness check.
