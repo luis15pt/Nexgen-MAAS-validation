@@ -44,7 +44,13 @@ get_smi_header_info() {
     header=$(nvidia-smi 2>/dev/null | head -5)
     SMI_DRIVER=$(echo "$header" | grep -oP 'Driver Version:\s*\K[0-9.]+' || echo "unknown")
     SMI_CUDA=$(echo "$header" | grep -oP 'CUDA Version:\s*\K[0-9.]+' || echo "unknown")
-    SMI_GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "0")
+    # No `|| echo "0"` fallback on this pipeline: --query-gpu=count prints one
+    # line per GPU, head -1 closes the pipe early, and under pipefail the
+    # fallback would append to the real value ("8\n0") rather than replace it.
+    # Sanitise the captured value instead.
+    SMI_GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | awk 'NR==1{print;exit}')
+    SMI_GPU_COUNT="${SMI_GPU_COUNT//[^0-9]/}"
+    SMI_GPU_COUNT="${SMI_GPU_COUNT:-0}"
 }
 
 ###############################################################################

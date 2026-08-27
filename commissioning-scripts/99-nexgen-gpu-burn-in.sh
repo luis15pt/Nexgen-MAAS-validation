@@ -52,7 +52,7 @@ BURN_MIN_SM_CLOCK_MHZ="${BURN_MIN_SM_CLOCK_MHZ:-}"
 BURN_MIN_POWER_W="${BURN_MIN_POWER_W:-}"
 GPU_BURN_REPO="${GPU_BURN_REPO:-https://github.com/wilicc/gpu-burn}"
 WORK_DIR="/tmp/gpu-burnin-$$"
-SCRIPT_VERSION="1.5.0"
+SCRIPT_VERSION="1.6.0"
 
 # Xid events the acceptance spec treats as disqualifying.  Others (13, 31, 43)
 # are typically application faults raised by the load itself, not hardware.
@@ -73,7 +73,13 @@ get_smi_header_info() {
     header=$(nvidia-smi 2>/dev/null | head -5)
     SMI_DRIVER=$(echo "$header" | grep -oP 'Driver Version:\s*\K[0-9.]+' || echo "unknown")
     SMI_CUDA=$(echo "$header" | grep -oP 'CUDA Version:\s*\K[0-9.]+' || echo "unknown")
-    SMI_GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "0")
+    # No `|| echo "0"` fallback on this pipeline: --query-gpu=count prints one
+    # line per GPU, head -1 closes the pipe early, and under pipefail the
+    # fallback would append to the real value ("8\n0") rather than replace it.
+    # Sanitise the captured value instead.
+    SMI_GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | awk 'NR==1{print;exit}')
+    SMI_GPU_COUNT="${SMI_GPU_COUNT//[^0-9]/}"
+    SMI_GPU_COUNT="${SMI_GPU_COUNT:-0}"
 }
 
 fail_json() {
@@ -118,6 +124,51 @@ detect_throttle_fields() {
 }
 
 ###############################################################################
+# ARTIFACT CAPTURE
+###############################################################################
+# Two hard limits shape how artifacts reach the report.
+#
+# 1. Linux caps a SINGLE argv entry at MAX_ARG_STRLEN (32 pages = 131072 bytes).
+#    Passing a base64 blob through `jq --arg` therefore fails with E2BIG once the
+#    blob crosses ~128 KB.  This is not hypothetical: a 300 s gpu-burn run leaves
+#    a ~1.6 MB log, whose base64 is ~2.2 MB, and the report jq died with
+#    "Argument list too long".  Because this script sets pipefail but not -e, it
+#    then walked past the failure and printed "Verdict: PASS" with no JSON report
+#    at all.  Blobs now reach jq through --rawfile, which takes a path.
+# 2. gpu-burn redraws progress with carriage returns, so most of that 1.6 MB is
+#    overwritten progress lines.  The part worth keeping is the TAIL: the per-GPU
+#    OK/FAULTY summary -- gpu-burn's actual verdict -- is printed last.
+ARTIFACT_MAX_BYTES="${ARTIFACT_MAX_BYTES:-131072}"
+
+# Bounded base64 of $2 into $1. Always creates $1 so --rawfile has a file to
+# read even when the source is missing or empty.
+b64_file_bounded() {
+    local dest="$1" src="$2" max="${3:-$ARTIFACT_MAX_BYTES}"
+    : > "$dest"
+    [[ -s "$src" ]] || return 0
+    tr -s '\r' '\n' < "$src" 2>/dev/null | tail -c "$max" | base64 2>/dev/null \
+        | tr -d '\n' > "$dest" || true
+}
+
+# Echo a log to stderr, biased to the tail so a summary printed last survives.
+# The previous `head -c` kept the first 500 KB and threw away exactly the lines
+# that carry gpu-burn's per-GPU verdict.
+dump_tail_biased() {
+    local f="$1" max="${2:-262144}" head_keep=2048 sz
+    [[ -s "$f" ]] || return 0
+    sz=$(wc -c < "$f" 2>/dev/null | tr -d ' ') ; sz="${sz:-0}"
+    if (( sz <= max )); then
+        cat "$f" >&2
+        return 0
+    fi
+    head -c "$head_keep" "$f" >&2 2>/dev/null || true
+    printf '\n...[%d bytes elided; the tail follows, because the per-GPU summary is printed last]...\n' \
+        "$(( sz - max - head_keep ))" >&2
+    tail -c "$max" "$f" >&2 2>/dev/null || true
+    printf '\n' >&2
+}
+
+###############################################################################
 # PRE/POST COUNTER SNAPSHOT
 ###############################################################################
 # Probe each counter field once and keep only those this driver accepts.  A
@@ -141,8 +192,10 @@ probe_counter_fields() {
         fi
     done
     if [[ -n "$SNAP_MISSING" ]]; then
-        warn "Counter fields unsupported on driver ${SMI_DRIVER}: $SNAP_MISSING"
-        warn "  Their deltas will be reported as null rather than losing the whole snapshot."
+        log "Counter fields unsupported on driver ${SMI_DRIVER}: $SNAP_MISSING"
+        log "  Dropped from the query rather than losing the whole snapshot; their"
+        log "  deltas report as null. PCIe replays are read separately from"
+        log "  'nvidia-smi -q' (Replays Since Reset), so that counter is unaffected."
     fi
     log "Counter snapshot fields: $SNAP_FIELDS"
 }
@@ -273,7 +326,19 @@ build_gpu_burn() {
         warn "  git clone failed (no outbound network to ${GPU_BURN_REPO}?)"
         return 1
     fi
-    if ! make -C "$WORK_DIR/gpu-burn" CUDAPATH="$cudapath" >&2 2>&1; then
+    # gpu-burn's Makefile defaults to COMPUTE=75 (Turing).  Left alone it builds
+    # the compare kernel as compute_75 PTX, which JITs and runs on an H100 but is
+    # not native to the device under test -- and that kernel is what detects
+    # arithmetic faults, so it is the last thing to leave mismatched.
+    local cc compute=""
+    cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    if [[ "$cc" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+        compute="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+        log "  Compute capability $cc -- building with COMPUTE=$compute"
+    else
+        warn "  Could not read compute_cap -- leaving gpu-burn's default architecture"
+    fi
+    if ! make -C "$WORK_DIR/gpu-burn" CUDAPATH="$cudapath" ${compute:+COMPUTE="$compute"} >&2 2>&1; then
         warn "  make failed"
         return 1
     fi
@@ -298,7 +363,7 @@ apply_load() {
         ( cd "$LOAD_DIR" && timeout "$ceiling" "$LOAD_BIN" $BURN_GPU_BURN_ARGS "$BURN_DURATION" ) \
             > "$WORK_DIR/gpu-burn.out" 2>&1 || rc=$?
         log "  ---------- begin gpu-burn output ----------"
-        head -c 500000 "$WORK_DIR/gpu-burn.out" >&2 2>/dev/null || true
+        dump_tail_biased "$WORK_DIR/gpu-burn.out"
         log "  ---------- end gpu-burn output ----------"
         return $rc
     fi
@@ -313,7 +378,7 @@ apply_load() {
             > "$WORK_DIR/diag.json" 2>"$WORK_DIR/diag.err" || rc=$?
         # Retain both streams in the MAAS commissioning log.
         log "  ---------- begin dcgmi diag output ----------"
-        head -c 500000 "$WORK_DIR/diag.json" >&2 2>/dev/null || true
+        dump_tail_biased "$WORK_DIR/diag.json"
         [[ -s "$WORK_DIR/diag.err" ]] && head -c 100000 "$WORK_DIR/diag.err" >&2
         log "  ---------- end dcgmi diag output ----------"
         return $rc
@@ -366,11 +431,32 @@ parse_gpu_burn_results() {
 }
 
 # Highest "errors: N" seen in the run, which is non-zero only on a real fault.
+#
+# Computed in a single awk pass, deliberately without a pipeline. The previous
+# form was:
+#     grep -oE ... | grep -oE '[0-9]+' | sort -rn | head -1 || echo "0"
+# which is racy under `set -o pipefail`: once the input is long enough that sort
+# is still writing when head -1 closes the pipe, the pipeline exits non-zero,
+# `|| echo "0"` ALSO fires, and the function returns "0\n0". That is not valid
+# JSON, so --argjson rejected it and took the entire report down with it -- and
+# the same string made [[ ... -gt 0 ]] raise an arithmetic syntax error. Short
+# gpu-burn logs never raced, so this stayed hidden until a long run.
 gpu_burn_error_total() {
-    local out="$WORK_DIR/gpu-burn.out"
+    local out="$WORK_DIR/gpu-burn.out" n
     [[ -s "$out" ]] || { echo "0"; return; }
-    grep -oE 'errors:[[:space:]]*[0-9]+' "$out" 2>/dev/null \
-        | grep -oE '[0-9]+' | sort -rn | head -1 || echo "0"
+    n=$(awk '{
+            line = $0
+            while (match(line, /errors:[[:space:]]*[0-9]+/)) {
+                tok = substr(line, RSTART, RLENGTH)
+                gsub(/[^0-9]/, "", tok)
+                if (tok + 0 > m) m = tok + 0
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }
+        END { printf "%d", m + 0 }' "$out" 2>/dev/null)
+    # Never let a malformed value reach --argjson.
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    echo "$n"
 }
 
 ###############################################################################
@@ -799,19 +885,44 @@ main() {
     local telemetry
     telemetry=$(aggregate_samples "$WORK_DIR/samples.csv" "$have_throttle")
 
+    # SNAP_FIELDS is DISCOVERED at runtime (probe_counter_fields drops whatever
+    # the driver rejects), so column positions are not fixed.  An earlier version
+    # read $1..$6 blind.  On driver 595 pcie.replay_counter is unsupported and
+    # gets dropped, which shifted every later column: the remapped-row values
+    # landed under the wrong keys and remapped_rows_uncorrectable_delta became
+    # permanently null -- silently disabling the FAIL gate below that depends on
+    # it.  Columns are therefore resolved by NAME.
     local deltas
-    deltas=$(awk -F',' '
+    deltas=$(awk -F',' -v FIELDS="$SNAP_FIELDS" '
         function trim(s){gsub(/^[ \t]+|[ \t]+$/,"",s);return s}
         function num(s){s=trim(s); return (s ~ /^-?[0-9.]+$/) ? s+0 : ""}
-        NR==FNR { i=num($1); if(i!="") {pce[i]=num($2); puce[i]=num($3); prep[i]=num($4); prc[i]=num($5); pru[i]=num($6)} ; next }
-        { i=num($1); if(i=="") next
-          printf "%s{\"gpu_index\":%d", (started++?",":"["), i
-          printf ",\"ecc_corrected_aggregate_delta\":%s",   (pce[i]!=""&&num($2)!="") ? num($2)-pce[i]  : "null"
-          printf ",\"ecc_uncorrected_aggregate_delta\":%s", (puce[i]!=""&&num($3)!="")? num($3)-puce[i] : "null"
-          printf ",\"pcie_replay_delta\":%s",               (prep[i]!=""&&num($4)!="")? num($4)-prep[i] : "null"
-          printf ",\"remapped_rows_correctable_delta\":%s", (prc[i]!=""&&num($5)!="") ? num($5)-prc[i]  : "null"
-          printf ",\"remapped_rows_uncorrectable_delta\":%s",(pru[i]!=""&&num($6)!="")? num($6)-pru[i]  : "null"
-          printf "}" }
+        function fld(name,   c){ c=col[name]; return (c==0) ? "" : num($c) }
+        function d(name, prev,   v){ v=fld(name); return (prev!="" && v!="") ? v-prev : "null" }
+        BEGIN {
+            n = split(FIELDS, fn, ",")
+            for (c = 1; c <= n; c++) { col[trim(fn[c])] = c }
+            IDX = "index"
+            CE  = "ecc.errors.corrected.aggregate.total"
+            UCE = "ecc.errors.uncorrected.aggregate.total"
+            REP = "pcie.replay_counter"
+            RC  = "remapped_rows.correctable"
+            RU  = "remapped_rows.uncorrectable"
+        }
+        NR==FNR {
+            i = fld(IDX); if (i=="") next
+            pce[i]=fld(CE); puce[i]=fld(UCE); prep[i]=fld(REP); prc[i]=fld(RC); pru[i]=fld(RU)
+            next
+        }
+        {
+            i = fld(IDX); if (i=="") next
+            printf "%s{\"gpu_index\":%d", (started++?",":"["), i
+            printf ",\"ecc_corrected_aggregate_delta\":%s",     d(CE,  pce[i])
+            printf ",\"ecc_uncorrected_aggregate_delta\":%s",   d(UCE, puce[i])
+            printf ",\"pcie_replay_delta\":%s",                 d(REP, prep[i])
+            printf ",\"remapped_rows_correctable_delta\":%s",   d(RC,  prc[i])
+            printf ",\"remapped_rows_uncorrectable_delta\":%s", d(RU,  pru[i])
+            printf "}"
+        }
         END { printf "%s", (started?"]":"[]") }
     ' "$WORK_DIR/pre.csv" "$WORK_DIR/post.csv")
     [[ -z "$deltas" ]] && deltas="[]"
@@ -827,6 +938,21 @@ main() {
         overall="FAIL"
         issues=$(printf '%s' "$issues" | jq --argjson n "$bad_delta" \
             '. + [{"issue":"\($n) GPU(s) gained uncorrectable ECC errors or uncorrectable remapped rows during sustained load","severity":"critical"}]')
+    fi
+
+    # A gate cannot pass on evidence it never saw.  If the driver did not report
+    # a counter the gate above depends on, say so rather than letting the null
+    # read as a clean delta.
+    local blind
+    blind=$(printf '%s' "$deltas" | jq '[.[] | select(
+        .ecc_uncorrected_aggregate_delta == null or
+        .remapped_rows_uncorrectable_delta == null
+    )] | length')
+    if [[ "${blind:-0}" -gt 0 ]]; then
+        [[ "$overall" == "PASS" ]] && overall="WARN"
+        issues=$(printf '%s' "$issues" | jq --argjson n "$blind" \
+            '. + [{"issue":"\($n) GPU(s) have no uncorrectable ECC or uncorrectable remapped-row delta for the load window -- the driver did not report the counter, so sustained load is not evidenced for those cards","severity":"warning"}]')
+        warn "Counter deltas unavailable for $blind GPU(s) -- the load-window memory gate could not be evaluated for them"
     fi
 
     # --- throttle + clock assessment ------------------------------------
@@ -995,13 +1121,17 @@ main() {
             '. + [{"issue":"Error counters went backwards since the pre-load baseline -- something cleared them mid-sequence, so the comparison cannot evidence memory health","severity":"warning"}]')
     fi
 
-    local xid_b64 diag_b64="" burn_b64=""
-    xid_b64=$(grep -iE 'NVRM|Xid' "$WORK_DIR/dmesg-window.txt" 2>/dev/null | base64 2>/dev/null | tr -d '\n' || true)
-    [[ -s "$WORK_DIR/diag.json" ]] && \
-        diag_b64=$(base64 < "$WORK_DIR/diag.json" 2>/dev/null | tr -d '\n' || true)
-    [[ -s "$WORK_DIR/gpu-burn.out" ]] && \
-        burn_b64=$(base64 < "$WORK_DIR/gpu-burn.out" 2>/dev/null | tr -d '\n' || true)
+    # Artifacts are bounded and passed by PATH, not by argv -- see ARTIFACT CAPTURE.
+    local xid_txt="$WORK_DIR/xid-window.txt"
+    local xid_b64f="$WORK_DIR/xid.b64"
+    local diag_b64f="$WORK_DIR/diag.b64"
+    local burn_b64f="$WORK_DIR/burn.b64"
+    grep -iE 'NVRM|Xid' "$WORK_DIR/dmesg-window.txt" > "$xid_txt" 2>/dev/null || : > "$xid_txt"
+    b64_file_bounded "$xid_b64f"  "$xid_txt"
+    b64_file_bounded "$diag_b64f" "$WORK_DIR/diag.json"
+    b64_file_bounded "$burn_b64f" "$WORK_DIR/gpu-burn.out"
 
+    local report="$WORK_DIR/report.json" report_err="$WORK_DIR/report.err"
     jq -n \
         --arg ver "$SCRIPT_VERSION" --arg name "gpu-burn-in" \
         --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
@@ -1011,8 +1141,8 @@ main() {
         --argjson gpus "${SMI_GPU_COUNT:-0}" \
         --arg tool "$tool" --arg mode "$BURN_MODE" \
         --arg loadmode "${LOAD_MODE:-none}" \
-        --arg diagraw "$diag_b64" \
-        --arg burnraw "$burn_b64" \
+        --rawfile diagraw "$diag_b64f" \
+        --rawfile burnraw "$burn_b64f" \
         --argjson burnres "${burn_results:-[]}" \
         --argjson burnerrs "${burn_errors:-0}" \
         --argjson counters "${POST_COUNTERS:-null}" \
@@ -1020,7 +1150,7 @@ main() {
         --argjson load_exit "$load_exit" \
         --argjson telemetry "$telemetry" --argjson deltas "$deltas" \
         --argjson xidcrit "$xid_crit" --argjson xidother "$xid_other" \
-        --arg xidraw "$xid_b64" \
+        --rawfile xidraw "$xid_b64f" \
         --arg tbase "${THROTTLE_BASE:-unavailable}" \
         '{
             report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts, duration_seconds:$dur},
@@ -1041,7 +1171,33 @@ main() {
                 gpu_burn_output_b64:$burnraw,
                 counters_since_baseline:$counters
             }
-        }'
+        }' > "$report" 2>"$report_err" || true
+
+    # The JSON report IS the deliverable: the certificate is generated from it.
+    # If it could not be assembled, this run evidences nothing, and saying PASS
+    # would be a lie -- which is exactly what happened when the report jq hit
+    # E2BIG and the script carried on to exit 0.
+    if [[ -s "$report" ]] && jq empty "$report" >/dev/null 2>&1; then
+        cat "$report"
+    else
+        overall="FAIL"
+        err "Could not assemble the JSON burn-in report -- reporting FAIL rather than an unevidenced PASS"
+        [[ -s "$report_err" ]] && { err "  jq said:"; head -5 "$report_err" >&2; }
+        jq -n \
+            --arg ver "$SCRIPT_VERSION" --arg name "gpu-burn-in" \
+            --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            --arg drv "${SMI_DRIVER:-unknown}" --arg cuda "${SMI_CUDA:-unknown}" \
+            --argjson gpus "${SMI_GPU_COUNT:-0}" \
+            --arg mode "$BURN_MODE" --arg tool "$tool" \
+            '{
+                report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts},
+                verdict:{overall:"FAIL", issues:[{
+                    issue:"The burn-in report could not be assembled, so this run evidences nothing -- see the commissioning log for the underlying error",
+                    severity:"critical"}]},
+                system:{nvidia_driver_version:$drv, cuda_version:$cuda, gpu_count:$gpus},
+                burn_in:{tool:$tool, mode:$mode, report_assembly_failed:true}
+            }'
+    fi
 
     log "=========================================="
     log "Burn-in complete -- Verdict: $overall"

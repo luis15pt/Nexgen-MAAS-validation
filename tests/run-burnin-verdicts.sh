@@ -94,4 +94,74 @@ else
 fi
 rm -f "$llog"
 
+
+# Both of these are regressions from a real 8-GPU H100 run on driver 595.71.05.
+echo "Report assembly under a large artifact (MAX_ARG_STRLEN):"
+rm -f /tmp/stub-*
+o=$(env STUB_GPU_COUNT=2 STUB_GPU_BURN_BLOAT=1 BURN_TOOL=gpu-burn BURN_DURATION=2 \
+        BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 STUB_LOADED_GPUS=0,1 \
+        STUB_POWER_LOADED=340.00 bash "$SCRIPT" 2>/dev/null)
+# The real failure: base64 of gpu-burn's log exceeded a single argv entry's
+# 131072-byte cap, jq never ran, and the script still printed "Verdict: PASS"
+# with no JSON at all.
+if printf '%s' "$o" | jq empty 2>/dev/null; then
+    v=$(printf '%s' "$o" | jq -r '.verdict.overall')
+    n=$(printf '%s' "$o" | jq '.burn_in.gpu_burn_results | length')
+    b=$(printf '%s' "$o" | jq -r '.burn_in.gpu_burn_output_b64 | length')
+    if [[ "$v" == "PASS" && "$n" == "2" && "$b" -gt 0 ]]; then
+        printf '  ok    oversized gpu-burn log still yields valid JSON (verdict=%s, %s results, %s b64 bytes)\n' "$v" "$n" "$b"
+    else
+        printf '  FAIL  verdict=%s results=%s b64=%s\n' "$v" "$n" "$b"; rc=1
+    fi
+else
+    printf '  FAIL  no valid JSON emitted for an oversized gpu-burn log\n'; rc=1
+fi
+
+# Same oversized log, but with a real error count buried in it. Guards the
+# single-pass max: the old `... | sort -rn | head -1 || echo "0"` raced under
+# pipefail and returned "0\n0", which is invalid JSON and killed the report.
+rm -f /tmp/stub-*
+o=$(env STUB_GPU_COUNT=2 STUB_GPU_BURN_BLOAT=1 STUB_GPU_BURN_ERRORS=17 \
+        BURN_TOOL=gpu-burn BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 \
+        STUB_LOADED_GPUS=0,1 STUB_POWER_LOADED=340.00 \
+        bash "$SCRIPT" 2>/dev/null)
+v=$(printf '%s' "$o" | jq -r '.verdict.overall' 2>/dev/null)
+e=$(printf '%s' "$o" | jq -r '.burn_in.gpu_burn_error_count' 2>/dev/null)
+if [[ "$v" == "FAIL" && "$e" == "17" ]]; then
+    printf '  ok    error count survives a 250KB log of "errors: 0" (verdict=%s, count=%s)\n' "$v" "$e"
+else
+    printf '  FAIL  oversized log with errors: verdict=%s count=%s (want FAIL/17)\n' "$v" "$e"; rc=1
+fi
+
+echo "Counter columns resolved by name, not position:"
+# Driver 595 rejects pcie.replay_counter, so it is dropped from the query and
+# every later column shifts. Reading $4..$6 blind put remapped-row values under
+# the wrong keys and left remapped_rows_uncorrectable_delta permanently null,
+# which silently disabled the FAIL gate that depends on it.
+rm -f /tmp/stub-*
+o=$(env STUB_GPU_COUNT=2 STUB_NO_REPLAY_FIELD=1 BURN_DURATION=2 \
+        BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 STUB_LOADED_GPUS=0,1 \
+        STUB_POWER_LOADED=340.00 STUB_REMAP_UCE_POST=1 bash "$SCRIPT" 2>/dev/null)
+v=$(printf '%s' "$o" | jq -r '.verdict.overall' 2>/dev/null)
+ru=$(printf '%s' "$o" | jq -r '.burn_in.counter_deltas[0].remapped_rows_uncorrectable_delta' 2>/dev/null)
+rp=$(printf '%s' "$o" | jq -r '.burn_in.counter_deltas[0].pcie_replay_delta' 2>/dev/null)
+if [[ "$v" == "FAIL" && "$ru" == "1" && "$rp" == "null" ]]; then
+    printf '  ok    replay field absent: remap gate still fires (verdict=%s, remapUCE delta=%s, replay=%s)\n' "$v" "$ru" "$rp"
+else
+    printf '  FAIL  verdict=%s remapUCE=%s replay=%s (want FAIL/1/null)\n' "$v" "$ru" "$rp"; rc=1
+fi
+
+rm -f /tmp/stub-*
+o=$(env STUB_GPU_COUNT=2 STUB_NO_REPLAY_FIELD=1 BURN_DURATION=2 \
+        BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 STUB_LOADED_GPUS=0,1 \
+        STUB_POWER_LOADED=340.00 bash "$SCRIPT" 2>/dev/null)
+v=$(printf '%s' "$o" | jq -r '.verdict.overall' 2>/dev/null)
+# A missing replay counter is not a gate input, so it must not degrade a clean run.
+if [[ "$v" == "PASS" ]]; then
+    printf '  ok    replay field absent on a clean run does not degrade the verdict\n'
+else
+    printf '  FAIL  clean run with no replay field -> %s, want PASS\n' "$v"
+    printf '%s' "$o" | jq -r '.verdict.issues[]?.issue' | sed 's/^/          /'; rc=1
+fi
+
 exit $rc

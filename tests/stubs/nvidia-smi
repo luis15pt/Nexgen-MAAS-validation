@@ -29,13 +29,20 @@ fi
 
 if [[ "$args" == *--query-gpu=* ]]; then
   fields="${args#*--query-gpu=}"; fields="${fields%% *}"
+  # Driver 595 rejects pcie.replay_counter. Reject it here too, so the script's
+  # field probe drops it and the pre/post CSV really does come back one column
+  # short -- the condition that shifted every later column.
+  if [[ -n "$STUB_NO_REPLAY_FIELD" && "$fields" == *pcie.replay_counter* ]]; then
+    echo "Field \"pcie.replay_counter\" is not a valid field to query." >&2
+    exit 6
+  fi
   _only=""
   if [[ "$args" =~ (^|[[:space:]])-i[[:space:]]+([0-9]+) ]]; then _only="${BASH_REMATCH[2]}"; fi
   # Snapshot query signature: serve POST values from the 2nd call onward.
   # Must NOT match the single-field capability probes, which query one field at a
   # time -- otherwise probing consumes the pre/post transition.
   if [[ "$fields" == *ecc.errors.corrected.aggregate.total* \
-     && "$fields" == *pcie.replay_counter* ]]; then
+     && "$fields" == *remapped_rows.uncorrectable* ]]; then
     _m="${STUB_SNAP_MARKER:-/tmp/stub-snap-called.$PPID}"
     if [[ -e "$_m" ]]; then
       STUB_ECC_UCE_AGG="${STUB_ECC_UCE_AGG_POST:-${STUB_ECC_UCE_AGG:-0}}"

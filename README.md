@@ -261,6 +261,7 @@ typically application faults raised by the load itself.
 | `BURN_SAMPLE_INTERVAL` | `10` | Seconds between telemetry samples |
 | `BURN_LOADED_POWER_FRAC` | `0.5` | Fraction of a GPU's own power limit that counts as "under load" |
 | `BURN_COVERAGE_FRAC` | `0.9` | Fraction of `BURN_DURATION` each GPU must actually spend under load |
+| `ARTIFACT_MAX_BYTES` | `131072` | Bytes of each raw log retained (base64) in the JSON report, kept from the **tail** |
 
 **Load coverage is measured per GPU, not per run.** A real run had
 `dcgmproftester` cover four of eight cards for the full window and the other four

@@ -11,6 +11,11 @@ done
 [[ -n "$STUB_LOADED_FILE" ]] && for ((g=0; g<N; g++)); do echo "$g" >> "$STUB_LOADED_FILE"; done
 [[ -n "$STUB_LOAD_LOG" ]] && echo "gpu-burn-all" >> "$STUB_LOAD_LOG"
 sleep "${STUB_LOAD_SLEEP:-1}"
+# Mimic gpu-burn's progress redraw. A real 300s run leaves ~1.6MB of mostly
+# carriage-return-overwritten lines, whose base64 blew past MAX_ARG_STRLEN.
+if [[ -n "$STUB_GPU_BURN_BLOAT" ]]; then
+  awk 'BEGIN{for(i=0;i<4000;i++) printf "%d.%d%%  proc%cd: %d (35942 Gflop/s) - errors: 0 - temps: 71 C\r", i/40, i%10, 39, i*7}'
+fi
 echo "100.0%  proc'd: 4096 (398000 Gflop/s)   errors: ${STUB_GPU_BURN_ERRORS:-0}   temps: 71 C"
 report="${STUB_GPU_BURN_PARTIAL:-$N}"
 echo "Tested $N GPUs:"
