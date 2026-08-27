@@ -73,7 +73,7 @@ _load_dotenv()
 
 # Stages whose absence makes a report incomplete rather than merely partial.
 # Install alone proves nothing about the hardware's health.
-REQUIRED_STAGES = ("Inventory", "Stress Test")
+REQUIRED_STAGES = ("Inventory", "DCGM Diagnostics")
 
 # Map short names used internally to the MAAS script names
 SCRIPT_ALIASES = {
@@ -641,7 +641,7 @@ def _check_memory(gpu, cfg=None):
     return out
 
 
-def _check_pcie(gpu, burn_gpu):
+def _check_pcie(gpu, burn_gpu, burn_csb=None, burn_ran=None):
     out = []
     p = gpu.get("pcie") or {}
     w_max = _n(p.get("width_max")) or _n(gpu.get("pcie_width_max"))
@@ -684,7 +684,15 @@ def _check_pcie(gpu, burn_gpu):
                              "FAIL",
                              f"negotiated Gen{int(neg_max)} below the Gen{int(ceiling)} both ends support"))
 
+    # The burn-in derives this delta twice. counter_deltas comes from the CSV
+    # --query-gpu path, where driver 595 does not support pcie.replay_counter at
+    # all, so the value is null there. counters_since_baseline comes from
+    # `nvidia-smi -q` ("Replays Since Reset"), which does work on 595 -- the
+    # burn-in log prints "replay+0" from it. Prefer the CSV value, fall back to
+    # the one that survives on this driver rather than reporting no evidence.
     delta = _n((burn_gpu or {}).get("pcie_replay_delta"))
+    if delta is None:
+        delta = _n((burn_csb or {}).get("replay_delta"))
     abs_replay = _n(p.get("replays_since_reset"))
     if delta is not None:
         if delta > ACCEPTANCE_REPLAY_DELTA_LIMIT:
@@ -694,8 +702,14 @@ def _check_pcie(gpu, burn_gpu):
             out.append(_crit("pcie_replay", 7, "PCIe replay counter stable under load",
                              "PASS", f"+{int(delta)} replays across the load window"))
     elif abs_replay is not None:
+        # "burn-in not run" is the wrong explanation once it HAS run and the
+        # driver simply did not report the counter.
+        if burn_ran:
+            why = "the driver reported no load-window replay delta"
+        else:
+            why = "no load window (burn-in not run)"
         out.append(_crit("pcie_replay", 7, "PCIe replay counter stable under load",
-                         "WARN", f"{int(abs_replay)} since reset; no load-window delta (burn-in not run)"))
+                         "WARN", f"{int(abs_replay)} since reset; {why}"))
     else:
         out.append(_crit("pcie_replay", 7, "PCIe replay counter stable under load",
                          "N/A", "replay counter not reported"))
@@ -1067,11 +1081,13 @@ def evaluate_gpu_acceptance(gpu, stress, burn, config=None, context=None):
     b = (burn or {}).get("burn_in") or {}
     tel = _by_index(b.get("telemetry")).get(idx)
     delta = _by_index(b.get("counter_deltas")).get(idx)
+    csb_delta = _by_index(
+        (b.get("counters_since_baseline") or {}).get("deltas")).get(idx)
 
     criteria = []
     criteria += _check_identity(gpu)
     criteria += _check_memory(gpu, cfg)
-    criteria += _check_pcie(gpu, delta)
+    criteria += _check_pcie(gpu, delta, csb_delta, bool(b))
     criteria += _check_stress(idx, stress, _stress_results_for_gpu(stress, idx), context)
     criteria += _check_burn(idx, burn, tel, delta, context)
     criteria += _check_cumulative(idx, stress, burn)
@@ -1625,6 +1641,69 @@ def extract_storage_details(machine: dict, machine_resources: dict | None) -> li
 # MAAS MACHINE DATA EXTRACTION
 # ---------------------------------------------------------------------------
 
+def parse_machine_resources_cpu(machine_resources: dict | None) -> dict:
+    """Physical CPU topology from MAAS machine-resources.
+
+    MAAS surfaces two different numbers and calls both "cores": the machine
+    summary shows logical CPUs (256 on a 2x64C/256T host) and each NUMA node
+    lists logical cpu ids. The nested resources blob is the only place the
+    physical layout survives:
+
+        cpu.sockets[].cores[].threads[]
+
+    so physical cores = sum of len(cores) over sockets, and threads = sum of
+    len(threads) over those cores.
+
+    Returns {} when the blob is absent or shaped differently, so callers can
+    fall back rather than assert a number they cannot support.
+    """
+    if not machine_resources:
+        return {}
+    cpu = None
+    for container in (machine_resources.get("resources") or {}, machine_resources):
+        candidate = (container or {}).get("cpu")
+        if isinstance(candidate, dict) and candidate.get("sockets"):
+            cpu = candidate
+            break
+    if not cpu:
+        return {}
+
+    sockets = cpu.get("sockets") or []
+    if not isinstance(sockets, list):
+        return {}
+
+    cores = 0
+    threads = 0
+    for sock in sockets:
+        sock_cores = (sock or {}).get("cores") or []
+        if not isinstance(sock_cores, list):
+            continue
+        cores += len(sock_cores)
+        for core in sock_cores:
+            core_threads = (core or {}).get("threads") or []
+            threads += len(core_threads) if isinstance(core_threads, list) else 0
+
+    if not cores:
+        return {}
+    out = {"sockets": len(sockets), "cores": cores}
+    if threads:
+        out["threads"] = threads
+    return out
+
+
+def cores_from_cpu_model(model: str, sockets: int) -> int:
+    """Physical cores inferred from the vendor's own part name.
+
+    Last resort, but a sound one: "AMD EPYC 9554 64-Core Processor" states the
+    per-socket core count, and MAAS prints that string right beside the logical
+    count it labels "cores".
+    """
+    if not model or sockets < 1:
+        return 0
+    m = re.search(r"(\d+)[- ]Core", str(model), re.IGNORECASE)
+    return int(m.group(1)) * sockets if m else 0
+
+
 def extract_pci_devices(machine_resources: dict | None) -> dict:
     """Extract PCI devices from machine-resources JSON, grouped by category.
     
@@ -1870,6 +1949,7 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
     log("Fetching machine-resources data...")
     machine_resources = client.get_machine_resources(system_id)
     pci_devices = {"network": [], "storage": []}
+    cpu_topology: dict = {}
     if machine_resources:
         log(f"  machine-resources: loaded ({len(machine_resources)} top-level keys)")
         # Enrich DIMM data from machine-resources if lshw failed
@@ -1879,6 +1959,11 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
                 log(f"  DIMMs (from machine-resources): {len(dimms)} slots")
         # Extract PCI devices
         pci_devices = extract_pci_devices(machine_resources)
+        cpu_topology = parse_machine_resources_cpu(machine_resources)
+        if cpu_topology:
+            log(f"  CPU topology: {cpu_topology.get('sockets')} socket(s), "
+                f"{cpu_topology.get('cores')} physical cores, "
+                f"{cpu_topology.get('threads', '?')} threads")
         log(f"  PCI network devices: {len(pci_devices['network'])}")
         log(f"  PCI storage devices: {len(pci_devices['storage'])}")
     else:
@@ -1988,6 +2073,7 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
         "numa_nodes_maas": numa_nodes,
         "dimms": dimms,
         "all_scripts": all_scripts,
+        "cpu_topology": cpu_topology,
         "system_id": system_id,
         "hostname": hostname,
         "fqdn": fqdn,
@@ -2748,6 +2834,7 @@ def generate_report(
     numa_nodes_maas: list[dict] | None = None,
     dimms: list[dict] | None = None,
     all_scripts: list[dict] | None = None,
+    cpu_topology: dict | None = None,
     hostname_override: str | None = None,
     config: dict | None = None,
     burnin: dict | None = None,
@@ -2795,7 +2882,7 @@ def generate_report(
 
     # Verdicts — collect issues first, filter false positives, then derive verdicts
     stages = [("Install", install), ("MIG/ECC", config), ("Inventory", inventory),
-              ("Stress Test", stress), ("Burn-In", burnin)]
+              ("DCGM Diagnostics", stress), ("Burn-In", burnin)]
     all_issues = []
     for label, data in stages:
         if data:
@@ -2939,9 +3026,20 @@ def generate_report(
     # per socket). MAAS's NUMA node "cores" lists hold LOGICAL cpu ids, so
     # summing them described a 2x64C/256T machine as "256 cores / 256 threads".
     # Without a physical figure we say "logical CPUs" rather than claim cores.
-    num_sockets = _as_int(sys_info.get("cpu_sockets")) or (
-        len(numa_nodes_maas) if numa_nodes_maas else 0)
-    total_cores = _as_int(sys_info.get("cpu_total_cores"))
+    topo = cpu_topology or {}
+    num_sockets = (_as_int(sys_info.get("cpu_sockets"))
+                   or _as_int(topo.get("sockets"))
+                   or (len(numa_nodes_maas) if numa_nodes_maas else 0))
+    # Three sources, most authoritative first, so a machine commissioned before
+    # script 92 started reporting cpu_total_cores still gets a correct figure:
+    #   1. the inventory script (lscpu: Socket(s) x Core(s) per socket)
+    #   2. machine-resources cpu.sockets[].cores[]  -- already in MAAS today
+    #   3. the vendor part name ("... 64-Core Processor") x socket count
+    total_cores = (_as_int(sys_info.get("cpu_total_cores"))
+                   or _as_int(topo.get("cores"))
+                   or cores_from_cpu_model(cpu_str, num_sockets))
+    if not total_threads:
+        total_threads = _as_int(topo.get("threads"))
     # Threads per core, so the NUMA blocks below can state physical cores as
     # well as the logical count MAAS shows.
     threads_per_core = 1
@@ -3831,6 +3929,7 @@ Examples:
             numa_nodes_maas=data["numa_nodes_maas"],
             dimms=data["dimms"],
             all_scripts=data["all_scripts"],
+            cpu_topology=data.get("cpu_topology"),
             hostname_override=data["hostname"],
         )
 

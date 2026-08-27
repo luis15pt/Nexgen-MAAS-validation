@@ -10,7 +10,8 @@
 #   exposes them.  Optional: simply do not upload this script to skip it.
 #   Runs last: it is the longest phase, so a failure earlier in the pipeline
 #   costs the least time. Requires 90-nexgen-gpu-install to have run first.
-#   Override: BURN_DURATION=1800 BURN_MODE=characterize|enforce BURN_TOOL=auto|dcgmproftester|gpu-burn
+#   Defaults: BURN_DURATION=3600 (1h) BURN_MODE=characterize BURN_TOOL=auto
+#   Raise the MAAS node timeout past ~80 min before running at this duration.
 # script_type: commissioning
 # hardware_type: gpu
 # timeout: 01:30:00
@@ -24,12 +25,20 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 ###############################################################################
 # CONFIG
 ###############################################################################
-# Seconds of sustained load. Set to 5 minutes to validate the pipeline end to
-# end; a real acceptance run needs >= 1800s, and the report deliberately marks
-# anything shorter for review rather than accepting it. Raise this once the
-# steps are confirmed -- the declared MAAS timeout (01:30:00) leaves room up to
-# roughly 80 minutes without touching the metadata.
-BURN_DURATION="${BURN_DURATION:-300}"
+# Seconds of sustained load. 3600 (1 hour) is double the 1800s the acceptance
+# spec asks for, chosen because 5 minutes is nowhere near thermal steady state:
+# on this chassis GPU temperatures were still climbing 30% into a 300s run.
+#
+# This is the knob that sets total commissioning time. MAAS gives commissioning
+# scripts no way to receive environment variables, so this default IS the
+# setting -- change it here and re-upload rather than expecting to override it
+# per run.
+#
+# Budget: with a 3600s burn the whole pipeline is roughly 75 minutes of scripts
+# plus ~4 minutes of PXE and ephemeral boot. Check MAAS's node timeout
+# (Settings > Configuration, default 30 minutes) before running this, or MAAS
+# will mark the machine failed while the burn-in is still working.
+BURN_DURATION="${BURN_DURATION:-3600}"
 BURN_SAMPLE_INTERVAL="${BURN_SAMPLE_INTERVAL:-10}"
 # A GPU counts as under load when it draws at least this fraction of its own
 # power limit. Used to prove the load actually reached every card.

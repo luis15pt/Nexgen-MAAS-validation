@@ -190,6 +190,79 @@ print(f"  FAIL  CPU labels {labels}, want {want}")
 sys.exit(1)
 PYEOF
 
+hdr "CPU core count survives a machine commissioned before script 92 changed"
+python3 - <<'PYEOF' || rc=1
+import sys, json, re
+sys.path.insert(0, "reporting")
+import device_certificate as dc
+
+PAT = re.compile(r"(\d+) cores / (\d+) threads")
+
+def resources(nested=True):
+    socks = [{"socket": i, "name": "AMD EPYC 9554 64-Core Processor",
+              "cores": [{"core": c, "threads": [{"id": c}, {"id": c + 128}]}
+                        for c in range(64)]} for i in range(2)]
+    cpu = {"architecture": "x86_64", "sockets": socks, "total": 256}
+    return {"resources": {"cpu": cpu}} if nested else {"cpu": cpu}
+
+rc = 0
+# Parser handles both shapes MAAS emits, and refuses to guess when absent.
+for nested in (True, False):
+    got = dc.parse_machine_resources_cpu(resources(nested))
+    if got != {"sockets": 2, "cores": 128, "threads": 256}:
+        print(f"  FAIL  machine-resources cpu parse (nested={nested}): {got}"); rc = 1
+for bad in (None, {}, {"cpu": {}}, {"cpu": {"sockets": "nope"}}):
+    if dc.parse_machine_resources_cpu(bad) != {}:
+        print(f"  FAIL  should not claim a topology from {bad!r}"); rc = 1
+if not rc:
+    print("  ok    machine-resources cpu.sockets[].cores[] parsed, junk declined")
+
+# The vendor part name is a sound last resort, but only when it states cores.
+cases = [("AMD EPYC 9554 64-Core Processor", 2, 128),
+         ("AMD EPYC 9754 128-Core Processor", 2, 256),
+         ("AMD EPYC 9554 64-Core Processor", 1, 64),
+         ("Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz", 2, 0),
+         ("", 2, 0)]
+bad = [(m, n, dc.cores_from_cpu_model(m, n)) for m, n, w in cases
+       if dc.cores_from_cpu_model(m, n) != w]
+if bad:
+    print(f"  FAIL  part-name core inference: {bad}"); rc = 1
+else:
+    print("  ok    part-name inference, and no claim when the name is silent")
+
+# End to end: inventory WITHOUT cpu_total_cores must still report 128, not 256.
+inv = json.load(open("tests/fixtures/reports/inventory-healthy.json"))
+inv["system"].update(dict(cpu_model="AMD EPYC 9554 64-Core Processor",
+                          cpu_sockets=2, cpu_total_threads=256))
+inv["system"].pop("cpu_total_cores", None)
+stress = json.load(open("tests/fixtures/reports/stress-pass.json"))
+numa = [{"index": 0, "memory_mb": 788480,
+         "cores": list(range(0, 64)) + list(range(128, 192))},
+        {"index": 1, "memory_mb": 788480,
+         "cores": list(range(64, 128)) + list(range(192, 256))}]
+for label, topo in [("via machine-resources", dc.parse_machine_resources_cpu(resources())),
+                    ("via part name only", None)]:
+    html = dc.generate_report(None, inv, stress, numa_nodes_maas=numa,
+                              machine={"cpu_count": 256}, cpu_topology=topo)
+    if PAT.findall(html)[:3] == [("128", "256"), ("64", "128"), ("64", "128")]:
+        print(f"  ok    128c/256t {label}, no cpu_total_cores needed")
+    else:
+        print(f"  FAIL  {label}: {PAT.findall(html)[:3]}"); rc = 1
+sys.exit(rc)
+PYEOF
+
+hdr "Stress stage is named after the tool it runs"
+python3 - <<'PYEOF' || rc=1
+import sys
+sys.path.insert(0, "reporting")
+import device_certificate as dc
+if "DCGM Diagnostics" in dc.REQUIRED_STAGES and "Stress Test" not in dc.REQUIRED_STAGES:
+    print("  ok    REQUIRED_STAGES names the DCGM stage")
+    sys.exit(0)
+print(f"  FAIL  REQUIRED_STAGES = {dc.REQUIRED_STAGES}")
+sys.exit(1)
+PYEOF
+
 hdr "Rendered HTML is well-formed"
 python3 - <<'PY' || rc=1
 from html.parser import HTMLParser

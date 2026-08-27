@@ -252,7 +252,7 @@ typically application faults raised by the load itself.
 
 | Env Override | Default | Description |
 |---|---|---|
-| `BURN_DURATION` | `300` | Seconds of sustained load. **5 minutes is a pipeline-validation setting**; acceptance needs ≥ 1800, and the report marks anything shorter for review rather than accepting it |
+| `BURN_DURATION` | `3600` | Seconds of sustained load. 1 hour, double the 1800 s the spec asks for, because 5 min is not thermal steady state. **Sets total commissioning time (~80 min) — raise the MAAS node timeout first** |
 | `BURN_MODE` | `characterize` | `characterize` measures and gates on nothing; `enforce` applies the floors below |
 | `BURN_TOOL` | `auto` | `auto` prefers `gpu-burn`; then `dcgmi-diag`; then `dcgmproftester` |
 | `BURN_GPU_BURN_ARGS` | (empty) | Extra gpu-burn flags — `-tc` for tensor cores, `-d` for double precision |
