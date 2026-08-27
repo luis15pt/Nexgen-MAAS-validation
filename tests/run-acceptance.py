@@ -291,6 +291,76 @@ def main():
                 if c["status"] != "PASS":
                     print(f"       {c['status']:5} #{c['reject']} {c['label']}: {c['detail']}")
 
+    # --- Context-dependent criteria -------------------------------------
+    # These three all come from a real report that read wrong: nvbandwidth
+    # skipped on a host with no NVLink, and a burn-in MAAS logged as
+    # "Passed 0:05:47" that the certificate described as "not run".
+    print("-" * 64)
+    print("Context-dependent criteria:")
+
+    def _stress_skipping(*skipped):
+        tests = [{"test": t, "results": [{"gpu_id": None, "status": "Pass", "info": ""}]}
+                 for t in ("diagnostic", "memory", "pcie")]
+        tests += [{"test": t, "results": [{"gpu_id": None, "status": "Skip", "info": ""}]}
+                  for t in skipped]
+        return {"dcgm_diagnostics": {"run_level": "3", "test_results": tests}}
+
+    def _crit_of(criteria, cid):
+        return next(c for c in criteria if c["id"] == cid)
+
+    stress_cases = [
+        # skipped tests,        nvlink_present, expected #5 status
+        (("nvbandwidth",),      False, "PASS",
+         "nvbandwidth skip excused when no NVLink is fitted"),
+        (("nvbandwidth",),      True,  "WARN",
+         "nvbandwidth skip NOT excused when NVLink is present"),
+        (("nvbandwidth",),      None,  "WARN",
+         "nvbandwidth skip NOT excused when NVLink is unknown"),
+        (("memory_bandwidth",), False, "WARN",
+         "an unrelated skip is never excused"),
+        (("nvbandwidth", "memory_bandwidth"), False, "WARN",
+         "excusing nvbandwidth still reports the other skip"),
+    ]
+    for skipped, nvlink, want, label in stress_cases:
+        rows = [{"test": t, "status": "Skip"} for t in skipped]
+        rows += [{"test": "diagnostic", "status": "Pass"}, {"test": "pcie", "status": "Pass"}]
+        got = _crit_of(dc._check_stress(0, _stress_skipping(*skipped), rows,
+                                       {"nvlink_present": nvlink}), "stress_present")["status"]
+        ok = got == want
+        if not ok:
+            rc = 1
+        print(f"{'ok  ' if ok else 'FAIL'} {label:52} {want:5} {got:5}")
+
+    burn_cases = [
+        (True,  "produced no parseable report",
+         "burn-in that ran but emitted nothing is not reported as 'not run'"),
+        (False, "not uploaded",
+         "burn-in never uploaded says so"),
+        (None,  "script not run, or produced no report",
+         "unknown provenance is not overstated either way"),
+    ]
+    for ran, needle, label in burn_cases:
+        detail = _crit_of(dc._check_burn(0, None, None, None,
+                                        {"burn_script_ran": ran}), "burn_present")["detail"]
+        ok = needle in detail
+        if not ok:
+            rc = 1
+        print(f"{'ok  ' if ok else 'FAIL'} {label:52} {'' if ok else detail}")
+
+    ctx_cases = [
+        ([{"name": "99-nexgen-gpu-burn-in"}],    True,  "plain name"),
+        ([{"name": "99-nexgen-gpu-burn-in.sh"}], True,  ".sh suffix variant"),
+        ([{"name": "92-nexgen-gpu-inventory"}],  False, "burn-in absent"),
+        (None,                                    None,  "no script list"),
+    ]
+    for scripts, want, label in ctx_cases:
+        got = dc.build_acceptance_context({"system": {"nvlink_present": False}},
+                                          scripts)["burn_script_ran"]
+        ok = got is want
+        if not ok:
+            rc = 1
+        print(f"{'ok  ' if ok else 'FAIL'} burn_script_ran, {label:36} {str(want):5} {str(got):5}")
+
     # Test-age reporting is separate: we know the test date, not the ship date.
     age = dc.acceptance_test_age_days(INV, STRESS, BURN)
     print("-" * 64)

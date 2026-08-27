@@ -188,7 +188,51 @@ preflight() {
 ###############################################################################
 # SYSTEM CONTEXT
 ###############################################################################
+# A single numeric value from lscpu, matched on the exact key. Returns "" when
+# absent so to_json_num can turn it into null -- the previous
+# `grep 'Socket(s):' | awk '{print $2}'` fed --argjson directly, and an empty
+# result aborts jq and takes the whole system record with it.
+lscpu_num() {
+    lscpu 2>/dev/null | awk -F: -v k="$1" '
+        { key = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", key) }
+        key == k { gsub(/[^0-9]/, "", $2); print $2; exit }'
+}
+
+# NVLink presence, so a report can distinguish an EXPECTED nvbandwidth skip
+# (no NVLink fitted, so there is no peer bandwidth to measure) from an
+# unexpected one (NVLink present but the test skipped anyway). H100 PCIe ships
+# with or without bridges depending on the build, so this must be measured.
+NVLINK_PRESENT="false"
+NVLINK_ACTIVE_LINKS=""
+detect_nvlink() {
+    local topo links=""
+    topo=$(nvidia-smi topo -m 2>/dev/null || true)
+    # NV<n> in the peer matrix is a bonded set of n NVLinks between two GPUs.
+    if printf '%s\n' "$topo" | grep -qE '(^|[[:space:]])NV[0-9]+([[:space:]]|$)'; then
+        NVLINK_PRESENT="true"
+    fi
+    links=$(nvidia-smi nvlink --status 2>/dev/null | grep -cE '^[[:space:]]*Link [0-9]+:' || true)
+    links="${links//[^0-9]/}"
+    if [[ -n "$links" && "$links" -gt 0 ]]; then
+        NVLINK_PRESENT="true"
+        NVLINK_ACTIVE_LINKS="$links"
+    else
+        NVLINK_ACTIVE_LINKS="${links:-0}"
+    fi
+    log "NVLink present: $NVLINK_PRESENT (active links: $NVLINK_ACTIVE_LINKS)"
+}
+
+# Physical cores, not threads. A report that sums logical CPUs and labels them
+# "cores" overstates a 2x64C/256T machine as 256 cores.
+cpu_total_cores() {
+    local sk cps
+    sk=$(lscpu_num 'Socket(s)'); cps=$(lscpu_num 'Core(s) per socket')
+    [[ -n "$sk" && -n "$cps" ]] || return 0
+    echo $(( sk * cps ))
+}
+
 collect_system_context() {
+    detect_nvlink
     log "=== System context ==="
 
     get_smi_header_info
@@ -200,8 +244,12 @@ collect_system_context() {
         --arg mfg "$(safe_run dmidecode -s system-manufacturer)" \
         --arg mobo "$(safe_run dmidecode -s baseboard-product-name)" \
         --arg cpu "$(lscpu | grep 'Model name:' | sed 's/.*:\s*//')" \
-        --argjson sockets "$(lscpu | grep 'Socket(s):' | awk '{print $2}')" \
-        --argjson threads "$(lscpu | grep '^CPU(s):' | awk '{print $2}')" \
+        --argjson sockets "$(to_json_num "$(lscpu_num 'Socket(s)')")" \
+        --argjson threads "$(to_json_num "$(lscpu_num 'CPU(s)')")" \
+        --argjson cps     "$(to_json_num "$(lscpu_num 'Core(s) per socket')")" \
+        --argjson cores   "$(to_json_num "$(cpu_total_cores)")" \
+        --argjson nvlink  "$NVLINK_PRESENT" \
+        --argjson nvlinks "$(to_json_num "$NVLINK_ACTIVE_LINKS")" \
         --argjson ram "$(awk '/MemTotal/{printf "%d",$2/1024/1024}' /proc/meminfo)" \
         --arg kernel "$(uname -r)" \
         --arg drv "$SMI_DRIVER" \
@@ -210,6 +258,8 @@ collect_system_context() {
             hostname:$hostname, serial_number:$serial,
             product_name:$product, manufacturer:$mfg, motherboard:$mobo,
             cpu_model:$cpu, cpu_sockets:$sockets, cpu_total_threads:$threads,
+            cpu_cores_per_socket:$cps, cpu_total_cores:$cores,
+            nvlink_present:$nvlink, nvlink_active_links:$nvlinks,
             ram_total_gb:$ram, kernel_version:$kernel,
             nvidia_driver_version:$drv, cuda_version:$cuda
         }' > "$WORK_DIR/system.json"

@@ -139,6 +139,29 @@ if grep -q '<div class="action-required">' /tmp/rep-test.html; then
     echo "  FAIL  banner shown on a clean run"; rc=1
 else echo "  ok    absent on a clean run"; fi
 
+hdr "CPU cores are physical cores, not logical CPUs"
+# MAAS NUMA "cores" lists hold logical cpu ids. Summing them described a real
+# 2x64C/256T machine on the certificate as "256 cores / 256 threads".
+jq '.system += {cpu_model:"AMD EPYC 9554 64-Core Processor", cpu_sockets:2,
+                cpu_cores_per_socket:64, cpu_total_cores:128, cpu_total_threads:256}' \
+   $F/inventory-healthy.json > /tmp/inv-cores.json 2>/dev/null
+python3 reporting/device_certificate.py --inventory /tmp/inv-cores.json \
+    --stress $F/stress-pass.json -o /tmp/rep-cores.html --quiet 2>/dev/null
+if grep -q '128 cores / 256 threads' /tmp/rep-cores.html; then
+    echo "  ok    reports 128 cores / 256 threads for 2x64C"
+else
+    echo "  FAIL  wrong CPU topology: $(grep -o '[0-9]* cores / [0-9]* threads' /tmp/rep-cores.html | head -1)"; rc=1
+fi
+# With no physical figure available it must not invent one.
+python3 reporting/device_certificate.py --inventory $F/inventory-healthy.json \
+    --stress $F/stress-pass.json -o /tmp/rep-nocores.html --quiet 2>/dev/null
+if grep -q 'logical CPUs' /tmp/rep-nocores.html; then
+    echo "  ok    says 'logical CPUs' when the physical count is unknown"
+else
+    echo "  FAIL  claimed a core count with no physical figure available"; rc=1
+fi
+rm -f /tmp/inv-cores.json /tmp/rep-cores.html /tmp/rep-nocores.html
+
 hdr "Rendered HTML is well-formed"
 python3 - <<'PY' || rc=1
 from html.parser import HTMLParser

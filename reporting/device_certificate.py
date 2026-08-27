@@ -85,6 +85,14 @@ SCRIPT_ALIASES = {
 }
 
 
+def _as_int(value) -> int:
+    """Best-effort int, 0 when absent or unparseable."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _strip_sh(name: str) -> str:
     """Drop a trailing ".sh" from a script name.
 
@@ -694,7 +702,15 @@ def _check_pcie(gpu, burn_gpu):
     return out
 
 
-def _check_stress(gpu_index, stress, gpu_results):
+# DCGM skips nvbandwidth when there is no NVLink to measure. H100 PCIe ships
+# with or without bridges, so on a host with none this is expected operation,
+# not missing evidence -- the pcie test already measures host/device bandwidth
+# (it reported 84 GB/s bidirectional here). It stays a WARN when NVLink IS
+# present, because then the skip is unexplained.
+SKIP_EXPECTED_WITHOUT_NVLINK = {"nvbandwidth"}
+
+
+def _check_stress(gpu_index, stress, gpu_results, context=None):
     """gpu_results: list of {test, status, info} for this GPU."""
     diag = (stress or {}).get("dcgm_diagnostics") or {}
     if not stress:
@@ -728,10 +744,23 @@ def _check_stress(gpu_index, stress, gpu_results):
         out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
                          "FAIL", f"{len(gpu_results)} result(s), none passed"))
     elif skipped:
-        out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
-                         "WARN",
-                         f"level {level}, {len(passed)} passed but skipped: "
-                         + ", ".join(sorted({r.get("test", "?") for r in skipped}))))
+        skipped_tests = {r.get("test", "?") for r in skipped}
+        nvlink = (context or {}).get("nvlink_present")
+        # Only excuse the skip when we positively know there is no NVLink.
+        excused = (SKIP_EXPECTED_WITHOUT_NVLINK
+                   if nvlink is False else set())
+        unexplained = skipped_tests - excused
+        if unexplained:
+            out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                             "WARN",
+                             f"level {level}, {len(passed)} passed but skipped: "
+                             + ", ".join(sorted(unexplained))))
+        else:
+            out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
+                             "PASS",
+                             f"level {level}, {len(passed)} test(s) passed; "
+                             + ", ".join(sorted(skipped_tests))
+                             + " skipped as expected (no NVLink fitted)"))
     else:
         out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
                          "PASS", f"level {level}, {len(passed)} test(s) passed"))
@@ -829,11 +858,23 @@ def _check_cumulative(gpu_index, stress, burn):
                   "No new faults across the whole test sequence", "PASS", note)]
 
 
-def _check_burn(gpu_index, burn, burn_tel, burn_delta):
+def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None):
     out = []
     if not burn:
-        out.append(_crit("burn_present", 4, "Sustained load applied", "WARN",
-                         "burn-in script not run (optional)"))
+        # A script MAAS records as Passed but which emitted no parseable report
+        # is a different fact from a script that was never uploaded, and the
+        # certificate must not present the first as the second. This is exactly
+        # what happened when the burn-in report hit MAX_ARG_STRLEN: MAAS logged
+        # "Passed 0:05:47" while the certificate said "not run".
+        ran = (context or {}).get("burn_script_ran")
+        if ran:
+            note = ("burn-in ran in MAAS but produced no parseable report -- "
+                    "no load evidence; see the commissioning log")
+        elif ran is False:
+            note = "burn-in script not uploaded to MAAS (optional)"
+        else:
+            note = "no burn-in result (script not run, or produced no report)"
+        out.append(_crit("burn_present", 4, "Sustained load applied", "WARN", note))
         out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
                          "N/A", "no sustained-load telemetry"))
         out.append(_crit("xid", 4, "No disqualifying Xid events", "N/A",
@@ -997,7 +1038,29 @@ def _by_index(rows, key="gpu_index"):
     return out
 
 
-def evaluate_gpu_acceptance(gpu, stress, burn, config=None):
+def build_acceptance_context(inventory=None, all_scripts=None) -> dict:
+    """Facts the per-GPU checks need that are not in the GPU record itself.
+
+    nvlink_present    measured by the inventory script, so an nvbandwidth skip
+                      is excused on evidence rather than assumption.
+    burn_script_ran   whether MAAS holds a result for the burn-in script, which
+                      separates "never uploaded" from "ran and produced no
+                      parseable report".
+    """
+    sys_info = (inventory or {}).get("system") or {}
+    ctx = {"nvlink_present": sys_info.get("nvlink_present")}
+
+    if all_scripts is None:
+        ctx["burn_script_ran"] = None
+        return ctx
+
+    burn_name = _strip_sh(SCRIPT_ALIASES["burnin"])
+    ctx["burn_script_ran"] = any(
+        _strip_sh(str(e.get("name", ""))) == burn_name for e in all_scripts)
+    return ctx
+
+
+def evaluate_gpu_acceptance(gpu, stress, burn, config=None, context=None):
     """Evaluate one GPU against the acceptance criteria."""
     idx = int_or_none(gpu.get("gpu_index")) or 0
     cfg = _by_index((config or {}).get("gpu_config")).get(idx)
@@ -1009,8 +1072,8 @@ def evaluate_gpu_acceptance(gpu, stress, burn, config=None):
     criteria += _check_identity(gpu)
     criteria += _check_memory(gpu, cfg)
     criteria += _check_pcie(gpu, delta)
-    criteria += _check_stress(idx, stress, _stress_results_for_gpu(stress, idx))
-    criteria += _check_burn(idx, burn, tel, delta)
+    criteria += _check_stress(idx, stress, _stress_results_for_gpu(stress, idx), context)
+    criteria += _check_burn(idx, burn, tel, delta, context)
     criteria += _check_cumulative(idx, stress, burn)
 
     if any(c["status"] == "FAIL" for c in criteria):
@@ -2532,13 +2595,14 @@ _ACC_DOT = {"PASS": ("dot-pass", "&#10003;"), "FAIL": ("dot-fail", "&#10007;"),
 
 
 def render_gpu_acceptance(gpus, stress, burn, inventory=None, install=None,
-                          evals=None, config=None) -> str:
+                          evals=None, config=None, context=None) -> str:
     """Per-GPU hardware acceptance matrix plus per-serial evidence."""
     if not gpus:
         return '<span class="dim">No GPU inventory -- acceptance cannot be evaluated</span>'
 
     if evals is None:
-        evals = [evaluate_gpu_acceptance(g, stress, burn, config) for g in gpus]
+        evals = [evaluate_gpu_acceptance(g, stress, burn, config, context)
+                 for g in gpus]
     by_idx = {e["gpu_index"]: e for e in evals}
 
     # Union of criterion ids in first-seen order: a GPU with no stress result
@@ -2754,7 +2818,9 @@ def generate_report(
 
     # Per-GPU acceptance is adjudicated here rather than after rendering, so a
     # server holding a rejectable card cannot show a PASS headline.
-    acc_evals = [evaluate_gpu_acceptance(g, stress, burnin, config) for g in gpus]
+    acc_context = build_acceptance_context(inventory, all_scripts)
+    acc_evals = [evaluate_gpu_acceptance(g, stress, burnin, config, acc_context)
+                 for g in gpus]
     acc_reject = [e for e in acc_evals if e["verdict"] == "REJECT"]
     acc_review = [e for e in acc_evals if e["verdict"] == "REVIEW"]
     if acc_reject:
@@ -2868,16 +2934,21 @@ def generate_report(
     # --- Hardware and Software tables (split into two-col layout) ---
     # Merge MAAS machine data with script data for a richer view
     cpu_str = hw.get("cpu_model", sys_info.get("cpu_model", "--"))
-    total_threads = mach.get("cpu_count", sys_info.get("cpu_total_threads", 0))
-    # Derive socket count and cores from NUMA topology
-    num_sockets = len(numa_nodes_maas) if numa_nodes_maas else 0
-    total_cores = sum(len(n.get("cores", [])) for n in numa_nodes_maas) if numa_nodes_maas else 0
-    if num_sockets > 1 and total_cores:
-        cpu_label = f'{num_sockets}&times; {escape(str(cpu_str))} &mdash; {total_cores} cores / {total_threads} threads'
-    elif total_cores:
-        cpu_label = f'{escape(str(cpu_str))} &mdash; {total_cores} cores / {total_threads} threads'
+    total_threads = _as_int(mach.get("cpu_count", sys_info.get("cpu_total_threads", 0)))
+    # Physical cores come from the inventory script (lscpu: Socket(s) x Core(s)
+    # per socket). MAAS's NUMA node "cores" lists hold LOGICAL cpu ids, so
+    # summing them described a 2x64C/256T machine as "256 cores / 256 threads".
+    # Without a physical figure we say "logical CPUs" rather than claim cores.
+    num_sockets = _as_int(sys_info.get("cpu_sockets")) or (
+        len(numa_nodes_maas) if numa_nodes_maas else 0)
+    total_cores = _as_int(sys_info.get("cpu_total_cores"))
+    prefix = f'{num_sockets}&times; ' if num_sockets > 1 else ''
+    if total_cores:
+        cpu_label = (f'{prefix}{escape(str(cpu_str))} &mdash; '
+                     f'{total_cores} cores / {total_threads} threads')
     else:
-        cpu_label = f'{escape(str(cpu_str))} &mdash; {total_threads} threads'
+        cpu_label = (f'{prefix}{escape(str(cpu_str))} &mdash; '
+                     f'{total_threads} logical CPUs')
     ram_mb = mach.get("memory", 0)
     ram_gb = round(ram_mb / 1024, 1) if ram_mb else sys_info.get("ram_total_gb", "?")
     motherboard = hw.get("mainboard_product", sys_info.get("motherboard", "--"))
@@ -2981,7 +3052,8 @@ def generate_report(
         </tr>'''
 
     acceptance_html = render_gpu_acceptance(gpus, stress, burnin, inventory,
-                                            install, evals=acc_evals, config=config)
+                                            install, evals=acc_evals, config=config,
+                                            context=acc_context)
 
     # A run that had to enable ECC, or whose later stages were halted, cannot
     # produce usable evidence. Say so at the top rather than leaving it to be
@@ -3052,7 +3124,8 @@ def generate_report(
                     for g in gpu_numa_map[idx]
                 )
 
-            core_str = f'{len(cores)} cores' if cores else "?"
+            # MAAS lists logical cpu ids here, not physical cores.
+            core_str = f'{len(cores)} logical CPUs' if cores else "?"
 
             blocks += f'''<div class="numa-node-row">
                 <span class="numa-id">NODE {idx}</span>
