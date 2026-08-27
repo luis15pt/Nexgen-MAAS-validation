@@ -253,6 +253,12 @@ CASES.append(("#1 cumulative: remap pending appeared", "REJECT", 1,
               lambda: (INV["gpus"][0], STRESS,
                        _burn_cum(remapped_rows_pending_now=True)), None, None))
 
+# Counters that went backwards were cleared mid-sequence: the comparison has no
+# history left to reason over, so it must not read as clean.
+CASES.append(("#1 cumulative: counters cleared mid-run", "REVIEW", 1,
+              lambda: (INV["gpus"][0], STRESS,
+                       _burn_cum(ecc_corrected_delta=-352, replay_delta=-4)), None, None))
+
 EXTRA = [
     ("#3 ECC already on before commissioning", "ACCEPT", _with_cfg(CFG_ON)),
     ("#3 ECC enabled by script 91 this run", "REJECT", _with_cfg(CFG_ENABLED_NOW)),

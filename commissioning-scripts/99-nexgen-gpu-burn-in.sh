@@ -596,10 +596,23 @@ counters_since_baseline() {
               remapped_rows_pending_now: $n.remapped_rows_pending,
               remapped_rows_failure_now: $n.remapped_rows_failure
           } ] as $dl
+        # A counter that went DOWN was cleared by something between the
+        # baseline and now -- nvidia-smi -p clears ECC counts, and
+        # replays_since_reset is per-reset by definition. The comparison is then
+        # void: it cannot show a fault it no longer has the history for. That is
+        # reported rather than passed, since "cannot prove clean" is not clean.
+        | ([ $dl[] | select(
+              ((.ecc_uncorrected_delta // 0) < 0)
+              or ((.ecc_corrected_delta // 0) < 0)
+              or ((.remapped_rows_uncorrectable_delta // 0) < 0)
+              or ((.remapped_rows_correctable_delta // 0) < 0)
+              or ((.replay_delta // 0) < 0)) ]) as $back
         | {
             baseline_available: true,
             deltas: $dl,
             final: $now,
+            counters_went_backwards: (($back | length) > 0),
+            counters_reset_gpus: [ $back[] | .gpu_index ],
             new_faults: ([ $dl[] | select(
                 ((.ecc_uncorrected_delta // 0) > 0)
                 or ((.remapped_rows_uncorrectable_delta // 0) > 0)
@@ -627,6 +640,15 @@ post_test_counter_check() {
             "eccCE+\(.ecc_corrected_delta // "?") " +
             "remapUCE+\(.remapped_rows_uncorrectable_delta // "?") " +
             "replay+\(.replay_delta // "?")"' >&2 || true
+    fi
+    if [[ "$(printf '%s' "$POST_COUNTERS" | jq -r '.counters_went_backwards // false')" == "true" ]]; then
+        POST_COUNTERS_VOID=1
+        local back
+        back=$(printf '%s' "$POST_COUNTERS" | jq -r '[.counters_reset_gpus[] | "GPU \(.)"] | join(", ")')
+        warn "  Counters went BACKWARDS since the baseline on: $back"
+        warn "  Something cleared them mid-sequence (nvidia-smi -p clears ECC counts;"
+        warn "  replays_since_reset is per-reset). The comparison cannot evidence"
+        warn "  health for those GPUs."
     fi
     log "---------- begin final nvidia-smi -q ----------"
     nvidia-smi -q >&2 2>&1 || warn "final nvidia-smi -q failed"
@@ -968,6 +990,11 @@ main() {
         issues=$(printf '%s' "$issues" | jq --argjson n "${POST_NEW_FAULTS}" --arg d "$pf_detail" \
             '. + [{"issue":"\($n) GPU(s) gained uncorrectable ECC errors, uncorrectable remapped rows, a pending remap or a remap failure across the whole test sequence","severity":"critical","details":$d}]')
         err "New memory faults since the pre-load baseline: $pf_detail"
+    fi
+    if [[ "${POST_COUNTERS_VOID:-0}" -eq 1 ]]; then
+        [[ "$overall" == "PASS" ]] && overall="WARN"
+        issues=$(printf '%s' "$issues" | jq \
+            '. + [{"issue":"Error counters went backwards since the pre-load baseline -- something cleared them mid-sequence, so the comparison cannot evidence memory health","severity":"warning"}]')
     fi
 
     local xid_b64 diag_b64="" burn_b64=""

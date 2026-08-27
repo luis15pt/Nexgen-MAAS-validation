@@ -772,6 +772,22 @@ def _check_cumulative(gpu_index, stress, burn):
                       "No new faults across the whole test sequence", "FAIL",
                       "this GPU is absent from the post-test counter check")]
 
+    # A counter lower than the baseline was cleared mid-sequence, so the
+    # comparison has no history to reason over. "Cannot prove clean" is not
+    # clean, so this is flagged rather than passed -- the same reasoning that
+    # makes aggregate counters preferable to volatile ones in the first place.
+    negatives = [k for k in ("ecc_uncorrected_delta", "ecc_corrected_delta",
+                             "remapped_rows_uncorrectable_delta",
+                             "remapped_rows_correctable_delta", "replay_delta")
+                 if (_n(row.get(k)) or 0) < 0]
+    if negatives or gpu_index in (src.get("counters_reset_gpus") or []):
+        return [_crit("cumulative_faults", 1,
+                      "No new faults across the whole test sequence", "WARN",
+                      "counters went backwards since the baseline ("
+                      + ", ".join(negatives or ["reset detected"])
+                      + ") -- something cleared them mid-sequence, so this "
+                        "comparison cannot evidence memory health")]
+
     bad = []
     uce = _n(row.get("ecc_uncorrected_delta"))
     ruce = _n(row.get("remapped_rows_uncorrectable_delta"))
@@ -793,9 +809,9 @@ def _check_cumulative(gpu_index, stress, burn):
     note = "no new uncorrectable errors or remapped rows"
     extra = []
     if ce is not None:
-        extra.append(f"corrected ECC +{int(ce)}")
+        extra.append(f"corrected ECC {int(ce):+d}")
     if rep is not None:
-        extra.append(f"PCIe replays +{int(rep)}")
+        extra.append(f"PCIe replays {int(rep):+d}")
     if extra:
         note += " (" + ", ".join(extra) + ")"
     return [_crit("cumulative_faults", 1,
