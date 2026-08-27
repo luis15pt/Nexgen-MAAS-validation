@@ -85,6 +85,17 @@ SCRIPT_ALIASES = {
 }
 
 
+def _strip_sh(name: str) -> str:
+    """Drop a trailing ".sh" from a script name.
+
+    str.removesuffix is the obvious call, but it is Python 3.9+ and this
+    generator runs on hosts still on 3.8 -- the module itself imports there
+    only because `from __future__ import annotations` defers the `X | None`
+    annotations, so the failure surfaced at runtime rather than on import.
+    """
+    return name[:-3] if name.endswith(".sh") else name
+
+
 class MAASClient:
     """Minimal MAAS REST API client with OAuth1 PLAINTEXT auth."""
 
@@ -295,7 +306,7 @@ class MAASClient:
         """
         candidates = [script_name]
         if script_name.endswith(".sh"):
-            candidates.append(script_name.removesuffix(".sh"))
+            candidates.append(_strip_sh(script_name))
         else:
             candidates.append(script_name + ".sh")
         try:
@@ -337,7 +348,7 @@ class MAASClient:
         """
         candidates = [script_name]
         if script_name.endswith(".sh"):
-            candidates.append(script_name.removesuffix(".sh"))
+            candidates.append(_strip_sh(script_name))
         else:
             candidates.append(script_name + ".sh")
         for name in candidates:

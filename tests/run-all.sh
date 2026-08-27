@@ -12,6 +12,9 @@ done
 python3 -m py_compile reporting/device_certificate.py \
     && echo "  ok    reporting/device_certificate.py" || rc=1
 
+hdr "Report generator runs on the oldest Python we deploy to"
+python3 tests/check-python-compat.py || rc=1
+
 hdr "MAAS metadata block is parseable by MAAS"
 python3 tests/validate-maas-metadata.py || rc=1
 
