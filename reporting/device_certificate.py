@@ -2942,6 +2942,11 @@ def generate_report(
     num_sockets = _as_int(sys_info.get("cpu_sockets")) or (
         len(numa_nodes_maas) if numa_nodes_maas else 0)
     total_cores = _as_int(sys_info.get("cpu_total_cores"))
+    # Threads per core, so the NUMA blocks below can state physical cores as
+    # well as the logical count MAAS shows.
+    threads_per_core = 1
+    if total_cores and total_threads and total_threads % total_cores == 0:
+        threads_per_core = total_threads // total_cores
     prefix = f'{num_sockets}&times; ' if num_sockets > 1 else ''
     if total_cores:
         cpu_label = (f'{prefix}{escape(str(cpu_str))} &mdash; '
@@ -3124,8 +3129,17 @@ def generate_report(
                     for g in gpu_numa_map[idx]
                 )
 
-            # MAAS lists logical cpu ids here, not physical cores.
-            core_str = f'{len(cores)} logical CPUs' if cores else "?"
+            # MAAS lists LOGICAL cpu ids here. On this 2x64C/256T host that is
+            # 128 per node, which is easy to misread as 128 physical cores --
+            # the same number the whole machine has. Divide by threads-per-core
+            # so each node reads unambiguously.
+            if cores and threads_per_core > 1:
+                core_str = (f'{len(cores) // threads_per_core} cores / '
+                            f'{len(cores)} threads')
+            elif cores:
+                core_str = f'{len(cores)} cores'
+            else:
+                core_str = "?"
 
             blocks += f'''<div class="numa-node-row">
                 <span class="numa-id">NODE {idx}</span>

@@ -161,6 +161,34 @@ else
     echo "  FAIL  claimed a core count with no physical figure available"; rc=1
 fi
 rm -f /tmp/inv-cores.json /tmp/rep-cores.html /tmp/rep-nocores.html
+# MAAS lists logical cpu ids per NUMA node, so this host shows "128" per node
+# -- the same number as its physical core TOTAL. Both must be readable without
+# having to reconcile them.
+python3 - <<'PYEOF' || rc=1
+import sys, json, re
+sys.path.insert(0, "reporting")
+import device_certificate as dc
+
+inv = json.load(open("tests/fixtures/reports/inventory-healthy.json"))
+inv["system"].update(dict(cpu_model="AMD EPYC 9554 64-Core Processor", cpu_sockets=2,
+                          cpu_cores_per_socket=64, cpu_total_cores=128,
+                          cpu_total_threads=256))
+stress = json.load(open("tests/fixtures/reports/stress-pass.json"))
+# Exactly the layout MAAS reports for CA1-ESC812-182.
+numa = [{"index": 0, "memory_mb": 788480,
+         "cores": list(range(0, 64)) + list(range(128, 192))},
+        {"index": 1, "memory_mb": 788480,
+         "cores": list(range(64, 128)) + list(range(192, 256))}]
+html = dc.generate_report(None, inv, stress, numa_nodes_maas=numa,
+                          machine={"cpu_count": 256})
+labels = re.findall(r"(\d+) cores / (\d+) threads", html)
+want = [("128", "256"), ("64", "128"), ("64", "128")]
+if labels == want:
+    print("  ok    128c/256t total, 64c/128t per node (MAAS shows 256 and 128)")
+    sys.exit(0)
+print(f"  FAIL  CPU labels {labels}, want {want}")
+sys.exit(1)
+PYEOF
 
 hdr "Rendered HTML is well-formed"
 python3 - <<'PY' || rc=1
