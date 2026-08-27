@@ -1,0 +1,19 @@
+{
+  "report_metadata": {
+    "script_version": "2.2.0",
+    "script_name": "gpu-inventory",
+    "generated_at": "2026-08-27T10:06:36Z",
+    "duration_seconds": 0
+  },
+  "verdict": {
+    "overall": "FAIL",
+    "issues": [
+      {
+        "issue": "Skipped -- ECC was disabled on 8 GPU(s) and has now been enabled by script 91. Aggregate ECC counters restart from zero, so no evidence from this run is usable. Re-run commissioning. ",
+        "severity": "critical"
+      }
+    ]
+  },
+  "skipped": true,
+  "halt_reason": "ECC was disabled on 8 GPU(s) and has now been enabled by script 91. Aggregate ECC counters restart from zero, so no evidence from this run is usable. Re-run commissioning. "
+}

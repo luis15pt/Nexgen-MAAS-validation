@@ -515,10 +515,45 @@ run_diagnostics() {
 }
 
 ###############################################################################
+# HALT GATE
+###############################################################################
+# Script 91 halts the run when it has had to enable ECC.  Every ECC counter
+# read afterwards starts from zero -- enabling ECC does not backfill, and while
+# it was off nothing was being detected at all -- so anything measured in this
+# run cannot evidence the card's memory health.  Exiting immediately saves the
+# 30-90 minutes the burn-in and stress phases would otherwise spend producing
+# numbers that only look clean.  The marker lives on tmpfs, so the next
+# commissioning run proceeds normally.
+NEXGEN_HALT_FILE="${NEXGEN_HALT_FILE:-/run/nexgen-commissioning-halt}"
+halt_gate() {
+    [[ -f "$NEXGEN_HALT_FILE" ]] || return 0
+    local reason
+    reason=$(head -c 800 "$NEXGEN_HALT_FILE" 2>/dev/null | tr '\n' ' ')
+    err "=============================================================="
+    err "  SKIPPED -- commissioning halted by an earlier script"
+    err "=============================================================="
+    err "  $reason"
+    err ""
+    err "  This script is not running: the evidence it would collect"
+    err "  cannot be used. Re-run commissioning."
+    err "=============================================================="
+    jq -n --arg v "$SCRIPT_VERSION" --arg name "gpu-stress-test" --arg r "$reason" \
+        --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+        '{
+            report_metadata:{script_version:$v, script_name:$name, generated_at:$ts, duration_seconds:0},
+            verdict:{overall:"FAIL", issues:[{"issue":("Skipped -- " + $r),"severity":"critical"}]},
+            skipped:true, halt_reason:$r
+        }'
+    exit 1
+}
+
+###############################################################################
 # MAIN
 ###############################################################################
 main() {
     SCRIPT_START=$(date +%s)
+
+    halt_gate
 
     log "=========================================="
     log "NexGen GPU Stress Test v${SCRIPT_VERSION}"

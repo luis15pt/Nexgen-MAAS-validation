@@ -29,6 +29,8 @@ fi
 
 if [[ "$args" == *--query-gpu=* ]]; then
   fields="${args#*--query-gpu=}"; fields="${fields%% *}"
+  _only=""
+  if [[ "$args" =~ (^|[[:space:]])-i[[:space:]]+([0-9]+) ]]; then _only="${BASH_REMATCH[2]}"; fi
   # Snapshot query signature: serve POST values from the 2nd call onward.
   if [[ "$fields" == *ecc.errors.corrected.aggregate.total* ]]; then
     _m="${STUB_SNAP_MARKER:-/tmp/stub-snap-called.$PPID}"
@@ -41,6 +43,7 @@ if [[ "$args" == *--query-gpu=* ]]; then
   fi
   IFS=',' read -ra fs <<< "$fields"
   for ((i=0;i<N;i++)); do
+    [[ -n "$_only" && "$i" != "$_only" ]] && continue
     row=""
     for f in "${fs[@]}"; do
       case "$f" in
@@ -59,6 +62,7 @@ if [[ "$args" == *--query-gpu=* ]]; then
         power.limit)             v="350.00" ;;
         vbios_version)           v="96.00.61.00.01" ;;
         ecc.mode.current)        v="${STUB_ECC_MODE:-Enabled}" ;;
+        mig.mode.current)        v="${STUB_MIG_MODE:-Disabled}" ;;
         pci.bus_id)              v="00000000:$(printf '%02X' $((0x1B+i))):00.0" ;;
         temperature.memory)      v="${STUB_TEMP_MEM:-40}" ;;
         clocks.sm)               v="${STUB_CLOCK_SM:-1755}" ;;

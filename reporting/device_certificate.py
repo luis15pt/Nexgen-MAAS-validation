@@ -484,7 +484,7 @@ def _check_identity(gpu):
     return out
 
 
-def _check_memory(gpu):
+def _check_memory(gpu, cfg=None):
     out = []
     remap = gpu.get("remapped_rows")
     if not isinstance(remap, dict):
@@ -556,14 +556,44 @@ def _check_memory(gpu):
 
     agg_c = _n(ecc.get("corrected_aggregate"))
     agg_u = _n(ecc.get("uncorrected_aggregate"))
+    vol_c = _n(ecc.get("corrected_volatile"))
+    vol_u = _n(ecc.get("uncorrected_volatile"))
     if agg_c is None and agg_u is None:
+        # With ECC disabled nvidia-smi returns N/A for every counter, volatile
+        # included -- so distinguish "no counters at all" from "volatile only".
+        if vol_c is None and vol_u is None:
+            detail = ("no ECC counters at all -- nothing was being detected, "
+                      "so there is no error history to inspect")
+        else:
+            detail = "only volatile counters available; these reset on reboot"
         out.append(_crit("ecc_aggregate", 3, "Aggregate ECC counters reported",
-                         "FAIL", "only volatile counters available"))
+                         "FAIL", detail))
     else:
         out.append(_crit("ecc_aggregate", 3, "Aggregate ECC counters reported",
                          "PASS",
                          f"corrected={int(agg_c) if agg_c is not None else '?'}, "
                          f"uncorrected={int(agg_u) if agg_u is not None else '?'}"))
+
+    # An aggregate counter only evidences the card's prior life if ECC was on
+    # during it.  Script 91 turns ECC on when it finds it off -- after which the
+    # counters read zero and start counting from that moment.  Enabling ECC does
+    # not backfill, so without this the report would let a meaningless zero
+    # imply a clean history.  This is the single most misleading number on an
+    # ex-mining or ex-render card, so it is called out rather than inferred.
+    if cfg and cfg.get("ecc_changed") is True:
+        before = cfg.get("ecc_before") or "Disabled"
+        out.append(_crit("ecc_history", 3, "ECC history covers the card's prior life",
+                         "FAIL",
+                         f"ECC was {before} and was enabled during THIS run -- "
+                         "aggregate counters start from zero here, so this run "
+                         "cannot evidence the card's memory health. "
+                         "RE-RUN COMMISSIONING to produce a valid report."))
+    elif cfg is not None:
+        out.append(_crit("ecc_history", 3, "ECC history covers the card's prior life",
+                         "PASS", "ECC already enabled before commissioning"))
+    else:
+        out.append(_crit("ecc_history", 3, "ECC history covers the card's prior life",
+                         "N/A", "script 91 result unavailable -- prior ECC state unknown"))
 
     if agg_u is not None and agg_u > 0:
         out.append(_crit("ecc_uncorrected", 1, "No uncorrectable ECC errors",
@@ -827,16 +857,17 @@ def _by_index(rows, key="gpu_index"):
     return out
 
 
-def evaluate_gpu_acceptance(gpu, stress, burn):
+def evaluate_gpu_acceptance(gpu, stress, burn, config=None):
     """Evaluate one GPU against the acceptance criteria."""
     idx = int_or_none(gpu.get("gpu_index")) or 0
+    cfg = _by_index((config or {}).get("gpu_config")).get(idx)
     b = (burn or {}).get("burn_in") or {}
     tel = _by_index(b.get("telemetry")).get(idx)
     delta = _by_index(b.get("counter_deltas")).get(idx)
 
     criteria = []
     criteria += _check_identity(gpu)
-    criteria += _check_memory(gpu)
+    criteria += _check_memory(gpu, cfg)
     criteria += _check_pcie(gpu, delta)
     criteria += _check_stress(idx, stress, _stress_results_for_gpu(stress, idx))
     criteria += _check_burn(idx, burn, tel, delta)
@@ -2360,13 +2391,13 @@ _ACC_DOT = {"PASS": ("dot-pass", "&#10003;"), "FAIL": ("dot-fail", "&#10007;"),
 
 
 def render_gpu_acceptance(gpus, stress, burn, inventory=None, install=None,
-                          evals=None) -> str:
+                          evals=None, config=None) -> str:
     """Per-GPU hardware acceptance matrix plus per-serial evidence."""
     if not gpus:
         return '<span class="dim">No GPU inventory -- acceptance cannot be evaluated</span>'
 
     if evals is None:
-        evals = [evaluate_gpu_acceptance(g, stress, burn) for g in gpus]
+        evals = [evaluate_gpu_acceptance(g, stress, burn, config) for g in gpus]
     by_idx = {e["gpu_index"]: e for e in evals}
 
     # Union of criterion ids in first-seen order: a GPU with no stress result
@@ -2582,7 +2613,7 @@ def generate_report(
 
     # Per-GPU acceptance is adjudicated here rather than after rendering, so a
     # server holding a rejectable card cannot show a PASS headline.
-    acc_evals = [evaluate_gpu_acceptance(g, stress, burnin) for g in gpus]
+    acc_evals = [evaluate_gpu_acceptance(g, stress, burnin, config) for g in gpus]
     acc_reject = [e for e in acc_evals if e["verdict"] == "REJECT"]
     acc_review = [e for e in acc_evals if e["verdict"] == "REVIEW"]
     if acc_reject:
@@ -2809,7 +2840,37 @@ def generate_report(
         </tr>'''
 
     acceptance_html = render_gpu_acceptance(gpus, stress, burnin, inventory,
-                                            install, evals=acc_evals)
+                                            install, evals=acc_evals, config=config)
+
+    # A run that had to enable ECC, or whose later stages were halted, cannot
+    # produce usable evidence. Say so at the top rather than leaving it to be
+    # discovered inside a per-GPU detail block.
+    action_html = ""
+    revalidate = bool((config or {}).get("revalidation_required"))
+    skipped = [label for label, d in stages if d and d.get("skipped")]
+    if revalidate or skipped:
+        reasons = []
+        if revalidate:
+            n_ecc = (config or {}).get("ecc_enabled_this_run") or "one or more"
+            reasons.append(
+                f"ECC was <strong>disabled</strong> on {escape(str(n_ecc))} GPU(s) and was "
+                "enabled during this run. While ECC was off the hardware was not "
+                "detecting memory errors at all, and enabling it does not backfill "
+                "&mdash; the aggregate counters restart from zero here. No memory "
+                "evidence from this run can characterise these cards.")
+        if skipped:
+            reasons.append(
+                "Skipped to save time: " + escape(", ".join(skipped))
+                + ". These stages did not run because their output could not have been used.")
+        reasons.append(
+            "ECC is now enabled and persists across reboots. Commission this machine a "
+            "second time; that run will produce valid evidence. <strong>This report must "
+            "not be used as an acceptance certificate.</strong>")
+        body = "".join(f"<p>{r}</p>" for r in reasons)
+        action_html = (
+            '<div class="action-required">'
+            '<div class="action-title">Action required &mdash; re-run commissioning</div>'
+            f"{body}</div>")
 
     gpu_section = ""
     if gpus:
@@ -2978,6 +3039,8 @@ def generate_report(
         <table class="tbl kv"><tbody>{sw_rows}</tbody></table>
     </div>
 </section>
+
+{action_html}
 
 <section>
     <div class="section-label">Hardware Acceptance &mdash; per GPU</div>
@@ -3209,6 +3272,23 @@ section { margin-bottom: 2rem; }
     vertical-align: middle;
 }
 
+.action-required {
+    border: 1px solid var(--red-bd);
+    background: var(--red-bg);
+    border-left: 3px solid var(--red);
+    border-radius: 4px;
+    padding: .9rem 1.1rem;
+    margin: 1.25rem 0;
+}
+.action-required .action-title {
+    color: var(--red);
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    font-size: .78rem;
+    margin-bottom: .5rem;
+}
+.action-required p { margin: .35rem 0; font-size: .84rem; line-height: 1.5; }
 .acc-detail {
     border: 1px solid var(--edge);
     border-radius: 4px;

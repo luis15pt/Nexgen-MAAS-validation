@@ -99,7 +99,7 @@ cards skip the fabric gate entirely.
 
 **Timeout**: 20 minutes
 
-### 91 - MIG Disable & ECC Enable (`v1.2.0`)
+### 91 - MIG Disable & ECC Enable (`v1.3.0`)
 
 Disables MIG mode and enables ECC on every GPU. Both settings live in GPU
 NVRAM, so the script writes them and then activates them with
@@ -108,6 +108,36 @@ fails, the change is reported as *pending reboot* instead of being treated as
 an error.
 
 Requires script `90` to have run first.
+
+#### If ECC was disabled, this run is void
+
+Finding ECC **disabled** fails the run, and the remaining GPU scripts skip
+immediately rather than spending 30–90 minutes on evidence that cannot be used.
+
+The reason is that ECC off does not merely mean errors went *unrecorded* — the
+hardware was not detecting them at all, so none occurred to record. Enabling ECC
+does not backfill: the aggregate counters restart from zero at that moment. Any
+zero measured later in the same run therefore proves nothing about the card's
+prior life, which is precisely the number a buyer inspects. (H100 ships with ECC
+enabled, so finding it off means someone turned it off — often to free the ~6.25%
+of VRAM that ECC reserves.)
+
+Script 91 writes a halt marker to `/run/nexgen-commissioning-halt`; scripts `92`,
+`98` and `99` check it and exit in well under a second, reporting
+`skipped: true`. The report shows a prominent **action required** banner and
+refuses to read as an acceptance certificate.
+
+ECC persists across reboots, so the remedy is simply to commission the machine a
+second time. The marker is on tmpfs and cannot survive into that run.
+
+Two things still survive an ECC-disabled history and remain trustworthy:
+**remapped row counts** and the **bank remap availability histogram**, both
+recorded in InfoROM as physical spare-row consumption. A non-zero value there is
+real evidence of past damage; a zero is ambiguous.
+
+| Env Override | Default | Description |
+|---|---|---|
+| `NEXGEN_HALT_FILE` | `/run/nexgen-commissioning-halt` | Halt marker path, shared with scripts 92/98/99 |
 
 **Timeout**: 5 minutes
 
@@ -300,6 +330,12 @@ and remain manual attestations: matching a serial against the *physical label*
 (software can only prove the two nvidia-smi sources agree), "chassis providing
 spec airflow", and any test-date-relative-to-shipment window — the test date is
 recorded, but the ship date is not knowable here.
+
+The report also cross-references script `91`: if ECC had to be **enabled during
+the run**, the aggregate counters cannot evidence the card's prior life and the
+card is rejected with an instruction to re-commission. If script `91`'s result is
+missing altogether the prior ECC state is unknown, which is treated as needing
+review rather than as a pass.
 
 One evidentiary limit is worth stating plainly: **aggregate ECC counters only
 mean something if ECC was enabled during the card's prior life.** Aggregate

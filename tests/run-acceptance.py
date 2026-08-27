@@ -163,13 +163,31 @@ CASES.append(("#8 UUID absent", "REJECT", 8,
               lambda: (mut(lambda g: g.update(uuid=None)), STRESS, BURN), None, None))
 
 
+# ---- #3 ECC provenance: enabling ECC now does not backfill history --------
+CFG_ON = {"gpu_config": [{"gpu_index": 0, "ecc_before": "Enabled", "ecc_changed": False}]}
+CFG_ENABLED_NOW = {"gpu_config": [{"gpu_index": 0, "ecc_before": "Disabled", "ecc_changed": True}]}
+
+
+def _with_cfg(cfg):
+    def fn():
+        return (INV["gpus"][0], STRESS, BURN, cfg)
+    return fn
+
+
+EXTRA = [
+    ("#3 ECC already on before commissioning", "ACCEPT", _with_cfg(CFG_ON)),
+    ("#3 ECC enabled by script 91 this run", "REJECT", _with_cfg(CFG_ENABLED_NOW)),
+    ("#3 script 91 result unavailable", "REVIEW", _with_cfg(None)),
+]
+
+
 def main():
     rc = 0
     print(f"{'case':44} {'want':8} {'got':8}")
     print("-" * 64)
     for label, want, _reject, fn, _s, _b in CASES:
         gpu, stress, burn = fn()
-        got = dc.evaluate_gpu_acceptance(gpu, stress, burn)["verdict"]
+        got = dc.evaluate_gpu_acceptance(gpu, stress, burn, CFG_ON)["verdict"]
         ok = got == want
         print(f"{'ok  ' if ok else 'FAIL'} {label:38} {want:8} {got:8}")
         if not ok:
@@ -177,6 +195,17 @@ def main():
             for c in dc.evaluate_gpu_acceptance(gpu, stress, burn)["criteria"]:
                 if c["status"] != "PASS":
                     print(f"       {c['status']:5} #{c['reject']} {c['label']}: {c['detail']}")
+    for label, want, fn in EXTRA:
+        gpu, stress, burn, cfg = fn()
+        e = dc.evaluate_gpu_acceptance(gpu, stress, burn, cfg)
+        ok = e["verdict"] == want
+        print(f"{'ok  ' if ok else 'FAIL'} {label:38} {want:8} {e['verdict']:8}")
+        if not ok:
+            rc = 1
+            for c in e["criteria"]:
+                if c["status"] != "PASS":
+                    print(f"       {c['status']:5} #{c['reject']} {c['label']}: {c['detail']}")
+
     # Test-age reporting is separate: we know the test date, not the ship date.
     age = dc.acceptance_test_age_days(INV, STRESS, BURN)
     print("-" * 64)

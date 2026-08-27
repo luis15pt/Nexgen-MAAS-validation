@@ -1,0 +1,120 @@
+{
+  "report_metadata": {
+    "script_version": "1.3.0",
+    "script_name": "gpu-mig-ecc-config",
+    "generated_at": "2026-08-27T10:06:36Z",
+    "duration_seconds": 5
+  },
+  "verdict": {
+    "overall": "FAIL",
+    "issues": [
+      {
+        "issue": "GPU 0: ECC still Disabled after reset, pending full reboot",
+        "severity": "warning"
+      },
+      {
+        "issue": "GPU 1: ECC still Disabled after reset, pending full reboot",
+        "severity": "warning"
+      },
+      {
+        "issue": "GPU 2: ECC still Disabled after reset, pending full reboot",
+        "severity": "warning"
+      },
+      {
+        "issue": "GPU 3: ECC still Disabled after reset, pending full reboot",
+        "severity": "warning"
+      },
+      {
+        "issue": "GPU 4: ECC still Disabled after reset, pending full reboot",
+        "severity": "warning"
+      },
+      {
+        "issue": "GPU 5: ECC still Disabled after reset, pending full reboot",
+        "severity": "warning"
+      },
+      {
+        "issue": "GPU 6: ECC still Disabled after reset, pending full reboot",
+        "severity": "warning"
+      },
+      {
+        "issue": "GPU 7: ECC still Disabled after reset, pending full reboot",
+        "severity": "warning"
+      },
+      {
+        "issue": "Some NVRAM changes did not activate via GPU reset, will take effect on deployment reboot",
+        "severity": "info"
+      },
+      {
+        "issue": "ECC was DISABLED on 8 GPU(s) and has been enabled by this script. Aggregate ECC counters now start from zero, so this commissioning run cannot evidence memory health. Re-run commissioning to produce a valid report.",
+        "severity": "critical"
+      }
+    ]
+  },
+  "system": {
+    "nvidia_driver_version": "595.10",
+    "cuda_version": "12.8",
+    "gpu_count": 8
+  },
+  "gpu_config": [
+    {
+      "gpu_index": 0,
+      "mig_before": "Disabled",
+      "mig_changed": false,
+      "ecc_before": "Disabled",
+      "ecc_changed": true
+    },
+    {
+      "gpu_index": 1,
+      "mig_before": "Disabled",
+      "mig_changed": false,
+      "ecc_before": "Disabled",
+      "ecc_changed": true
+    },
+    {
+      "gpu_index": 2,
+      "mig_before": "Disabled",
+      "mig_changed": false,
+      "ecc_before": "Disabled",
+      "ecc_changed": true
+    },
+    {
+      "gpu_index": 3,
+      "mig_before": "Disabled",
+      "mig_changed": false,
+      "ecc_before": "Disabled",
+      "ecc_changed": true
+    },
+    {
+      "gpu_index": 4,
+      "mig_before": "Disabled",
+      "mig_changed": false,
+      "ecc_before": "Disabled",
+      "ecc_changed": true
+    },
+    {
+      "gpu_index": 5,
+      "mig_before": "Disabled",
+      "mig_changed": false,
+      "ecc_before": "Disabled",
+      "ecc_changed": true
+    },
+    {
+      "gpu_index": 6,
+      "mig_before": "Disabled",
+      "mig_changed": false,
+      "ecc_before": "Disabled",
+      "ecc_changed": true
+    },
+    {
+      "gpu_index": 7,
+      "mig_before": "Disabled",
+      "mig_changed": false,
+      "ecc_before": "Disabled",
+      "ecc_changed": true
+    }
+  ],
+  "reboot_required": true,
+  "gpu_reset_failed": false,
+  "revalidation_required": true,
+  "ecc_enabled_this_run": 8
+}

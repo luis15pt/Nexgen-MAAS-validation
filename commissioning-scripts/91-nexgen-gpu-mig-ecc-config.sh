@@ -20,7 +20,11 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 WORK_DIR="/tmp/gpu-mig-ecc-$$"
-SCRIPT_VERSION="1.2.0"
+# Marker consulted by the later GPU scripts.  On tmpfs, so it cannot survive
+# into the next commissioning run -- which is the point: the second run must
+# proceed normally.
+NEXGEN_HALT_FILE="${NEXGEN_HALT_FILE:-/run/nexgen-commissioning-halt}"
+SCRIPT_VERSION="1.3.0"
 
 ###############################################################################
 # LOGGING
@@ -30,6 +34,7 @@ warn() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN]  $*" >&2; }
 err()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >&2; }
 
 mkdir -p "$WORK_DIR"
+rm -f "$NEXGEN_HALT_FILE" 2>/dev/null || true
 
 ###############################################################################
 # HELPER: Parse driver + CUDA from nvidia-smi header
@@ -56,7 +61,8 @@ fail_json() {
             report_metadata:{script_version:$v, script_name:"gpu-mig-ecc-config"},
             verdict:{overall:"FAIL", issues:[{"issue":$m,"severity":"critical"}]},
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, gpu_count:$gpus},
-            gpu_config:[], reboot_required:false, gpu_reset_failed:false
+            gpu_config:[], reboot_required:false, gpu_reset_failed:false,
+            revalidation_required:false, ecc_enabled_this_run:0
         }'
     exit 1
 }
@@ -289,6 +295,45 @@ output_report() {
     needs_reboot=$(cat "$WORK_DIR/needs_reboot.txt" 2>/dev/null || echo "false")
     reset_failed=$(cat "$WORK_DIR/reset_failed.txt" 2>/dev/null || echo "false")
 
+    # --- Revalidation gate -------------------------------------------------
+    # If ECC had to be enabled here, every ECC counter read later in THIS run
+    # starts from zero: enabling ECC does not backfill, and while it was off
+    # nothing was being detected in the first place.  A zero from this run
+    # therefore evidences nothing about the card's prior life, which is exactly
+    # the number a buyer inspects.  Fail the run and say so, so nobody ships on
+    # evidence that only looks clean.
+    local ecc_enabled_count
+    ecc_enabled_count=$(jq '[.[] | select(.ecc_changed == true)] | length' \
+        "$WORK_DIR/gpu_configs.json" 2>/dev/null || echo "0")
+    local revalidate="false"
+    if [[ "${ecc_enabled_count:-0}" -gt 0 ]]; then
+        revalidate="true"
+        overall="FAIL"
+        issues=$(printf '%s' "$issues" | jq --argjson n "$ecc_enabled_count" \
+            '. + [{"issue":"ECC was DISABLED on \($n) GPU(s) and has been enabled by this script. Aggregate ECC counters now start from zero, so this commissioning run cannot evidence memory health. Re-run commissioning to produce a valid report.","severity":"critical"}]')
+        err "=============================================================="
+        err "  ACTION REQUIRED -- RE-RUN COMMISSIONING"
+        err "=============================================================="
+        err "  ECC was DISABLED on ${ecc_enabled_count} GPU(s) and has now been enabled."
+        err ""
+        err "  While ECC was off the GPU was not detecting memory errors at"
+        err "  all, so none were recorded. Enabling ECC does not backfill:"
+        err "  the aggregate counters read zero from this moment on."
+        err ""
+        err "  Any ECC evidence collected later in THIS run is therefore"
+        err "  meaningless -- a zero that proves nothing."
+        err ""
+        err "  ECC is now enabled and persists across reboots. Simply"
+        err "  commission this machine a second time; that run will produce"
+        err "  valid memory evidence."
+        err "=============================================================="
+        # Tell the later scripts to stop rather than spend 30-90 minutes
+        # producing evidence that cannot be used.
+        printf 'ECC was disabled on %s GPU(s) and has now been enabled by script 91. Aggregate ECC counters restart from zero, so no evidence from this run is usable. Re-run commissioning.\n' \
+            "$ecc_enabled_count" > "$NEXGEN_HALT_FILE" 2>/dev/null \
+            || warn "could not write halt marker $NEXGEN_HALT_FILE -- later scripts will still run"
+    fi
+
     local gpu_configs
     gpu_configs=$(cat "$WORK_DIR/gpu_configs.json" 2>/dev/null || echo "[]")
 
@@ -301,6 +346,8 @@ output_report() {
         --argjson gpu_config "$gpu_configs" \
         --argjson reboot "$needs_reboot" \
         --argjson resetfail "$reset_failed" \
+        --argjson revalidate "$revalidate" \
+        --argjson eccenabled "${ecc_enabled_count:-0}" \
         '{
             report_metadata:{
                 script_version:$ver, script_name:$name,
@@ -310,7 +357,9 @@ output_report() {
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, gpu_count:$gpus},
             gpu_config:$gpu_config,
             reboot_required:$reboot,
-            gpu_reset_failed:$resetfail
+            gpu_reset_failed:$resetfail,
+            revalidation_required:$revalidate,
+            ecc_enabled_this_run:$eccenabled
         }'
 
     log "=== MIG/ECC CONFIG COMPLETE -- Verdict: $overall ==="
