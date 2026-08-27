@@ -189,6 +189,23 @@ CASES.append(("#4 this GPU barely loaded", "REJECT", 4,
 CASES.append(("#4 this GPU fully loaded", "ACCEPT", 4,
               lambda: (INV["gpus"][0], STRESS, _burn_loaded(1810)), None, None))
 
+def _burn_window(requested, loaded, gpu=0):
+    b = copy.deepcopy(BURN)
+    b["burn_in"]["duration_requested_seconds"] = requested
+    b["burn_in"]["duration_actual_seconds"] = requested + 3
+    for t in b["burn_in"]["telemetry"]:
+        if t["gpu_index"] == gpu:
+            t["loaded_seconds"] = loaded
+    return b
+
+
+# A short validation run must not read as acceptance evidence, and a full run
+# must not be downgraded for it.
+CASES.append(("#4 5-minute validation window", "REVIEW", 4,
+              lambda: (INV["gpus"][0], STRESS, _burn_window(300, 300)), None, None))
+CASES.append(("#4 full 30-minute window", "ACCEPT", 4,
+              lambda: (INV["gpus"][0], STRESS, _burn_window(1800, 1800)), None, None))
+
 EXTRA = [
     ("#3 ECC already on before commissioning", "ACCEPT", _with_cfg(CFG_ON)),
     ("#3 ECC enabled by script 91 this run", "REJECT", _with_cfg(CFG_ENABLED_NOW)),

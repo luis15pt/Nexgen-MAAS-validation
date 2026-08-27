@@ -26,14 +26,19 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 ###############################################################################
 # CONFIG
 ###############################################################################
-BURN_DURATION="${BURN_DURATION:-1800}"     # seconds of sustained load
+# Seconds of sustained load. Set to 5 minutes to validate the pipeline end to
+# end; a real acceptance run needs >= 1800s, and the report deliberately marks
+# anything shorter for review rather than accepting it. Raise this once the
+# steps are confirmed -- the declared MAAS timeout (01:30:00) leaves room up to
+# roughly 80 minutes without touching the metadata.
+BURN_DURATION="${BURN_DURATION:-300}"
 BURN_SAMPLE_INTERVAL="${BURN_SAMPLE_INTERVAL:-10}"
 # A GPU counts as under load when it draws at least this fraction of its own
 # power limit. Used to prove the load actually reached every card.
 BURN_LOADED_POWER_FRAC="${BURN_LOADED_POWER_FRAC:-0.5}"
 # Fraction of BURN_DURATION each GPU must actually spend under load.
 BURN_COVERAGE_FRAC="${BURN_COVERAGE_FRAC:-0.9}"
-BURN_TOOL="${BURN_TOOL:-auto}"             # auto | dcgmproftester | gpu-burn
+BURN_TOOL="${BURN_TOOL:-auto}"   # auto | dcgmi-diag | dcgmproftester | gpu-burn
 # characterize: measure and report, gate on nothing.  Run this first on
 # known-good, properly-cooled cards to find out whether they ever reach thermal
 # slowdown and what their sustained clock floor actually is -- the enforce
@@ -45,7 +50,7 @@ BURN_MIN_SM_CLOCK_MHZ="${BURN_MIN_SM_CLOCK_MHZ:-}"
 BURN_MIN_POWER_W="${BURN_MIN_POWER_W:-}"
 GPU_BURN_REPO="${GPU_BURN_REPO:-https://github.com/wilicc/gpu-burn}"
 WORK_DIR="/tmp/gpu-burnin-$$"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.3.0"
 
 # Xid events the acceptance spec treats as disqualifying.  Others (13, 31, 43)
 # are typically application faults raised by the load itself, not hardware.
@@ -163,9 +168,28 @@ snapshot_counters() {
 # no compilation and no network.  gpu-burn is offered as a genuinely
 # independent load source but has to be built from source on the node, which
 # needs outbound network and adds a failure mode -- hence not the default.
+# LOAD_MODE=per-gpu  one process per GPU, launched concurrently
+# LOAD_MODE=single    one process that loads every GPU itself
 select_load_tool() {
-    LOAD_TOOL="" LOAD_CMD=""
+    LOAD_TOOL="" LOAD_BIN="" LOAD_MODE=""
     local cand
+
+    # DCGM's Targeted Stress plugin is NVIDIA's own sustained-load path: it is
+    # part of the level-3 diagnostic, it covers every GPU in one invocation, and
+    # its duration is a documented parameter (default 30s). It also yields
+    # NVIDIA's per-GPU pass/fail for the load phase, which dcgmproftester does
+    # not. Preferred for exactly those reasons.
+    if [[ "$BURN_TOOL" == "auto" || "$BURN_TOOL" == "dcgmi-diag" ]]; then
+        if command -v dcgmi &>/dev/null; then
+            LOAD_TOOL="dcgmi-diag"
+            LOAD_BIN="dcgmi"
+            LOAD_MODE="dcgmi-diag"
+            log "Load tool: dcgmi diag targeted_stress (all GPUs, one invocation)"
+            return 0
+        fi
+        [[ "$BURN_TOOL" == "dcgmi-diag" ]] && \
+            { warn "dcgmi requested but not found"; return 1; }
+    fi
 
     if [[ "$BURN_TOOL" == "auto" || "$BURN_TOOL" == "dcgmproftester" ]]; then
         for cand in dcgmproftester13 dcgmproftester12 dcgmproftester11 dcgmproftester; do
@@ -175,13 +199,23 @@ select_load_tool() {
                 # its power limit.  --no-dcgm-validation keeps this a pure load
                 # generator: pass/fail is decided from our own telemetry, not
                 # from dcgmproftester's thresholds.
-                # Without an explicit id list the tool may cover only some of
-                # the GPUs. A real run loaded 4 of 8 for the full window and the
-                # other 4 for ~290s, while still reporting success.
-                local ids
-                ids=$(seq -s, 0 $(( ${SMI_GPU_COUNT:-1} - 1 )) 2>/dev/null || echo 0)
-                LOAD_CMD="$cand --no-dcgm-validation -t 1004 -d $BURN_DURATION -i $ids"
-                LOAD_CMD_FALLBACK="$cand --no-dcgm-validation -t 1004 -d $BURN_DURATION"
+                # Fallback, not the preferred path: dcgmproftester is documented
+                # as a load generator for validating DCGM's *measurement* path,
+                # not as a stress or burn-in tool. -t 1004 is
+                # DCGM_FI_PROF_PIPE_TENSOR_ACTIVE, i.e. it drives a
+                # half-precision matrix-multiply-accumulate on the tensor cores
+                # (hence "TensorEngineActive" in its output) -- not the FP32
+                # pipe, as an earlier version of this comment claimed.
+                #
+                # Handed a multi-GPU id list, dcgmproftester loads the cards in
+                # sequential BATCHES rather than all at once: a real 8-GPU run
+                # drove 4 cards for 1780s, re-initialised, then started the
+                # other 4 and got 280s into them before the ceiling. The two
+                # groups summed to the whole window, and the membership changed
+                # between runs. One process per GPU is what actually puts every
+                # card under load simultaneously.
+                LOAD_BIN="$cand"
+                LOAD_MODE="per-gpu"
                 log "Load tool: $cand (no build required)"
                 return 0
             fi
@@ -192,8 +226,8 @@ select_load_tool() {
 
     if [[ "$BURN_TOOL" == "auto" || "$BURN_TOOL" == "gpu-burn" ]]; then
         if command -v gpu_burn &>/dev/null; then
-            LOAD_TOOL="gpu-burn"; LOAD_CMD="gpu_burn $BURN_DURATION"
-            log "Load tool: gpu-burn (preinstalled)"
+            LOAD_TOOL="gpu-burn"; LOAD_BIN="gpu_burn"; LOAD_MODE="single"
+            log "Load tool: gpu-burn (preinstalled, loads all GPUs itself)"
             return 0
         fi
         if [[ "$BURN_TOOL" == "gpu-burn" ]]; then
@@ -207,14 +241,68 @@ select_load_tool() {
                && make -C "$WORK_DIR/gpu-burn" >&2 2>&1 \
                && [[ -x "$WORK_DIR/gpu-burn/gpu_burn" ]]; then
                 LOAD_TOOL="gpu-burn"
-                LOAD_CMD="$WORK_DIR/gpu-burn/gpu_burn $BURN_DURATION"
-                log "Load tool: gpu-burn (built from source)"
+                LOAD_BIN="$WORK_DIR/gpu-burn/gpu_burn"
+                LOAD_MODE="single"
+                log "Load tool: gpu-burn (built from source, loads all GPUs itself)"
                 return 0
             fi
             warn "gpu-burn build failed (needs git, nvcc and outbound network)"
         fi
     fi
     return 1
+}
+
+###############################################################################
+# APPLY LOAD
+###############################################################################
+# Returns the worst exit status seen.  For per-GPU mode that means a single
+# wedged GPU is visible rather than averaged away.
+apply_load() {
+    local ceiling=$(( BURN_DURATION + 300 ))
+    local rc=0
+
+    if [[ "$LOAD_MODE" == "dcgmi-diag" ]]; then
+        # One invocation, every GPU, duration set through the documented
+        # parameter. Output is captured rather than left on stdout, which
+        # carries this script's own JSON report.
+        log "  dcgmi diag -r targeted_stress -p targeted_stress.test_duration=${BURN_DURATION}"
+        timeout "$ceiling" dcgmi diag -r targeted_stress \
+            -p "targeted_stress.test_duration=${BURN_DURATION}" -j \
+            > "$WORK_DIR/diag.json" 2>"$WORK_DIR/diag.err" || rc=$?
+        # Retain both streams in the MAAS commissioning log.
+        log "  ---------- begin dcgmi diag output ----------"
+        head -c 500000 "$WORK_DIR/diag.json" >&2 2>/dev/null || true
+        [[ -s "$WORK_DIR/diag.err" ]] && head -c 100000 "$WORK_DIR/diag.err" >&2
+        log "  ---------- end dcgmi diag output ----------"
+        return $rc
+    fi
+
+    if [[ "$LOAD_MODE" == "single" ]]; then
+        timeout "$ceiling" "$LOAD_BIN" "$BURN_DURATION" >&2 2>&1 || rc=$?
+        return $rc
+    fi
+
+    # One process per GPU, all started before any is waited on.
+    local g pid e
+    local -a pids=() failed=()
+    for (( g = 0; g < ${SMI_GPU_COUNT:-1}; g++ )); do
+        timeout "$ceiling" "$LOAD_BIN" --no-dcgm-validation -t 1004 \
+            -d "$BURN_DURATION" -i "$g" >&2 2>&1 &
+        pids+=("$!")
+    done
+    log "  Launched ${#pids[@]} concurrent load process(es), one per GPU"
+
+    for g in "${!pids[@]}"; do
+        pid="${pids[$g]}"
+        e=0
+        wait "$pid" || e=$?
+        if [[ "$e" -ne 0 ]]; then
+            failed+=("GPU${g}:${e}")
+            [[ "$e" -gt "$rc" ]] && rc="$e"
+        fi
+    done
+    [[ ${#failed[@]} -gt 0 ]] && warn "  Load process exits: ${failed[*]}"
+    return $rc
 }
 
 ###############################################################################
@@ -373,21 +461,23 @@ main() {
     local tool="none" load_exit=0 load_dur=0
     if select_load_tool; then
         tool="$LOAD_TOOL"
-        log "Applying sustained load for ${BURN_DURATION}s: $LOAD_CMD"
+        log "Applying sustained load for ${BURN_DURATION}s ($LOAD_MODE, $LOAD_TOOL)"
         start_sampler "$WORK_DIR/samples.csv"
         local t0
         t0=$(date +%s)
         # Hard ceiling well past BURN_DURATION: a wedged load generator must not
         # be left to be killed by MAAS, which would emit no report at all.
-        timeout $(( BURN_DURATION + 300 )) $LOAD_CMD >&2 2>&1 || load_exit=$?
+        apply_load || load_exit=$?
         load_dur=$(( $(date +%s) - t0 ))
-        # A rejected -i list fails fast; distinguish that from a real load fault
-        # and retry without it rather than losing the whole burn-in.
-        if [[ "$load_exit" -ne 0 && "$load_dur" -lt 30 && -n "${LOAD_CMD_FALLBACK:-}" ]]; then
-            warn "Load generator exited $load_exit after ${load_dur}s -- retrying without an explicit GPU list"
+        # A rejected argument fails fast. Distinguish that from a real load fault
+        # and retry as a single whole-node process rather than losing the run.
+        if [[ "$load_exit" -ne 0 && "$load_dur" -lt 30 && "$LOAD_MODE" == "per-gpu" ]]; then
+            warn "Per-GPU load exited $load_exit after ${load_dur}s -- retrying as one process for all GPUs"
+            LOAD_MODE="single-fallback"
             load_exit=0
             t0=$(date +%s)
-            timeout $(( BURN_DURATION + 300 )) $LOAD_CMD_FALLBACK >&2 2>&1 || load_exit=$?
+            timeout $(( BURN_DURATION + 300 )) "$LOAD_BIN" --no-dcgm-validation \
+                -t 1004 -d "$BURN_DURATION" >&2 2>&1 || load_exit=$?
             load_dur=$(( $(date +%s) - t0 ))
         fi
         stop_sampler
@@ -548,6 +638,12 @@ main() {
                 --argjson d "$load_dur" --argjson r "$BURN_DURATION" \
                 '. + [{"issue":"Load generator was killed after \($d)s, short of the \($r)s required -- burn-in incomplete","severity":"critical"}]')
         fi
+    elif [[ "$load_exit" -ne 0 && "$LOAD_MODE" == "dcgmi-diag" ]]; then
+        # dcgmi diag exits non-zero when a test FAILS, so unlike a bare load
+        # generator this exit code carries a hardware verdict.
+        overall="FAIL"
+        issues=$(printf '%s' "$issues" | jq --argjson e "$load_exit" \
+            '. + [{"issue":"dcgmi diag targeted_stress exited \($e) -- NVIDIA'"'"'s own sustained-load test reported a failure","severity":"critical"}]')
     elif [[ "$load_exit" -ne 0 && "$tool" != "none" ]]; then
         [[ "$overall" == "PASS" ]] && overall="WARN"
         issues=$(printf '%s' "$issues" | jq --argjson e "$load_exit" \
@@ -583,8 +679,10 @@ main() {
             '. + [{"issue":"No telemetry samples captured during the load window -- the run cannot be evidenced","severity":"critical"}]')
     fi
 
-    local xid_b64
+    local xid_b64 diag_b64=""
     xid_b64=$(grep -iE 'NVRM|Xid' "$WORK_DIR/dmesg-window.txt" 2>/dev/null | base64 2>/dev/null | tr -d '\n' || true)
+    [[ -s "$WORK_DIR/diag.json" ]] && \
+        diag_b64=$(base64 < "$WORK_DIR/diag.json" 2>/dev/null | tr -d '\n' || true)
 
     jq -n \
         --arg ver "$SCRIPT_VERSION" --arg name "gpu-burn-in" \
@@ -594,6 +692,8 @@ main() {
         --arg drv "$SMI_DRIVER" --arg cuda "$SMI_CUDA" \
         --argjson gpus "${SMI_GPU_COUNT:-0}" \
         --arg tool "$tool" --arg mode "$BURN_MODE" \
+        --arg loadmode "${LOAD_MODE:-none}" \
+        --arg diagraw "$diag_b64" \
         --argjson requested "$BURN_DURATION" --argjson actual "$load_dur" \
         --argjson load_exit "$load_exit" \
         --argjson telemetry "$telemetry" --argjson deltas "$deltas" \
@@ -605,14 +705,15 @@ main() {
             verdict:{overall:$verdict, issues:$issues},
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, gpu_count:$gpus},
             burn_in:{
-                tool:$tool, mode:$mode,
+                tool:$tool, mode:$mode, load_mode:$loadmode,
                 duration_requested_seconds:$requested,
                 duration_actual_seconds:$actual,
                 load_exit_code:$load_exit,
                 throttle_field_base:$tbase,
                 telemetry:$telemetry,
                 counter_deltas:$deltas,
-                xid:{critical:$xidcrit, other:$xidother, dmesg_window_b64:$xidraw}
+                xid:{critical:$xidcrit, other:$xidother, dmesg_window_b64:$xidraw},
+                dcgmi_diag_b64:$diagraw
             }
         }'
 

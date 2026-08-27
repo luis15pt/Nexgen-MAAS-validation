@@ -1,0 +1,12 @@
+#!/bin/bash
+# Test stub. Records the -i target so the harness can prove one process was
+# launched per GPU, and marks that GPU as drawing load power.
+gpu=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in -i) gpu="$2"; shift 2 ;; *) shift ;; esac
+done
+echo "dcgmproftester: synthetic load on GPU ${gpu:-all}" >&2
+[[ -n "$STUB_LOAD_LOG" ]] && echo "${gpu:-all}" >> "$STUB_LOAD_LOG"
+[[ -n "$gpu" && -n "$STUB_LOADED_FILE" ]] && echo "$gpu" >> "$STUB_LOADED_FILE"
+sleep "${STUB_LOAD_SLEEP:-1}"
+exit "${STUB_LOAD_EXIT:-0}"

@@ -1,9 +1,9 @@
 {
   "report_metadata": {
-    "script_version": "1.1.0",
+    "script_version": "1.2.0",
     "script_name": "gpu-burn-in",
-    "generated_at": "2026-08-27T11:13:45Z",
-    "duration_seconds": 1
+    "generated_at": "2026-08-27T13:19:49Z",
+    "duration_seconds": 2
   },
   "verdict": {
     "overall": "PASS",
@@ -20,8 +20,9 @@
     "gpu_count": 8
   },
   "burn_in": {
-    "tool": "dcgmproftester12",
+    "tool": "dcgmproftester13",
     "mode": "characterize",
+    "load_mode": "per-gpu",
     "duration_requested_seconds": 1800,
     "duration_actual_seconds": 1803,
     "load_exit_code": 0,
@@ -33,9 +34,9 @@
         "loaded_samples": 180,
         "loaded_seconds": 1800,
         "power_w": {
-          "min": 340,
+          "min": 71.22,
           "max": 340,
-          "mean": 340
+          "mean": 205.61
         },
         "power_limit_w": 350,
         "temp_gpu_c": {
@@ -66,9 +67,9 @@
         "loaded_samples": 180,
         "loaded_seconds": 1800,
         "power_w": {
-          "min": 340,
+          "min": 71.22,
           "max": 340,
-          "mean": 340
+          "mean": 205.61
         },
         "power_limit_w": 350,
         "temp_gpu_c": {
@@ -99,9 +100,9 @@
         "loaded_samples": 180,
         "loaded_seconds": 1800,
         "power_w": {
-          "min": 340,
+          "min": 71.22,
           "max": 340,
-          "mean": 340
+          "mean": 205.61
         },
         "power_limit_w": 350,
         "temp_gpu_c": {
@@ -132,9 +133,9 @@
         "loaded_samples": 180,
         "loaded_seconds": 1800,
         "power_w": {
-          "min": 340,
+          "min": 71.22,
           "max": 340,
-          "mean": 340
+          "mean": 205.61
         },
         "power_limit_w": 350,
         "temp_gpu_c": {
@@ -165,9 +166,9 @@
         "loaded_samples": 180,
         "loaded_seconds": 1800,
         "power_w": {
-          "min": 340,
+          "min": 71.22,
           "max": 340,
-          "mean": 340
+          "mean": 205.61
         },
         "power_limit_w": 350,
         "temp_gpu_c": {
@@ -198,9 +199,9 @@
         "loaded_samples": 180,
         "loaded_seconds": 1800,
         "power_w": {
-          "min": 340,
+          "min": 71.22,
           "max": 340,
-          "mean": 340
+          "mean": 205.61
         },
         "power_limit_w": 350,
         "temp_gpu_c": {
@@ -231,9 +232,9 @@
         "loaded_samples": 180,
         "loaded_seconds": 1800,
         "power_w": {
-          "min": 340,
+          "min": 71.22,
           "max": 340,
-          "mean": 340
+          "mean": 205.61
         },
         "power_limit_w": 350,
         "temp_gpu_c": {
@@ -264,9 +265,9 @@
         "loaded_samples": 180,
         "loaded_seconds": 1800,
         "power_w": {
-          "min": 340,
+          "min": 71.22,
           "max": 340,
-          "mean": 340
+          "mean": 205.61
         },
         "power_limit_w": 350,
         "temp_gpu_c": {

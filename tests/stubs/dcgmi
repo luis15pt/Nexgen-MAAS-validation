@@ -4,6 +4,18 @@ case "$1" in
   --version|-v|version) echo "dcgmi version 4.2.3" ;;
   discovery)            echo "${STUB_GPU_COUNT:-8} GPUs found" ;;
   diag)
+      # targeted_stress is the burn-in load path, not the 98 diagnostic: mark
+      # every GPU as loaded and honour its own fixture/exit overrides.
+      if [[ "$*" == *targeted_stress* ]]; then
+          echo "dcgmi diag: synthetic targeted_stress load, args: $*" >&2
+          if [[ -n "$STUB_LOADED_FILE" ]]; then
+              for ((g=0; g<${STUB_GPU_COUNT:-8}; g++)); do echo "$g" >> "$STUB_LOADED_FILE"; done
+          fi
+          [[ -n "$STUB_LOAD_LOG" ]] && echo "diag-all" >> "$STUB_LOAD_LOG"
+          sleep "${STUB_LOAD_SLEEP:-1}"
+          [[ -f "$STUB_DIAG_FIXTURE" ]] && cat "$STUB_DIAG_FIXTURE"
+          exit "${STUB_LOAD_EXIT:-0}"
+      fi
       [[ -n "$DCGM_FIXTURE_STDERR" ]] && printf '%s\n' "$DCGM_FIXTURE_STDERR" >&2
       [[ -f "$DCGM_FIXTURE" ]] && cat "$DCGM_FIXTURE"
       exit "${DCGM_FIXTURE_EXIT:-0}" ;;

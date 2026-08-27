@@ -64,7 +64,12 @@ if [[ "$args" == *--query-gpu=* ]]; then
         power.draw)
             # STUB_LOADED_GPUS: comma list of GPUs that draw load power. Anything
             # else idles, which simulates a load generator covering only some cards.
-            if [[ -n "$STUB_LOADED_GPUS" ]]; then
+            # If the load stub recorded which GPUs it was pinned to, believe that
+            # over any static list -- it makes coverage reflect real launches.
+            if [[ -n "$STUB_LOADED_FILE" && -s "$STUB_LOADED_FILE" ]]; then
+              if grep -qx "$i" "$STUB_LOADED_FILE"; then v="${STUB_POWER_LOADED:-340.00}"
+              else v="${STUB_POWER:-71.22}"; fi
+            elif [[ -n "$STUB_LOADED_GPUS" ]]; then
               case ",$STUB_LOADED_GPUS," in *",$i,"*) v="${STUB_POWER_LOADED:-340.00}" ;;
                                             *)       v="${STUB_POWER:-71.22}" ;; esac
             else v="${STUB_POWER:-71.22}"; fi ;;

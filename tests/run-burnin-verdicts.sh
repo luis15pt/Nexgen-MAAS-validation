@@ -45,4 +45,45 @@ check "killed short of the required window"   FAIL  STUB_LOAD_EXIT=124
 check "overran -d but window complete"       WARN  STUB_LOAD_EXIT=124 STUB_LOAD_SLEEP=3 BURN_DURATION=2
 check "load covered only half the GPUs"      FAIL  STUB_LOADED_GPUS=0 STUB_POWER=71.22
 check "load covered every GPU"               PASS  STUB_LOADED_GPUS=0,1 STUB_POWER_LOADED=340.00
+
+# Structural: one load process per GPU, launched concurrently. Handed a
+# multi-GPU id list, dcgmproftester batches instead -- a real 8-GPU run loaded
+# 4 cards for 1780s and the other 4 for 280s.
+echo "Load tool selection:"
+rm -f /tmp/stub-*
+lf=$(mktemp)
+o=$(env STUB_GPU_COUNT=8 STUB_LOADED_FILE="$lf" BURN_DURATION=2 \
+        BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 bash "$SCRIPT" 2>/dev/null)
+mode=$(printf '%s' "$o" | jq -r '.burn_in.load_mode')
+covered=$(printf '%s' "$o" | jq '[.burn_in.telemetry[]|select(.loaded_seconds>0)]|length')
+if [[ "$mode" == "dcgmi-diag" && "$covered" == "8" ]]; then
+    printf '  ok    default is dcgmi diag targeted_stress, all 8 GPUs covered\n'
+else
+    printf '  FAIL  default mode=%s covered=%s\n' "$mode" "$covered"; rc=1
+fi
+# NVIDIA's own load test failing is a hardware verdict, not a tool quirk
+rm -f /tmp/stub-*
+o=$(env STUB_GPU_COUNT=8 STUB_LOADED_FILE="$(mktemp)" STUB_LOAD_EXIT=1 BURN_DURATION=2 \
+        BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 bash "$SCRIPT" 2>/dev/null)
+if [[ "$(printf '%s' "$o" | jq -r '.verdict.overall')" == "FAIL" ]]; then
+    printf '  ok    a targeted_stress failure fails the run\n'
+else
+    printf '  FAIL  targeted_stress failure did not fail the run\n'; rc=1
+fi
+rm -f "$lf"
+
+echo "Load launch topology (dcgmproftester fallback):"
+llog=$(mktemp)
+rm -f /tmp/stub-*
+env STUB_GPU_COUNT=8 STUB_LOAD_LOG="$llog" STUB_LOADED_FILE="$(mktemp)" \
+    BURN_TOOL=dcgmproftester BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1 \
+    bash "$SCRIPT" >/dev/null 2>&1
+got=$(sort -n "$llog" | tr '\n' ' ' | sed 's/ $//')
+if [[ "$got" == "0 1 2 3 4 5 6 7" ]]; then
+    printf '  ok    one process per GPU: %s\n' "$got"
+else
+    printf '  FAIL  expected one process per GPU 0-7, got: %s\n' "$got"; rc=1
+fi
+rm -f "$llog"
+
 exit $rc
