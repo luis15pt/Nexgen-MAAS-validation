@@ -8,6 +8,7 @@
 #   Designed to run every commissioning cycle. Outputs structured JSON.
 #   Resilient to nvidia-smi field changes across driver versions.
 # script_type: commissioning
+# parallel: disabled
 # hardware_type: gpu
 # timeout: 00:05:00
 # destructive: false

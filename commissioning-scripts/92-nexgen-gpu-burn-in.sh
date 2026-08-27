@@ -11,6 +11,7 @@
 #   Requires 90-nexgen-gpu-install to have run first.
 #   Override: BURN_DURATION=1800 BURN_MODE=characterize|enforce BURN_TOOL=auto|dcgmproftester|gpu-burn
 # script_type: commissioning
+# parallel: disabled
 # hardware_type: gpu
 # timeout: 01:30:00
 # destructive: false

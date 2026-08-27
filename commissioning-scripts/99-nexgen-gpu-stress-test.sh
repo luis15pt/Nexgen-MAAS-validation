@@ -7,6 +7,7 @@
 #   Level 1: ~1 min quick check. Level 4: ~90 min full validation.
 #   Override level: DCGM_DIAG_LEVEL=4
 # script_type: commissioning
+# parallel: disabled
 # hardware_type: gpu
 # timeout: 02:00:00
 # destructive: false

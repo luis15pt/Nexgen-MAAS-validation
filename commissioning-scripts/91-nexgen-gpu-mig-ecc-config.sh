@@ -7,6 +7,7 @@
 #   (no full reboot needed). Falls back to "pending reboot" if reset fails.
 #   Requires 90-nexgen-gpu-install to run first.
 # script_type: commissioning
+# parallel: disabled
 # hardware_type: gpu
 # timeout: 00:05:00
 # destructive: false

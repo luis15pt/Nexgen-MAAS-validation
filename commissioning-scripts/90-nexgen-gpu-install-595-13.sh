@@ -8,6 +8,7 @@
 #   Must run before 98-inventory and 99-stress-test.
 #   Override at runtime: NVIDIA_DRIVER=... CUDA_TOOLKIT=... DCGM_CUDA_MAJOR=...
 # script_type: commissioning
+# parallel: disabled
 # hardware_type: gpu
 # timeout: 00:20:00
 # destructive: false
