@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- Start MAAS 1.0 script metadata ---
+# name: 92-nexgen-gpu-inventory
 # title: NexGen GPU Inventory & Health Check
 # description: >-
 #   Collects GPU inventory (serials, UUIDs, VRAM, ECC counters,

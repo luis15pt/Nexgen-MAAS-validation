@@ -438,13 +438,19 @@ Or see the source at [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/
 > `timeout` default is **0, meaning no timeout**, so the declared limits were not
 > being enforced either. `tests/validate-maas-metadata.py` now checks this.
 >
-> **The block deliberately does not declare `name`.** MAAS treats the embedded
-> metadata as authoritative: if an embedded `name` differs from the `name=` given
-> on the upload command, the form raises *"May not override values defined in
-> embedded YAML"* and **rejects the upload entirely**. Declaring it would turn any
-> rename, renumber or stale upload command into a hard failure for no benefit, so
-> the upload command is the single source of the name. The validator enforces its
-> absence.
+> **`name` in the block must equal the filename stem, and must equal whatever the
+> upload command passes.** MAAS treats the embedded metadata as authoritative, and
+> the two failure modes sit either side of that:
+>
+> - Omit `name` from the block and an uploader that does not pass `name=` fails
+>   with *"This field is required"* — MAAS has nowhere to get it.
+> - Declare a `name` that differs from a supplied `name=` and the form raises
+>   *"May not override values defined in embedded YAML"* and rejects the upload.
+>
+> So the block declares it, pinned to the filename, and the upload command must
+> either omit `name=` or pass exactly that value. The validator enforces the pin,
+> which also makes a half-finished renumber impossible: rename the file and the
+> check fails until the metadata follows.
 
 ### If the scripts do not appear in MAAS
 

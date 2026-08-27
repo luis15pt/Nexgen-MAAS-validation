@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- Start MAAS 1.0 script metadata ---
+# name: 98-nexgen-gpu-stress-test
 # title: NexGen GPU Stress Test (DCGM Diagnostics)
 # description: >-
 #   Runs DCGM diagnostics at configurable levels (1-4).

@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- Start MAAS 1.0 script metadata ---
+# name: 90-nexgen-gpu-install-595-13
 # title: NexGen GPU Driver 595 + CUDA 13 + DCGM 4.x Installation
 # description: >-
 #   Installs nvidia-driver-595-server-open, cuda-toolkit-12-8,

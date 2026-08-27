@@ -26,7 +26,7 @@ except ImportError:
 MAAS_RE = re.compile(
     r"\s*#\s*-+\s*(Start|End) MAAS (?P<version>\d+\.\d+) script metadata\s+-+"
 )
-REQUIRED = ("title", "description", "script_type", "timeout")
+REQUIRED = ("name", "title", "description", "script_type", "timeout")
 TIMEOUT_RE = re.compile(r"^\d{1,2}:\d{2}:\d{2}$")
 
 root = pathlib.Path(__file__).resolve().parent.parent
@@ -56,13 +56,14 @@ for p in sorted((root / "commissioning-scripts").glob("*.sh")):
         continue
 
     problems = [f"missing {k}" for k in REQUIRED if not meta.get(k)]
-    # `name` must NOT be declared here. MAAS rejects the whole upload with "May
-    # not override values defined in embedded YAML" whenever the embedded name
-    # and the name given on the upload command differ -- so declaring it turns
-    # any rename, renumber or stale automation into a hard upload failure for no
-    # benefit. The upload command is the single source of the name.
-    if "name" in meta:
-        problems.append("declares 'name', which conflicts with the upload command")
+    # `name` is required: MAAS needs one, and an uploader that does not pass
+    # name= on the command line has nowhere else to get it. It must equal the
+    # filename stem, because the upload command is invariably derived from the
+    # filename -- and if the embedded name and the supplied name differ at all,
+    # MAAS rejects the upload with "May not override values defined in embedded
+    # YAML". Pinning it here makes a half-finished renumber impossible.
+    if meta.get("name") != p.stem:
+        problems.append(f"name {meta.get('name')!r} != filename stem {p.stem!r}")
     if meta.get("script_type") != "commissioning":
         problems.append(f"script_type is {meta.get('script_type')!r}")
     if not TIMEOUT_RE.match(str(meta.get("timeout", ""))):
@@ -74,7 +75,7 @@ for p in sorted((root / "commissioning-scripts").glob("*.sh")):
         print(f"  FAIL {p.name}: " + "; ".join(problems))
         rc = 1
     else:
-        print(f"  ok   {p.name:38} {meta['timeout']}  {meta['title'][:46]}")
+        print(f"  ok   {meta['name']:34} {meta['timeout']}  {meta['title'][:42]}")
 
 print("\n" + ("metadata OK" if rc == 0 else "METADATA PROBLEMS"))
 sys.exit(rc)
