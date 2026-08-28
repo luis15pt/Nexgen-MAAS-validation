@@ -723,6 +723,14 @@ def _check_pcie(gpu, burn_gpu, burn_csb=None, burn_ran=None):
 # present, because then the skip is unexplained.
 SKIP_EXPECTED_WITHOUT_NVLINK = {"nvbandwidth"}
 
+# Informational notes the burn-in writes about its own mode and about the
+# throttle result. Both are adjudicated per GPU in the acceptance section --
+# #4 for the load, #6 for throttling, both computed here from the telemetry and
+# independent of BURN_MODE -- so in a findings table they are commentary rather
+# than findings. Matched on info severity only, so the enforce-mode critical
+# "hit thermal or power-brake slowdown" issue is never caught by this.
+BURN_MODE_NOTE_MARKERS = ("burn_mode=", "thermal or power-brake slowdown")
+
 
 def skipped_test_names(diag) -> set:
     """Names of DCGM tests with at least one skipped result."""
@@ -960,8 +968,15 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None):
                              "; ".join(f"{k} in {v} sample(s)" for k, v in hit.items())
                              + f" ({cap_note})"))
         else:
+            # State the negative outright. "sw_power_cap active, which is
+            # expected" is true but answers a question nobody asked; what the
+            # reader wants is whether the hardware ever slowed down.
+            n_loaded = _n((burn_tel or {}).get("loaded_samples"))
+            where = f" in {int(n_loaded)} loaded sample(s)" if n_loaded else ""
             out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
-                             "PASS", cap_note))
+                             "PASS",
+                             f"no hardware thermal or power-brake slowdown{where}"
+                             f"; {cap_note}"))
 
     tel = burn_tel or {}
     p = tel.get("power_w") or {}
@@ -3130,6 +3145,16 @@ def generate_report(
     #   Only ever applied when NVLink was positively measured absent -- an
     #   unknown is not grounds to waive evidence -- and only when the excused
     #   tests are the ONLY ones skipped.
+    # - Burn-in mode and throttle commentary: see BURN_MODE_NOTE_MARKERS. Done
+    #   here rather than by not emitting it, so it also applies to reports built
+    #   from commissioning data MAAS already holds, and so the raw JSON keeps the
+    #   note for anyone reading it directly.
+    all_issues = [i for i in all_issues
+                  if not (i.get("source") == "Burn-In"
+                          and i.get("severity") == "info"
+                          and any(m in i.get("issue", "").lower()
+                                  for m in BURN_MODE_NOTE_MARKERS))]
+
     if sys_info.get("nvlink_present") is False:
         skipped = skipped_test_names(diag)
         if skipped and skipped <= SKIP_EXPECTED_WITHOUT_NVLINK:

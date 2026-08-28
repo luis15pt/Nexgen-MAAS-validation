@@ -263,6 +263,78 @@ print(f"  FAIL  REQUIRED_STAGES = {dc.REQUIRED_STAGES}")
 sys.exit(1)
 PYEOF
 
+hdr "Burn-in mode commentary is kept out of the findings table"
+python3 - <<'PYEOF' || rc=1
+import sys, json, re, copy
+sys.path.insert(0, "reporting")
+import device_certificate as dc
+
+inv = json.load(open("tests/fixtures/reports/inventory-healthy.json"))
+stress = json.load(open("tests/fixtures/reports/stress-pass.json"))
+burn0 = json.load(open("tests/fixtures/reports/burnin-full.json"))
+for t in burn0["burn_in"]["telemetry"]:
+    t.update(loaded_samples=356,
+             throttle_samples={"sw_power_cap": 356, "hw_thermal_slowdown": 0,
+                               "hw_power_brake_slowdown": 0, "sw_thermal_slowdown": 0})
+
+def burn_rows(issues, mode="characterize", hwth=0):
+    b = copy.deepcopy(burn0)
+    b["burn_in"]["mode"] = mode
+    for t in b["burn_in"]["telemetry"]:
+        t["throttle_samples"]["hw_thermal_slowdown"] = hwth
+    b["verdict"] = {"overall": "FAIL" if hwth else "PASS", "issues": issues}
+    h = dc.generate_report(None, inv, stress, burnin=b)
+    return [r for r in re.findall(
+        r'sev-(\w+)">\w+</span></td><td class="dim">([^<]*)</td>', h)
+        if r[1] == "Burn-In"], b
+
+rc = 0
+# The note stored from the run they already have.
+rows, _ = burn_rows([{"issue": "BURN_MODE=characterize -- telemetry recorded, "
+                               "no thresholds enforced", "severity": "info"}])
+if not rows:
+    print("  ok    the stored BURN_MODE note is not shown as a finding")
+else:
+    print("  FAIL  BURN_MODE note still in the findings table: %s" % rows); rc = 1
+
+# The replacement notes the newer script writes.
+rows, _ = burn_rows([
+    {"issue": "No thermal or power-brake slowdown on any of 8 GPU(s) across "
+              "2849 loaded sample(s)", "severity": "info"},
+    {"issue": "BURN_MODE=characterize: the per-GPU load verdict...", "severity": "info"}])
+if not rows:
+    print("  ok    the newer mode and throttle notes are not shown either")
+else:
+    print("  FAIL  newer notes still shown: %s" % rows); rc = 1
+
+# A genuine throttle finding must never be filtered.
+rows, b = burn_rows([{"issue": "8 GPU(s) hit thermal or power-brake slowdown "
+                               "under sustained load", "severity": "critical"}],
+                    mode="enforce", hwth=41)
+if rows and rows[0][0] == "crit":
+    print("  ok    a real throttle finding survives as critical")
+else:
+    print("  FAIL  real throttle finding was filtered: %s" % rows); rc = 1
+
+# Criterion #6 carries the answer either way, independent of BURN_MODE.
+c6 = [c for c in dc.evaluate_gpu_acceptance(inv["gpus"][0], stress, b)["criteria"]
+      if c["reject"] == 6][0]
+if c6["status"] == "FAIL" and "hw_thermal_slowdown in 41" in c6["detail"]:
+    print("  ok    criterion #6 fails on real throttling regardless of mode")
+else:
+    print("  FAIL  #6 did not catch throttling: %s %s" % (c6["status"], c6["detail"])); rc = 1
+
+b2 = copy.deepcopy(burn0); b2["verdict"] = {"overall": "PASS", "issues": []}
+c6 = [c for c in dc.evaluate_gpu_acceptance(inv["gpus"][0], stress, b2)["criteria"]
+      if c["reject"] == 6][0]
+if c6["status"] == "PASS" and "no hardware thermal or power-brake slowdown" in c6["detail"]:
+    print("  ok    criterion #6 states the negative outright when clean")
+else:
+    print("  FAIL  #6 clean wording: %s" % c6["detail"]); rc = 1
+
+sys.exit(rc)
+PYEOF
+
 hdr "nvbandwidth skip is adjudicated in Python, not in the script"
 python3 - <<'PYEOF' || rc=1
 import sys, json, re, copy
