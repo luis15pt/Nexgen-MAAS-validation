@@ -263,38 +263,72 @@ print(f"  FAIL  REQUIRED_STAGES = {dc.REQUIRED_STAGES}")
 sys.exit(1)
 PYEOF
 
-hdr "Raw log evidence is attached, bounded, and escaped"
+hdr "Raw logs are embedded in full, condensed not truncated"
 python3 - <<'PYEOF' || rc=1
-import sys, json, re
+import sys, json
 sys.path.insert(0, "reporting")
 import device_certificate as dc
 
 rc = 0
 
-# A gpu-burn-shaped log: its per-GPU verdict is the LAST thing printed, so a
-# head-biased bound would throw away exactly the evidence that matters.
-body = "".join("%.1f%%  proc'd: %d   errors: 0\n" % (i / 10.0, i) for i in range(8000))
-big = body + "Tested 8 GPUs:\n" + "".join("\tGPU %d: OK\n" % g for g in range(8))
+# A gpu-burn-shaped log. The real tool repaints its progress line in place
+# roughly 70 times per 0.1% step it reports, which is what turns a 3600 s run
+# into ~22 MB. Those repaints are terminal artifacts, not distinct evidence.
+step = "%.1f%%  proc'd: %d (35942 Gflop/s)   errors: 0   temps: 71 C"
+raw = ""
+for pct in range(100):
+    for rep in range(70):
+        raw += (step % (pct / 10.0, pct * 1000 + rep)) + "\r"
+raw += "\nTested 8 GPUs:\n" + "".join("\tGPU %d: OK\n" % g for g in range(8))
 
-h = dc.render_log_block("gpu-burn", big, keep="tail", max_chars=5000)
-if "GPU 7: OK" in h and "earlier characters elided" in h and len(h) < 8000:
-    print("  ok    oversized log keeps the tail and states what it dropped")
+out, note = dc.condense_terminal_log(raw)
+checks = [
+    (len(out) < len(raw) / 20, "condensing cuts the log by more than 20x"),
+    (out.count("%") == 100, "exactly one line survives per reported step"),
+    ("GPU 7: OK" in out, "the per-GPU verdict survives condensing"),
+    ("69069" in out, "the latest counters of each step are the ones kept"),
+    ("repaints collapsed" in note, "the note states what was collapsed"),
+]
+for ok, label in checks:
+    print(("  ok    " if ok else "  FAIL  ") + label)
+    if not ok:
+        rc = 1
+
+# A log with no repaints must pass through untouched.
+plain = "line one\nline two\n"
+if dc.condense_terminal_log(plain) == (plain, ""):
+    print("  ok    a log without repaints is passed through unchanged")
 else:
-    print("  FAIL  tail-biased bounding lost the verdict or did not bound"); rc = 1
+    print("  FAIL  condensing altered a log with no carriage returns"); rc = 1
 
-h = dc.render_log_block("nvidia-smi -q", big, keep="head", max_chars=5000)
-if "0.0%" in h and "further characters elided" in h:
-    print("  ok    head-biased bounding keeps the start")
+# The whole thing is embedded: no cap engaged at the real default, no link out.
+h = dc.render_log_block("gpu-burn output", raw)
+if "ev-trunc" not in h and "repaints collapsed" in h:
+    print("  ok    embedded in full at the default cap, stating the condensing")
 else:
-    print("  FAIL  head-biased bounding wrong"); rc = 1
+    print("  FAIL  block truncated at the default cap"); rc = 1
+if "ev-link" not in h and "MAAS" not in h:
+    print("  ok    nothing links out -- the reader may have no MAAS access")
+else:
+    print("  FAIL  block links to MAAS"); rc = 1
 
-# Absent evidence must render nothing at all, not an empty block.
+# The cap is a backstop; if it ever engages it must be visible, and tail mode
+# must keep the end, where the verdict is.
+h = dc.render_log_block("x", raw, max_chars=3000, keep="tail")
+if "ev-trunc" in h and "omitted" in h and "GPU 7: OK" in h:
+    print("  ok    backstop cap is flagged and tail mode keeps the verdict")
+else:
+    print("  FAIL  backstop truncation silent or lost the tail"); rc = 1
+if "0.0%" in dc.render_log_block("x", raw, max_chars=3000, keep="head"):
+    print("  ok    head mode keeps the start")
+else:
+    print("  FAIL  head mode wrong"); rc = 1
+
+# Absent evidence renders nothing; log text is untrusted and must be escaped.
 if all(dc.render_log_block("x", v) == "" for v in ("", None, "   \n")):
     print("  ok    absent evidence renders no block")
 else:
     print("  FAIL  empty input produced a block"); rc = 1
-
-# Log text is untrusted: it must be escaped, and bad base64 must not raise.
 h = dc.render_log_block("x", "a<script>alert(1)</script>")
 if "&lt;script&gt;" in h and "<script>alert" not in h:
     print("  ok    log text is HTML-escaped")
@@ -310,21 +344,30 @@ inv = json.load(open("tests/fixtures/reports/inventory-healthy.json"))
 stress = json.load(open("tests/fixtures/reports/stress-pass.json"))
 burn = json.load(open("tests/fixtures/reports/burnin-full.json"))
 html = dc.generate_report(None, inv, stress, burnin=burn)
-n_gpus = len(inv["gpus"])
 want = "nvidia-smi -q -d ROW_REMAPPER,ECC"
-if html.count(want) == n_gpus:
-    print("  ok    %s attached for each of %d cards" % (want, n_gpus))
+n = len(inv["gpus"])
+if html.count(want) == n:
+    print("  ok    %s attached for each of %d cards" % (want, n))
 else:
-    print("  FAIL  %s appears %d times, want %d" % (want, html.count(want), n_gpus)); rc = 1
+    print("  FAIL  %s appears %d times, want %d" % (want, html.count(want), n)); rc = 1
 if "Raw Evidence" in html and 'class="ev-block"' in html:
     print("  ok    raw evidence section rendered, collapsed by default")
 else:
     print("  FAIL  raw evidence section missing"); rc = 1
-# A printed certificate should not carry the logs.
 if ".ev-block { display: none !important; }" in html:
     print("  ok    print stylesheet omits the raw logs")
 else:
     print("  FAIL  raw logs would print"); rc = 1
+
+# When MAAS returned a full log for a stage, the JSON excerpt of the same stage
+# must not be shown as well.
+html2 = dc.generate_report(None, inv, stress, burnin=burn,
+                           script_logs={"burnin": "FULL BURN LOG\nTested 8 GPUs:\n"})
+if "FULL BURN LOG" in html2 and "output (sustained load)" not in html2:
+    print("  ok    full stage log supersedes the embedded excerpt")
+else:
+    print("  FAIL  excerpt and full log both shown for the same stage"); rc = 1
+
 sys.exit(rc)
 PYEOF
 

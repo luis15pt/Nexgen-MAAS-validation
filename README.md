@@ -269,9 +269,14 @@ by default: the `nvidia-smi -q -d ROW_REMAPPER,ECC` output for each card (the
 artifact Section 2 names), the sustained-load log, the kernel-log window scanned
 for Xid events, and — when MAAS is the data source — the complete commissioning
 log for each script. Each block is bounded, states how much it elided, and links
-back to MAAS for the untruncated original. Logs whose conclusion is printed last
-(gpu-burn) keep their tail. `@media print` omits them, so a printed certificate
-stays readable.
+**Nothing links out.** Whoever reads the certificate is not assumed to have
+access to the MAAS that produced it, so the logs are in the file or they are not
+evidence. The one transformation applied is collapsing carriage-return repaints:
+gpu-burn rewrites its progress line in place about 70 times per 0.1% step it
+reports, which is what turns a 1-hour run into ~22 MB. Collapsing them keeps one
+line per reported step — complete at the tool's own granularity — and each block
+states how many were collapsed. `@media print` omits the logs, so a printed
+certificate stays readable.
 
 **Load coverage is measured per GPU, not per run.** A real run had
 `dcgmproftester` cover four of eight cards for the full window and the other four

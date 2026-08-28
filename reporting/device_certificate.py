@@ -1052,11 +1052,60 @@ def _by_index(rows, key="gpu_index"):
     return out
 
 
-# Raw logs are the evidence the acceptance specification asks to be retained.
-# They are bounded per block: a 3600 s gpu-burn log is ~22 MB on the wire, and a
-# published page has a hard 16 MB ceiling, so each block keeps a slice and says
-# how much it dropped rather than silently truncating.
-RAW_EVIDENCE_MAX_CHARS = 200_000
+# Raw logs are the evidence the acceptance specification asks to be retained,
+# and the HTML certificate is the whole deliverable: the customer receiving it
+# has no access to our MAAS, so the evidence has to be IN the file. Nothing is
+# linked and nothing is summarised away.
+#
+# The one transformation applied is collapsing carriage-return repaints. A
+# 3600 s gpu-burn run leaves ~22 MB, but gpu-burn redraws its progress line in
+# place about 70 times per 0.1% step it actually reports -- those are terminal
+# repaints of a step already shown, not distinct log content. Collapsing them
+# keeps one line per reported step (~317 KB), which is complete at the tool's
+# own reporting granularity, and the count of what was collapsed is stated on
+# the block.
+#
+# The cap below is a backstop against a pathological log, not a normal path. If
+# it ever engages the block says so in the summary, where it cannot be missed.
+RAW_EVIDENCE_MAX_CHARS = 4_000_000
+
+
+def condense_terminal_log(text: str):
+    """Collapse carriage-return repaints. Returns (text, note).
+
+    A progress line rewritten in place with \r is one step displayed many
+    times. Only the most advanced repaint of each step is kept -- that is the
+    one carrying the highest counters -- and every line that is not a repaint is
+    passed through untouched.
+    """
+    if not text or "\r" not in text:
+        return text, ""
+
+    out: list = []
+    dropped = 0
+    last_key = None
+    for line in text.split("\n"):
+        if "\r" not in line:
+            out.append(line)
+            last_key = None
+            continue
+        for seg in line.split("\r"):
+            if not seg.strip():
+                continue
+            parts = seg.split(None, 1)
+            key = parts[0] if parts else ""
+            if key and key == last_key and out:
+                # Same step repainted: replace, keeping the latest counters.
+                out[-1] = seg
+                dropped += 1
+                continue
+            out.append(seg)
+            last_key = key
+
+    note = ""
+    if dropped:
+        note = f"{dropped:,} carriage-return repaints collapsed"
+    return "\n".join(out), note
 
 
 def decode_b64_text(blob) -> str:
@@ -1070,95 +1119,108 @@ def decode_b64_text(blob) -> str:
 
 
 def render_log_block(title: str, text: str, note: str = "",
-                     keep: str = "head", max_chars: int = RAW_EVIDENCE_MAX_CHARS,
-                     link: str = "") -> str:
-    """One collapsible raw-log block.
+                     keep: str = "tail",
+                     max_chars: int = RAW_EVIDENCE_MAX_CHARS) -> str:
+    """One collapsible raw-log block, embedded in full.
 
-    keep="tail" for logs whose conclusion is printed last (gpu-burn ends with
-    its per-GPU OK/FAULTY summary); "head" for documents like nvidia-smi -q
-    where the structure is at the top.
+    No link is emitted: whoever reads this certificate is not assumed to have
+    access to the MAAS that produced it, so the log has to be in the file.
+
+    keep="tail" when a log's conclusion is printed last (gpu-burn ends with its
+    per-GPU OK/FAULTY summary), and only matters if the backstop cap engages.
     """
     if not text or not text.strip():
         return ""
+
+    raw_total = len(text)
+    text, condensed_note = condense_terminal_log(text)
     total = len(text)
+
+    truncated = ""
     if total > max_chars:
         if keep == "tail":
-            shown = text[-max_chars:]
-            elided = (f"[{total - max_chars:,} earlier characters elided \u2014 "
-                      "showing the tail, where the summary is printed]\n\n")
-            body = elided + shown
+            body = text[-max_chars:]
+            truncated = f"{total - max_chars:,} earlier characters omitted"
         else:
-            shown = text[:max_chars]
-            body = shown + (f"\n\n[{total - max_chars:,} further characters elided]")
+            body = text[:max_chars]
+            truncated = f"{total - max_chars:,} further characters omitted"
     else:
         body = text
 
-    meta = f"{total:,} characters"
+    bits = [f"{total:,} characters"]
+    if condensed_note:
+        bits.append(condensed_note + f" from {raw_total:,}")
     if note:
-        meta += f" &middot; {escape(note)}"
-    link_html = (f' <a class="ev-link" href="{escape(link)}" target="_blank" '
-                 f'rel="noopener">full log in MAAS &rarr;</a>') if link else ""
+        bits.append(note)
+    meta = " &middot; ".join(escape(b) for b in bits)
+    warn_html = (f'<span class="ev-trunc">{escape(truncated)}</span>'
+                 if truncated else "")
     return (f'<details class="ev-block"><summary>{escape(title)}'
-            f'<span class="ev-meta">{meta}</span>{link_html}</summary>'
+            f'<span class="ev-meta">{meta}</span>{warn_html}</summary>'
             f'<pre class="ev-pre">{escape(body)}</pre></details>')
 
 
 def render_raw_evidence(inventory=None, stress=None, burnin=None,
-                        script_logs=None, maas_url=None, system_id=None) -> str:
-    """Raw log artifacts, collapsed by default.
+                        script_logs=None) -> str:
+    """Raw log artifacts, embedded in full and collapsed by default.
 
-    The acceptance specification asks that the raw evidence be retained, not
-    just the adjudication. Two sources:
+    This certificate is the deliverable. Whoever reads it is not assumed to have
+    access to the MAAS that produced it, so nothing is linked out -- the
+    evidence is in the file or it is not evidence.
 
-    * blobs the scripts embed in their own JSON (bounded at capture time), which
-      work in file mode with no MAAS to query;
-    * the complete commissioning log per script, fetched from MAAS, which
-      carries the full nvidia-smi dumps and the whole gpu-burn run.
+    Two sources, preferring the more complete one per stage:
 
-    Everything is collapsed and bounded, and each block links back to MAAS for
-    the untruncated original.
+    * the full commissioning log MAAS retained for each script, which carries
+      the whole nvidia-smi dumps, the entire sustained-load run and the dmesg
+      window;
+    * failing that (file mode, or a log MAAS could not return), the bounded
+      excerpt the script embedded in its own JSON.
     """
     b = (burnin or {}).get("burn_in") or {}
+    logs = script_logs or {}
     blocks = []
 
-    tool = b.get("tool") or "load"
-    blocks.append(render_log_block(
-        f"{tool} output (sustained load)",
-        decode_b64_text(b.get("gpu_burn_output_b64")),
-        note="per-GPU OK/FAULTY verdict is at the end", keep="tail"))
-    blocks.append(render_log_block(
-        "Kernel log across the burn-in window (NVRM / Xid)",
-        decode_b64_text((b.get("xid") or {}).get("dmesg_window_b64")),
-        note="empty means no NVRM or Xid line was raised"))
-    blocks.append(render_log_block(
-        "dcgmi diag output (burn-in)",
-        decode_b64_text(b.get("dcgmi_diag_b64"))))
-
-    # Full per-script logs, when MAAS was the data source.
-    for label, alias in (("Driver install", "install"),
-                         ("MIG / ECC configuration", "config"),
-                         ("Inventory", "inventory"),
-                         ("DCGM diagnostics", "stress"),
-                         ("Burn-in", "burnin")):
-        name = SCRIPT_ALIASES.get(alias, "")
-        text = (script_logs or {}).get(alias) or ""
+    stages = (
+        ("Driver install", "install"),
+        ("MIG / ECC configuration", "config"),
+        ("Inventory \u2014 full nvidia-smi -q and topology", "inventory"),
+        ("DCGM diagnostics", "stress"),
+        ("Sustained burn-in", "burnin"),
+    )
+    for label, alias in stages:
+        text = logs.get(alias) or ""
         if not text:
             continue
-        link = ""
-        if maas_url and system_id:
-            link = (f"{maas_url.rstrip('/')}/#/machine/{system_id}/commissioning")
+        name = _strip_sh(SCRIPT_ALIASES.get(alias, alias))
         blocks.append(render_log_block(
-            f"{label} \u2014 full commissioning log ({_strip_sh(name)})",
-            text, note="stdout and stderr as MAAS retained them",
-            keep="tail", link=link))
+            f"{label} \u2014 complete log ({name})", text,
+            note="stdout and stderr, as recorded during commissioning"))
+
+    # Excerpts the scripts embed themselves. Shown when the corresponding full
+    # log is absent, so the same content is not presented twice.
+    if not logs.get("burnin"):
+        tool = b.get("tool") or "load"
+        blocks.append(render_log_block(
+            f"{tool} output (sustained load)",
+            decode_b64_text(b.get("gpu_burn_output_b64")),
+            note="per-GPU OK/FAULTY verdict is at the end"))
+        blocks.append(render_log_block(
+            "Kernel log across the burn-in window (NVRM / Xid)",
+            decode_b64_text((b.get("xid") or {}).get("dmesg_window_b64")),
+            note="empty means no NVRM or Xid line was raised"))
+        blocks.append(render_log_block(
+            "dcgmi diag output (burn-in)",
+            decode_b64_text(b.get("dcgmi_diag_b64"))))
 
     blocks = [x for x in blocks if x]
     if not blocks:
         return ('<div class="table-note">No raw log artifacts were captured for '
                 'this run.</div>')
-    return ('<div class="table-note">Collapsed by default. Each block is bounded '
-            'and states how much was elided; MAAS holds the untruncated log.</div>'
-            + "".join(blocks))
+    return ('<div class="table-note">Complete logs, embedded in this file and '
+            'collapsed by default \u2014 no external system is needed to read '
+            'them. Progress lines rewritten in place by the load tool are '
+            'collapsed to one line per reported step; the count is stated on '
+            'each block.</div>' + "".join(blocks))
 
 
 def build_acceptance_context(inventory=None, all_scripts=None) -> dict:
@@ -3442,7 +3504,7 @@ def generate_report(
     # --- Commissioning scripts table ---
     scripts_html = render_commissioning_scripts_table(all_scripts or [])
     raw_evidence_html = render_raw_evidence(inventory, stress, burnin,
-                                           script_logs, maas_url, system_id)
+                                           script_logs)
 
     run_info = "<br>".join(script_meta) if script_meta else "--"
 
@@ -3784,8 +3846,13 @@ section { margin-bottom: 2rem; }
 }
 .ev-block > summary:hover { background: var(--card); }
 .ev-block[open] > summary { border-bottom: 1px solid var(--edge); }
-.ev-meta { font-weight: 400; font-size: 11px; color: var(--dim); }
-.ev-link { font-weight: 400; font-size: 11px; margin-left: auto; }
+.ev-meta { font-weight: 400; font-size: 11px; color: var(--txt2); }
+.ev-trunc {
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--amber);
+    margin-left: auto;
+}
 .ev-pre {
     margin: 0;
     padding: 10px 12px;

@@ -1007,12 +1007,44 @@ main() {
         fi
     else
         # Characterization: report, never gate.
+        #
+        # The summary states what the run DID establish. An earlier version said
+        # only "telemetry recorded, no thresholds enforced", which reads as
+        # though nothing was checked -- when in fact the per-GPU load verdict,
+        # the computation error count, the Xid scan, the memory-counter deltas
+        # and the hardware-throttle sample count are all asserted here
+        # regardless of mode. Only the clock and power FLOORS are mode-gated,
+        # because those are the numbers a characterization run exists to derive.
+        local loaded_total throttle_total clock_lo clock_hi
+        loaded_total=$(printf '%s' "$telemetry" | jq '[.[].loaded_samples // 0] | add // 0')
+        throttle_total=$(printf '%s' "$telemetry" | jq '[.[]
+            | (.throttle_samples.hw_thermal_slowdown     // 0)
+            + (.throttle_samples.hw_power_brake_slowdown // 0)
+            + (.throttle_samples.sw_thermal_slowdown     // 0)] | add // 0')
+        clock_lo=$(printf '%s' "$telemetry" | jq '[.[].clocks_sm_mhz.mean // empty]
+            | if length > 0 then (min | floor) else null end')
+        clock_hi=$(printf '%s' "$telemetry" | jq '[.[].clocks_sm_mhz.mean // empty]
+            | if length > 0 then (max | floor) else null end')
+
+        # The throttle result is the answer to "did it throttle?", so state it
+        # either way rather than only on the unhappy path.
         if [[ "$hw_throttled" -gt 0 ]]; then
-            issues=$(printf '%s' "$issues" | jq --argjson n "$hw_throttled" \
-                '. + [{"issue":"\($n) GPU(s) recorded thermal or power-brake slowdown (characterization only, not gated)","severity":"info"}]')
+            issues=$(printf '%s' "$issues" | jq \
+                --argjson n "$hw_throttled" --argjson t "${throttle_total:-0}" \
+                '. + [{"issue":"\($n) GPU(s) recorded thermal or power-brake slowdown in \($t) sample(s) -- reported, not gated in characterize mode","severity":"info"}]')
+        else
+            issues=$(printf '%s' "$issues" | jq \
+                --argjson g "${SMI_GPU_COUNT:-0}" --argjson s "${loaded_total:-0}" \
+                '. + [{"issue":"No thermal or power-brake slowdown on any of \($g) GPU(s) across \($s) loaded sample(s)","severity":"info"}]')
         fi
+
         issues=$(printf '%s' "$issues" | jq \
-            '. + [{"issue":"BURN_MODE=characterize -- telemetry recorded, no thresholds enforced","severity":"info"}]')
+            --argjson lo "${clock_lo:-null}" --argjson hi "${clock_hi:-null}" \
+            '. + [{"issue":("BURN_MODE=characterize: the per-GPU load verdict, computation errors, Xid events and memory-counter deltas are gated in every mode"
+                    + (if $lo != null and $hi != null
+                       then "; sustained SM clock \($lo)-\($hi) MHz mean" else "" end)
+                    + ". Throttling, clock and power floors are measured and reported but not gated -- set BURN_MODE=enforce with BURN_MIN_SM_CLOCK_MHZ to gate them."),
+                    "severity":"info"}]')
     fi
 
     if [[ "$load_exit" -eq 124 ]]; then
