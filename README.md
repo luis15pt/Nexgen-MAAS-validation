@@ -8,9 +8,8 @@ Automated GPU commissioning, validation, and certification pipeline for bare-met
 Nexgen-MAAS-validation/
 ├── README.md
 ├── .gitignore
-├── .env.example                             # MAAS + NetBox credentials template
+├── .env.example                             # MAAS credentials template
 ├── commissioning-scripts/        # MAAS commissioning scripts (run in order)
-│   ├── 80-nexgen-network-cabling-verify.sh # Step 0: NetBox vs LLDP cabling check
 │   ├── 90-nexgen-gpu-install-595-13.sh     # Step 1: Driver + CUDA + DCGM + Fabric Manager
 │   ├── 91-nexgen-gpu-mig-ecc-config.sh     # Step 2: Disable MIG, enable ECC
 │   ├── 92-nexgen-gpu-inventory.sh          # Step 3: GPU inventory & health check
@@ -23,8 +22,9 @@ Nexgen-MAAS-validation/
 │   ├── run-stress-verdicts.sh              # DCGM verdict matrix
 │   ├── run-burnin-verdicts.sh              # Burn-in verdict matrix
 │   ├── run-acceptance.py                   # Acceptance adjudication matrix
-│   ├── validate-maas-metadata.py           # Metadata block parses as MAAS parses it
-│   ├── stubs/                              # Fake nvidia-smi, dcgmi, dmesg, lspci
+│   ├── validate-maas-metadata.py           # Metadata block is internally consistent
+│   ├── check-python-compat.py              # Generator still runs on the oldest Python we deploy to
+│   ├── stubs/                              # Fake nvidia-smi, dcgmi, dmesg, lspci, systemctl, gpu_burn, dcgmproftester13
 │   └── fixtures/                           # Captured and synthetic evidence
 ├── reports/                      # Generated reports (git-ignored)
 │   └── .gitkeep
@@ -34,43 +34,7 @@ Nexgen-MAAS-validation/
 
 ## Commissioning Scripts
 
-All six scripts are designed to run as MAAS commissioning scripts in sequence. They follow the MAAS metadata format and output structured JSON for downstream consumption. The numeric prefix sets the execution order — `80` is independent, `99` is optional, and every GPU script depends on `90` having run first. Cheap phases run first so a failure costs the least: inventory (`92`) before any load, then the DCGM diagnostic (`98`), then the ~30-minute burn-in (`99`) last.
-
-### 80 - Network Cabling Verify (`v1.0.0`)
-
-Verifies physical cabling before any GPU work runs. Identifies the host by DMI serial (fallback: hostname), pulls the planned per-interface cable destinations from NetBox 4.x, collects live LLDP neighbours on every physical NIC, and fails commissioning on any mismatch.
-
-| Env Override | Default | Description |
-|---|---|---|
-| `NETBOX_URL` | `https://netbox.example.com` | NetBox base URL -- **edit before upload** |
-| `NETBOX_TOKEN` | `CHANGEME` | NetBox API token -- **edit before upload** |
-| `LLDP_WAIT_SECONDS` | `90` | Seconds to wait for LLDP neighbour discovery after starting `lldpd` |
-| `MATCH_BY_ENDPOINT` | `true` | Match planned cables by `(switch, port)` rather than requiring the local NIC name to equal the NetBox interface name |
-| `BMC_IFNAME_PATTERN` | `^(ipmi\|bmc\|mgmt\|management)$` | NetBox interfaces matching this regex are reported as `NOT_CHECKED` (info) -- the host OS can't observe BMC LLDP |
-| `REQUIRE_ALL_PLANNED` | `true` | Fail if any NetBox-planned cable has no LLDP neighbour |
-| `ALLOW_EXTRA_LINKS` | `false` | Strict mode: any live NIC without a NetBox cable fails the run |
-| `NAME_MATCH_STRICT` | `false` | Require exact (post-normalisation) port-name match instead of suffix match |
-| `IGNORE_IFNAMES` | (empty) | Comma-separated list of local NICs to exempt (e.g. management NIC) |
-
-Installs `lldpd` via apt if missing. Writes a planned-vs-actual ASCII table to stderr and structured JSON (`planned`, `actual`, `comparison`, `verdict`) to stdout. Row results: `OK`, `NOT_CHECKED` (BMC/IPMI, info only), `WRONG_SWITCH`, `WRONG_PORT`, `MISSING_LINK`, `LOCAL_NIC_NOT_FOUND`, `UNPLANNED_LINK`, `NO_LLDP_ON_UP_NIC`, `UNPLANNED_IDLE`. A fleet-level `LLDP_SWITCH_OFFLINE` issue is raised when the host has ≥1 up NIC but zero neighbours, so the verdict reads as a switch-config problem rather than a flurry of per-row `MISSING_LINK` failures. On `MISSING_LINK` the reason string lists down NICs, up-with-no-LLDP NICs, and any neighbours observed elsewhere so cable/optic/switch-config failures can be told apart at a glance. When zero LLDP neighbours are observed on a host with Mellanox NICs, the script auto-installs `mft` and dumps firmware `LLDP_NB`/`DCBX` settings to help diagnose firmware-level LLDP intercept.
-
-#### Example scenarios (defaults)
-
-Baseline: NetBox plans `IPMI → mgmt-sw/Gi1/0/6`, `eth0 → leaf254a/Eth1/4`, `eth1 → leaf254b/Eth1/4`. Host has 2× mlx5 + 2× igb NICs.
-
-| # | Physical reality | Per-row results | Extra NICs | Overall |
-|---|---|---|---|---|
-| 1 | Both mlx5 cabled exactly as planned. igb NICs down. | IPMI `NOT_CHECKED` · eth0 `OK` · eth1 `OK` | eno1/eno2 silenced (down) | **PASS** |
-| 2 | `eth1` cable unplugged. `eth0` fine. | eth0 `OK` · eth1 `MISSING_LINK` (reason names down NICs) | — | **FAIL** |
-| 3 | Both mlx5 cables swapped: mlx5_0→leaf254a, mlx5_1→leaf254b (opposite of plan). | eth0 `OK` · eth1 `OK` — endpoint mode accepts any host NIC that carries the planned `(switch, port)` | — | **PASS** |
-| 4 | `eth0` moved to wrong leaf port: leaf254a/Eth1/**5** instead of Eth1/4. | eth0 `MISSING_LINK` (reason: "Observed elsewhere: …leaf254a/Ethernet1/5") · eth1 `OK` | — | **FAIL** |
-| 5 | `eth0` moved to a different leaf: leaf253a/Eth1/4. | eth0 `MISSING_LINK` (reason names wrong leaf) · eth1 `OK` | — | **FAIL** |
-| 6 | Planned links correct, but a 3rd cable plugged into eno1 with LLDP neighbour not in NetBox. | eth0 `OK` · eth1 `OK` | eno1 `UNPLANNED_LINK` critical | **FAIL** |
-| 7 | Planned links correct, eno1 is up but its switch port has LLDP disabled. | eth0 `OK` · eth1 `OK` | eno1 `NO_LLDP_ON_UP_NIC` critical — "enable LLDP on the switch" | **FAIL** |
-| 8 | LLDP disabled fleet-wide (nothing observed on any up NIC). | all planned rows `MISSING_LINK` | — | **FAIL** + top-level `LLDP_SWITCH_OFFLINE` alert + mlx firmware diagnostics block |
-| 9 | NetBox entry `LOM` (not in BMC regex) has no host counterpart. | LOM `MISSING_LINK` | — | **FAIL** — add `LOM` to `BMC_IFNAME_PATTERN` to exempt |
-
-**Timeout**: 5 minutes
+All five scripts run as MAAS commissioning scripts in sequence, and output structured JSON on stdout for the report generator to consume. The numeric prefix sets the execution order: `99` is optional, and every script depends on `90` having run first. Cheap phases run first so a failure costs the least — inventory (`92`) before any load, then the DCGM diagnostic (`98`), then the 1-hour burn-in (`99`) last.
 
 ### 90 - GPU Driver Install (`v2.1.6`)
 
@@ -168,8 +132,11 @@ baseline**. Collects detailed GPU hardware inventory via a single bulk
 - ECC mode plus corrected/uncorrected volatile and aggregate counters
 - Remapped rows and memory bank availability
 - Temperature, power draw, and power limit
-- PCIe link generation and width (current vs. max)
+- PCIe link generation and width, with **Device Max and Host Max kept separate** — `pcie.link.gen.max` is the negotiated ceiling, so a Gen4 host caps it at 4; only the `-q` `Link Info` section distinguishes "the card is Gen4" from "the slot is Gen4"
 - NUMA topology mapping
+- **NVLink presence**, measured from the topo matrix and `nvlink --status` — the report uses it to tell an expected `nvbandwidth` skip from an unexplained one
+- **Physical CPU cores** (`Socket(s)` × `Core(s) per socket`), because MAAS reports logical CPUs and labels them cores
+- Raw `nvidia-smi -q -d ROW_REMAPPER,ECC` per card, embedded in the JSON — the artifact the specification names, and what the report renders per serial
 
 Extended ECC and retired-page fields are queried separately from the safe
 field set, because they do not exist on every driver version. If the extended
@@ -231,7 +198,7 @@ either way.
 
 **Timeout**: 2 hours
 
-### 99 - Sustained Burn-In (`v1.5.0`, optional)
+### 99 - Sustained Burn-In (`v1.6.0`, optional)
 
 Applies a sustained full-power load and records what the GPUs actually did
 under it. A DCGM diagnostic characterises a card for minutes; reballed and
@@ -241,6 +208,18 @@ Runs **last**: it is by far the longest phase, so anything that can fail
 cheaply has already failed by the time it starts.
 
 Optional by construction — skip it by not uploading it to MAAS.
+
+gpu-burn is built from source against the installed CUDA toolkit, for the
+compute capability actually present: the upstream Makefile defaults to
+`COMPUTE=75`, which would build the fault-detection compare kernel as Turing PTX
+and JIT it onto a Hopper card. The script reads `compute_cap` and passes it
+through.
+
+The JSON report is the deliverable, so it is assembled to a file, validated, and
+only then emitted; if it cannot be built the script reports FAIL with the reason
+rather than an unevidenced PASS. Log artifacts reach `jq` by path, never as
+arguments — a single argv entry is capped at 131072 bytes, and the base64 of an
+hour of gpu-burn output is far past it.
 
 Per GPU it records min/max/mean power, GPU and memory temperature, SM clock,
 and per-reason throttle sample counts. ECC, remapped-row and PCIe replay
@@ -262,21 +241,6 @@ typically application faults raised by the load itself.
 | `BURN_LOADED_POWER_FRAC` | `0.5` | Fraction of a GPU's own power limit that counts as "under load" |
 | `BURN_COVERAGE_FRAC` | `0.9` | Fraction of `BURN_DURATION` each GPU must actually spend under load |
 | `ARTIFACT_MAX_BYTES` | `131072` | Bytes of each raw log retained (base64) in the JSON report, kept from the **tail** |
-
-**Raw logs are attached to the report.** The acceptance specification asks that
-the evidence be retained, not just the verdict. Every report carries, collapsed
-by default: the `nvidia-smi -q -d ROW_REMAPPER,ECC` output for each card (the
-artifact Section 2 names), the sustained-load log, the kernel-log window scanned
-for Xid events, and — when MAAS is the data source — the complete commissioning
-log for each script. Each block is bounded, states how much it elided, and links
-**Nothing links out.** Whoever reads the certificate is not assumed to have
-access to the MAAS that produced it, so the logs are in the file or they are not
-evidence. The one transformation applied is collapsing carriage-return repaints:
-gpu-burn rewrites its progress line in place about 70 times per 0.1% step it
-reports, which is what turns a 1-hour run into ~22 MB. Collapsing them keeps one
-line per reported step — complete at the tool's own granularity — and each block
-states how many were collapsed. `@media print` omits the logs, so a printed
-certificate stays readable.
 
 **Load coverage is measured per GPU, not per run.** A real run had
 `dcgmproftester` cover four of eight cards for the full window and the other four
@@ -343,6 +307,13 @@ nothing was tested.
 pip install requests-oauthlib
 ```
 
+Python **3.8 or newer**. The generator is often run from a different host than
+it is developed on, and `from __future__ import annotations` hides most of that
+difference — the `X | None` annotations are never evaluated, so the module
+imports cleanly on 3.8 and an incompatibility surfaces mid-run instead. That is
+what `tests/check-python-compat.py` exists to catch; it checks syntax *and*
+runtime API use, because a syntax check cannot see an attribute call.
+
 ### Configuration
 
 Copy the example env file and fill in your MAAS credentials:
@@ -369,26 +340,62 @@ You can also use env vars or CLI flags (`--maas-url`, `--api-key`) which take pr
 python3 reporting/device_certificate.py --host EXAMPLE-GPU-001 -o reports/EXAMPLE-GPU-001-MAAS-validation.html
 ```
 
-**From local JSON files (offline/fallback):**
+**From local JSON files (offline/fallback):** each flag takes that script's
+stdout. Any subset works — omitted stages render as `N/A`, which degrades the
+verdict rather than being ignored.
 
 ```bash
 python3 reporting/device_certificate.py \
-  --install 90-output.json \
-  --inventory 98-output.json \
-  --stress 99-output.json \
+  --install   90-output.json \
+  --config    91-output.json \
+  --inventory 92-output.json \
+  --stress    98-output.json \
+  --burnin    99-output.json \
   -o reports/report.html
 ```
 
+In file mode there is no MAAS to query, so the full per-script logs are
+unavailable and the report falls back to the excerpts the scripts embed in their
+own JSON. MAAS-derived hardware detail (DIMMs, NICs, storage, CPU topology) is
+also absent.
+
 The generated report includes:
-- **Hardware acceptance, per GPU** — 21 criteria per card as a criterion × GPU
-  matrix, with a collapsible evidence block per serial
+- **Hardware acceptance, per GPU** — up to 24 criteria per card across the 8
+  reject conditions, as a criterion × GPU matrix, with a collapsible evidence
+  block per serial holding that card's raw `nvidia-smi` output
 - Machine hardware summary (CPU, RAM, storage, network)
 - Per-GPU identity, driver, firmware, and configuration details
 - ECC counters, remapped rows, and memory bank availability
 - DCGM diagnostic results with pass/fail status
 - Sustained-load telemetry and counter deltas, when script `99` ran
+- Raw logs, embedded and collapsed (see below)
 - DIMM inventory from lshw
 - Overall validation verdict
+
+### Raw evidence in the report
+
+The acceptance specification asks that the evidence be retained, not just the
+verdict, and the HTML file is the whole deliverable — whoever receives it is not
+assumed to have access to the MAAS that produced it. **Nothing links out.** Every
+report carries, collapsed by default:
+
+- `nvidia-smi -q -d ROW_REMAPPER,ECC` for each card — the artifact Section 2 names — nested inside that card's row in the acceptance table
+- the full `nvidia-smi -q` device record per card
+- the complete commissioning log for every script, when MAAS is the data source
+- otherwise the excerpts the scripts embed in their own JSON: the sustained-load log, the kernel-log window scanned for Xid, and the DCGM diagnostic output
+
+The one transformation applied is collapsing carriage-return repaints. gpu-burn
+rewrites its progress line in place roughly 70 times per 0.1% step it actually
+reports, which is what turns a 1-hour run into ~22 MB. Collapsing them keeps one
+line per reported step — complete at the tool's own granularity, carrying that
+step's latest counters — and each block states how many were collapsed. Measured
+on a log of the real shape: 433 KB → 6.3 KB, with every reported step and the
+per-GPU verdict intact.
+
+`ARTIFACT_MAX_BYTES` (script side) bounds what each script embeds in its own
+JSON; the generator's own cap is a 4 MB backstop, and if it ever engages the
+block says so in its summary. `@media print` omits the logs, so a printed
+certificate stays readable.
 
 ### Hardware acceptance
 
@@ -468,17 +475,12 @@ Or see the source at [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/
 > that `name` matches the filename — a stale name silently registers a second
 > script — and fails if the live MAAS delimiter reappears.
 
-Upload the commissioning scripts via the MAAS CLI. **Before uploading the
-80- script**, edit its `NETBOX_URL` / `NETBOX_TOKEN` defaults (top of the
-file) -- MAAS does not inject per-script secrets:
+Upload the commissioning scripts via the MAAS CLI. MAAS does not inject
+per-script configuration, so anything a script needs is a default inside it:
+`BURN_DURATION` in particular sets total commissioning time and has to be edited
+before upload.
 
 ```bash
-maas $PROFILE commissioning-scripts create \
-  name=80-nexgen-network-cabling-verify \
-  script_type=commissioning \
-  hardware_type=network \
-  content@=commissioning-scripts/80-nexgen-network-cabling-verify.sh
-
 maas $PROFILE commissioning-scripts create \
   name=90-nexgen-gpu-install-595-13 \
   script_type=commissioning \
@@ -517,9 +519,6 @@ maas $PROFILE commissioning-scripts create \
 Commission Machine in MAAS
          │
          ▼
-   80 - Cabling Verify ───► NetBox planned vs. LLDP actual (fails fast)
-         │
-         ▼
    90 - Install Drivers ──► nvidia-driver-595 + CUDA 12.8 + DCGM 4.x
          │                  + Fabric Manager (NVSwitch/NVL nodes)
          ▼
@@ -529,39 +528,76 @@ Commission Machine in MAAS
    92 - GPU Inventory ────► JSON: identity, ECC, remapped rows, PCIe, NUMA
          │                  (pre-load delivery baseline)
          ▼
-   98 - Stress Test ──────► DCGM diagnostics (level 1-4)
+   98 - DCGM Diagnostics ─► dcgmi diag (level 1-4)
          │
          ▼
-   99 - Burn-In (opt.) ───► sustained load: power, temp, clocks,
+   99 - Burn-In (opt.) ───► 1 h sustained load: power, temp, clocks,
          │                  throttle reasons, Xid, counter deltas
          │
          ▼
    device_certificate.py ─► reports/<hostname>-MAAS-validation.html
 ```
 
+> **Raise the MAAS node timeout before running the burn-in.** Settings →
+> Configuration, default **30 minutes**. With `BURN_DURATION=3600` the pipeline
+> is roughly 75 minutes of scripts plus ~4 of PXE and ephemeral boot; measured on
+> an 8× H100 node the scripts alone were 18.9 min at a 300 s burn and 73.9 min at
+> 3600 s. Past the node timeout MAAS marks the machine **Failed** while the
+> burn-in is still working, and the run is lost.
+
+Observed stage timings on an 8× H100 PCIe node (1-hour burn):
+
+| Stage | Duration |
+|---|---|
+| `90` driver install | 4 m 21 s |
+| `91` MIG / ECC | 3 s |
+| `92` inventory | 15 s |
+| `98` DCGM level 3 | 8 m 12 s |
+| `99` burn-in | 62 m 12 s |
+
 ## Testing
 
 The whole suite runs offline against fixtures and stub tooling — no GPU, no MAAS:
 
 ```bash
-./tests/run-all.sh
+./tests/run-all.sh          # everything: 113 assertions
 ```
 
-It covers shell and Python syntax; that each script's MAAS metadata block parses the way MAAS parses it; that every script's stdout is parseable JSON
-with nothing leaked ahead of it; the stress-test verdict matrix; the burn-in
-matrix; the acceptance adjudication matrix; end-to-end report rendering;
-and an HTML well-formedness check.
+`run-all.sh` is the entry point and invokes the rest, so its count is the total.
+Each can also be run on its own when iterating on one area:
 
-`tests/stubs/` holds fixture-driven fakes for `nvidia-smi`, `dcgmi`, `dmesg` and
-`lspci`, so the commissioning scripts can be run end to end on a machine with no
-GPU. `tests/fixtures/` holds captured `nvidia-smi -q` documents, synthetic DCGM
-result sets, and report-level JSON generated from real script output.
+```bash
+./tests/run-stress-verdicts.sh   # DCGM verdict matrix
+./tests/run-burnin-verdicts.sh   # burn-in verdict matrix (~60 s, real load windows)
+./tests/run-acceptance.py        # per-GPU acceptance adjudication
+./tests/check-python-compat.py   # generator still runs on Python 3.8
+./tests/validate-maas-metadata.py
+```
 
-The acceptance matrix (`tests/run-acceptance.py`) asserts every reject condition
-**and** the inverse cases that guard against false failures — a power-capped
-card, a Gen5 card in a Gen4 host, an idle link at Gen1, and a fully healthy
-card must all be accepted. Those inverses matter as much as the positives: a
-check that fails good hardware is worse than no check.
+`tests/stubs/` holds fixture-driven fakes for `nvidia-smi`, `dcgmi`,
+`dcgmproftester13`, `gpu_burn`, `dmesg`, `systemctl` and `lspci`, so the
+commissioning scripts run end to end on a machine with no GPU. `tests/fixtures/`
+holds captured `nvidia-smi -q` documents, synthetic DCGM result sets, and
+report-level JSON generated from real script output.
+
+Beyond the verdict matrices, the suite pins the specific defects that reached
+production, because each one produced a plausible-looking pass:
+
+| Guard | The defect it pins |
+|---|---|
+| Report assembly under a large artifact | A single argv entry is capped at 131072 bytes, so `jq --arg <2 MB base64>` died with `E2BIG`. With pipefail but no `errexit` the script then printed `Verdict: PASS` and no JSON at all |
+| Counter columns resolved by name | `SNAP_FIELDS` is discovered at runtime; when driver 595 dropped `pcie.replay_counter` every later column shifted, and the uncorrectable-remap delta became permanently null — silently disabling the FAIL gate that depends on it |
+| Error count across a 250 KB log | `cmd \| head -1 \|\| echo 0` is racy under pipefail: once `sort` is still writing when `head` closes the pipe, the fallback *also* fires and the value becomes `"0\n0"` — invalid JSON, which took the whole report down |
+| CPU cores are physical cores | MAAS NUMA `cores` lists hold *logical* cpu ids, so summing them reported a 2×64C/256T machine as "256 cores" |
+| nvbandwidth skip adjudication | Excused only when NVLink is positively measured absent — never on an unknown, and never when another test also skipped |
+| Raw logs embedded, not truncated | Oversized logs keep their tail, where the per-GPU verdict is printed; log text is escaped; unusable base64 degrades to empty |
+| Python 3.8 compatibility | `str.removesuffix` imported fine and failed mid-run |
+
+The acceptance matrix asserts every reject condition **and** the inverse cases
+that guard against false failures — a power-capped card, a Gen5 card in a Gen4
+host, an idle link at Gen1, and a fully healthy card must all be accepted. Those
+inverses matter as much as the positives: a check that fails good hardware is
+worse than no check.
 
 ## Error counters across the pipeline
 
@@ -687,5 +723,9 @@ the hardware view (`setpci`) and the kernel view (the sysfs `resource` file):
 **Resilient nvidia-smi queries** -- Every field query has a fallback. If a field doesn't exist in the driver version (e.g., `retired_pages` on consumer GPUs), it degrades gracefully to "N/A" rather than crashing.
 
 **DCGM optional** -- DCGM packages aren't always available for every driver version. The stress test detects DCGM availability and exits cleanly if absent, rather than failing the commissioning run.
+
+**Adjudication lives in the report generator, not in the scripts** -- The scripts collect evidence and emit JSON; `device_certificate.py` decides what it means. This is not just tidiness: a rule in Python applies to commissioning data MAAS already holds, so a corrected reading reaches existing certificates without re-running anything, and the rule exists in exactly one place. Stage verdicts are *derived* rather than inherited -- a stage whose findings are all reclassified or filtered drops to PASS on its own -- which is the mechanism the nvbandwidth and PCIe-link filters both rely on. A rule that was briefly implemented in script 98 as well was removed for exactly this reason.
+
+**Only adverse findings hold a stage below PASS** -- The findings table is for things needing attention. Informational notes -- "no NVLink fitted", "characterize mode" -- are commentary on evidence the per-GPU acceptance section already adjudicates, so they do not gate a stage and burn-in mode commentary is filtered out of the table entirely. The filter matches on info severity only, so a genuine critical finding can never be caught by it.
 
 **Dual mode report generator** -- Supports both MAAS API mode (pulls data directly, recommended) and file-based mode (offline, self-contained) for environments without API access at report time.
