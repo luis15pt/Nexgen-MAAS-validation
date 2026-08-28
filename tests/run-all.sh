@@ -263,6 +263,76 @@ print(f"  FAIL  REQUIRED_STAGES = {dc.REQUIRED_STAGES}")
 sys.exit(1)
 PYEOF
 
+hdr "nvbandwidth skip is adjudicated in Python, not in the script"
+python3 - <<'PYEOF' || rc=1
+import sys, json, re, copy
+sys.path.insert(0, "reporting")
+import device_certificate as dc
+
+# The rule lives here rather than in script 98 so that it exists once and so a
+# report built from already-stored commissioning data reads correctly without
+# re-running anything. These cases feed the generator exactly what MAAS holds:
+# script 98's own WARN verdict and its skip issue.
+inv = json.load(open("tests/fixtures/reports/inventory-healthy.json"))
+base = json.load(open("tests/fixtures/reports/stress-pass.json"))
+
+def stress_with(skipped):
+    st = copy.deepcopy(base)
+    for name in skipped:
+        st["dcgm_diagnostics"]["test_results"].append(
+            {"test": name,
+             "results": [{"gpu_id": None, "status": "Skip", "info": "", "warnings": []}
+                         for _ in range(8)]})
+    st["verdict"] = {"overall": "WARN", "issues": [{
+        "issue": "%d test(s) skipped -- they did not run, so they evidence nothing"
+                 % (8 * len(skipped)),
+        "severity": "warning", "details": ", ".join(skipped)}]}
+    return st
+
+def run(nvlink, skipped):
+    i = copy.deepcopy(inv)
+    if nvlink is None:
+        i["system"].pop("nvlink_present", None)
+    else:
+        i["system"]["nvlink_present"] = nvlink
+    h = dc.generate_report(None, i, stress_with(skipped))
+    m = re.search(r"DCGM Diagnostics.{0,400}?badge-(pass|warn|fail|na)", h, re.S)
+    sev = re.findall(r"sev-(crit|warn|info)\">(\w+)</span></td><td class=\"dim\">DCGM", h)
+    return (m.group(1) if m else "?"), (sev[0][1] if sev else "none")
+
+rc = 0
+cases = [
+    (False, ["nvbandwidth"],                     "pass", "INFO",
+     "measured absent: stage passes, fact kept as info"),
+    (True,  ["nvbandwidth"],                     "warn", "WARNING",
+     "NVLink present: skip is unexplained, stays a warning"),
+    (None,  ["nvbandwidth"],                     "warn", "WARNING",
+     "presence not measured: evidence is not waived"),
+    (False, ["nvbandwidth", "memory_bandwidth"], "warn", "WARNING",
+     "another test also skipped: not excused"),
+]
+for nvlink, skipped, want_stage, want_sev, label in cases:
+    stage, sev = run(nvlink, skipped)
+    ok = (stage == want_stage and sev == want_sev)
+    print(("  ok    " if ok else "  FAIL  ") + label
+          + ("" if ok else "  -> stage=%s sev=%s want %s/%s" % (stage, sev, want_stage, want_sev)))
+    if not ok:
+        rc = 1
+
+# An informational note must not hold a stage below PASS.
+st = copy.deepcopy(base)
+st["verdict"] = {"overall": "WARN",
+                 "issues": [{"issue": "just a note", "severity": "info"}]}
+h = dc.generate_report(None, inv, st)
+m = re.search(r"DCGM Diagnostics.{0,400}?badge-(pass|warn|fail|na)", h, re.S)
+if m and m.group(1) == "pass":
+    print("  ok    an info-only stage is not held at WARN")
+else:
+    print("  FAIL  info-only issue held the stage below PASS"); rc = 1
+
+sys.exit(rc)
+PYEOF
+
 hdr "Raw logs are embedded in full, condensed not truncated"
 python3 - <<'PYEOF' || rc=1
 import sys, json

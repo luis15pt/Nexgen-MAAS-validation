@@ -724,6 +724,18 @@ def _check_pcie(gpu, burn_gpu, burn_csb=None, burn_ran=None):
 SKIP_EXPECTED_WITHOUT_NVLINK = {"nvbandwidth"}
 
 
+def skipped_test_names(diag) -> set:
+    """Names of DCGM tests with at least one skipped result."""
+    names = set()
+    for t in (diag or {}).get("test_results") or []:
+        for r in t.get("results") or []:
+            if "skip" in str(r.get("status", "")).lower() \
+               or "not run" in str(r.get("status", "")).lower():
+                names.add(t.get("test", "?"))
+                break
+    return names
+
+
 def _check_stress(gpu_index, stress, gpu_results, context=None):
     """gpu_results: list of {test, status, info} for this GPU."""
     diag = (stress or {}).get("dcgm_diagnostics") or {}
@@ -3104,6 +3116,34 @@ def generate_report(
     all_issues = [i for i in all_issues
                   if "pcie link degradation" not in i.get("issue", "").lower()]
 
+    # - An nvbandwidth skip on a host with no NVLink is expected operation, not
+    #   missing evidence: there is no peer link for it to measure, and the pcie
+    #   test already covers host/device bandwidth. Reclassified to info rather
+    #   than dropped, so the fact stays on the report.
+    #
+    #   This is adjudication, so it belongs here and not in script 98: the
+    #   scripts collect evidence, this file decides what it means. Keeping it
+    #   here also means a report generated from already-stored commissioning
+    #   data gets the corrected reading without re-running anything, and the
+    #   rule exists in exactly one place.
+    #
+    #   Only ever applied when NVLink was positively measured absent -- an
+    #   unknown is not grounds to waive evidence -- and only when the excused
+    #   tests are the ONLY ones skipped.
+    if sys_info.get("nvlink_present") is False:
+        skipped = skipped_test_names(diag)
+        if skipped and skipped <= SKIP_EXPECTED_WITHOUT_NVLINK:
+            for i in all_issues:
+                if i.get("source") != "DCGM Diagnostics":
+                    continue
+                if "skip" not in i.get("issue", "").lower():
+                    continue
+                i["severity"] = "info"
+                i["issue"] = (
+                    "%s skipped as expected: no NVLink is fitted, so there is no "
+                    "peer bandwidth to measure. Host/device bandwidth is covered "
+                    "by the pcie test." % ", ".join(sorted(skipped)))
+
     # Per-GPU acceptance is adjudicated here rather than after rendering, so a
     # server holding a rejectable card cannot show a PASS headline.
     acc_context = build_acceptance_context(inventory, all_scripts)
@@ -3132,7 +3172,11 @@ def generate_report(
 
     # Derive per-stage verdicts: if all issues for a stage were filtered out,
     # upgrade from WARN to PASS (FAIL stays as-is since those are real failures)
-    remaining_sources = {i["source"] for i in all_issues}
+    # Only adverse findings hold a stage below PASS. An informational note --
+    # "no NVLink fitted", "characterize mode" -- is not a finding, and a stage
+    # whose only remaining issues are info has nothing outstanding against it.
+    remaining_sources = {i["source"] for i in all_issues
+                         if i.get("severity") in ("critical", "warning")}
     verdicts = []
     for label, data in stages:
         if data:
