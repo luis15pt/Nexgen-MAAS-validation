@@ -174,7 +174,7 @@ inv["system"].update(dict(cpu_model="AMD EPYC 9554 64-Core Processor", cpu_socke
                           cpu_cores_per_socket=64, cpu_total_cores=128,
                           cpu_total_threads=256))
 stress = json.load(open("tests/fixtures/reports/stress-pass.json"))
-# Exactly the layout MAAS reports for CA1-ESC812-182.
+# Exactly the layout MAAS reports for a 2-socket, 8-GPU H100 PCIe node.
 numa = [{"index": 0, "memory_mb": 788480,
          "cores": list(range(0, 64)) + list(range(128, 192))},
         {"index": 1, "memory_mb": 788480,
