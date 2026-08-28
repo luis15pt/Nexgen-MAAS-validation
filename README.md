@@ -263,6 +263,16 @@ typically application faults raised by the load itself.
 | `BURN_COVERAGE_FRAC` | `0.9` | Fraction of `BURN_DURATION` each GPU must actually spend under load |
 | `ARTIFACT_MAX_BYTES` | `131072` | Bytes of each raw log retained (base64) in the JSON report, kept from the **tail** |
 
+**Raw logs are attached to the report.** The acceptance specification asks that
+the evidence be retained, not just the verdict. Every report carries, collapsed
+by default: the `nvidia-smi -q -d ROW_REMAPPER,ECC` output for each card (the
+artifact Section 2 names), the sustained-load log, the kernel-log window scanned
+for Xid events, and — when MAAS is the data source — the complete commissioning
+log for each script. Each block is bounded, states how much it elided, and links
+back to MAAS for the untruncated original. Logs whose conclusion is printed last
+(gpu-burn) keep their tail. `@media print` omits them, so a printed certificate
+stays readable.
+
 **Load coverage is measured per GPU, not per run.** A real run had
 `dcgmproftester` cover four of eight cards for the full window and the other four
 for roughly 290 seconds, while the run's own duration looked correct — so the

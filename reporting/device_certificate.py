@@ -1052,6 +1052,115 @@ def _by_index(rows, key="gpu_index"):
     return out
 
 
+# Raw logs are the evidence the acceptance specification asks to be retained.
+# They are bounded per block: a 3600 s gpu-burn log is ~22 MB on the wire, and a
+# published page has a hard 16 MB ceiling, so each block keeps a slice and says
+# how much it dropped rather than silently truncating.
+RAW_EVIDENCE_MAX_CHARS = 200_000
+
+
+def decode_b64_text(blob) -> str:
+    """Text from a base64 evidence blob; empty string when absent or unusable."""
+    if not blob:
+        return ""
+    try:
+        return base64.b64decode(blob).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def render_log_block(title: str, text: str, note: str = "",
+                     keep: str = "head", max_chars: int = RAW_EVIDENCE_MAX_CHARS,
+                     link: str = "") -> str:
+    """One collapsible raw-log block.
+
+    keep="tail" for logs whose conclusion is printed last (gpu-burn ends with
+    its per-GPU OK/FAULTY summary); "head" for documents like nvidia-smi -q
+    where the structure is at the top.
+    """
+    if not text or not text.strip():
+        return ""
+    total = len(text)
+    if total > max_chars:
+        if keep == "tail":
+            shown = text[-max_chars:]
+            elided = (f"[{total - max_chars:,} earlier characters elided \u2014 "
+                      "showing the tail, where the summary is printed]\n\n")
+            body = elided + shown
+        else:
+            shown = text[:max_chars]
+            body = shown + (f"\n\n[{total - max_chars:,} further characters elided]")
+    else:
+        body = text
+
+    meta = f"{total:,} characters"
+    if note:
+        meta += f" &middot; {escape(note)}"
+    link_html = (f' <a class="ev-link" href="{escape(link)}" target="_blank" '
+                 f'rel="noopener">full log in MAAS &rarr;</a>') if link else ""
+    return (f'<details class="ev-block"><summary>{escape(title)}'
+            f'<span class="ev-meta">{meta}</span>{link_html}</summary>'
+            f'<pre class="ev-pre">{escape(body)}</pre></details>')
+
+
+def render_raw_evidence(inventory=None, stress=None, burnin=None,
+                        script_logs=None, maas_url=None, system_id=None) -> str:
+    """Raw log artifacts, collapsed by default.
+
+    The acceptance specification asks that the raw evidence be retained, not
+    just the adjudication. Two sources:
+
+    * blobs the scripts embed in their own JSON (bounded at capture time), which
+      work in file mode with no MAAS to query;
+    * the complete commissioning log per script, fetched from MAAS, which
+      carries the full nvidia-smi dumps and the whole gpu-burn run.
+
+    Everything is collapsed and bounded, and each block links back to MAAS for
+    the untruncated original.
+    """
+    b = (burnin or {}).get("burn_in") or {}
+    blocks = []
+
+    tool = b.get("tool") or "load"
+    blocks.append(render_log_block(
+        f"{tool} output (sustained load)",
+        decode_b64_text(b.get("gpu_burn_output_b64")),
+        note="per-GPU OK/FAULTY verdict is at the end", keep="tail"))
+    blocks.append(render_log_block(
+        "Kernel log across the burn-in window (NVRM / Xid)",
+        decode_b64_text((b.get("xid") or {}).get("dmesg_window_b64")),
+        note="empty means no NVRM or Xid line was raised"))
+    blocks.append(render_log_block(
+        "dcgmi diag output (burn-in)",
+        decode_b64_text(b.get("dcgmi_diag_b64"))))
+
+    # Full per-script logs, when MAAS was the data source.
+    for label, alias in (("Driver install", "install"),
+                         ("MIG / ECC configuration", "config"),
+                         ("Inventory", "inventory"),
+                         ("DCGM diagnostics", "stress"),
+                         ("Burn-in", "burnin")):
+        name = SCRIPT_ALIASES.get(alias, "")
+        text = (script_logs or {}).get(alias) or ""
+        if not text:
+            continue
+        link = ""
+        if maas_url and system_id:
+            link = (f"{maas_url.rstrip('/')}/#/machine/{system_id}/commissioning")
+        blocks.append(render_log_block(
+            f"{label} \u2014 full commissioning log ({_strip_sh(name)})",
+            text, note="stdout and stderr as MAAS retained them",
+            keep="tail", link=link))
+
+    blocks = [x for x in blocks if x]
+    if not blocks:
+        return ('<div class="table-note">No raw log artifacts were captured for '
+                'this run.</div>')
+    return ('<div class="table-note">Collapsed by default. Each block is bounded '
+            'and states how much was elided; MAAS holds the untruncated log.</div>'
+            + "".join(blocks))
+
+
 def build_acceptance_context(inventory=None, all_scripts=None) -> dict:
     """Facts the per-GPU checks need that are not in the GPU record itself.
 
@@ -2055,6 +2164,20 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
 
     # Step 5: List all commissioning scripts (for metadata)
     log("Fetching commissioning script list...")
+    # Full per-script logs. The scripts put their JSON on stdout and every log
+    # line, nvidia-smi dump and diagnostic artifact on stderr, so "all" is what
+    # carries the evidence the specification asks to be retained. This is the
+    # first caller of get_script_stdout_raw's output parameter.
+    log("Fetching full commissioning logs for raw evidence...")
+    script_logs: dict = {}
+    for alias, script_name in SCRIPT_ALIASES.items():
+        text = client.get_script_stdout_raw(system_id, script_name, output="all")
+        if text:
+            script_logs[alias] = text
+            log(f"  {_strip_sh(script_name)}: {len(text):,} chars")
+    if not script_logs:
+        log("  no per-script logs retrievable -- embedded excerpts will be used")
+
     all_scripts = client.get_all_commissioning_scripts(system_id)
     log(f"  {len(all_scripts)} total commissioning scripts")
 
@@ -2074,6 +2197,7 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
         "dimms": dimms,
         "all_scripts": all_scripts,
         "cpu_topology": cpu_topology,
+        "script_logs": script_logs,
         "system_id": system_id,
         "hostname": hostname,
         "fqdn": fqdn,
@@ -2766,6 +2890,19 @@ def render_gpu_acceptance(gpus, stress, burn, inventory=None, install=None,
             f'<td class="mono">{escape(str(v))}</td></tr>'
             for k, v in kv if v not in (None, "", "None"))
 
+        # Section 2 of the specification asks for the raw
+        # `nvidia-smi -q -d ROW_REMAPPER,ECC` output per card. Script 92 embeds
+        # exactly that, per GPU, and it has never been rendered until now.
+        raw = (g.get("raw_evidence") or {})
+        gpu_raw_html = "".join(filter(None, [
+            render_log_block("nvidia-smi -q -d ROW_REMAPPER,ECC",
+                             decode_b64_text(raw.get("row_remapper_ecc_b64")),
+                             note="memory-health evidence for this card"),
+            render_log_block("nvidia-smi -q (full device record)",
+                             decode_b64_text(raw.get("smi_query_b64")),
+                             note="identity, link, thermal and power state"),
+        ]))
+
         crit_html = ""
         for c in e["criteria"]:
             cls, glyph = _ACC_DOT.get(c["status"], ("dot-skip", "?"))
@@ -2783,6 +2920,7 @@ def render_gpu_acceptance(gpus, stress, burn, inventory=None, install=None,
                     <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
                     <tbody>{crit_html}</tbody>
                 </table>
+                {gpu_raw_html}
             </div>
         </details>'''
 
@@ -2835,6 +2973,7 @@ def generate_report(
     dimms: list[dict] | None = None,
     all_scripts: list[dict] | None = None,
     cpu_topology: dict | None = None,
+    script_logs: dict | None = None,
     hostname_override: str | None = None,
     config: dict | None = None,
     burnin: dict | None = None,
@@ -3302,6 +3441,8 @@ def generate_report(
 
     # --- Commissioning scripts table ---
     scripts_html = render_commissioning_scripts_table(all_scripts or [])
+    raw_evidence_html = render_raw_evidence(inventory, stress, burnin,
+                                           script_logs, maas_url, system_id)
 
     run_info = "<br>".join(script_meta) if script_meta else "--"
 
@@ -3404,6 +3545,11 @@ def generate_report(
     {scripts_html}
 </section>
 
+<section>
+    <div class="section-label">Raw Evidence &mdash; full logs</div>
+    {raw_evidence_html}
+</section>
+
 <footer>
     <div class="foot-left">
         <div class="foot-brand">nexgen-gpu-report v{__version__} &mdash; {data_source}</div>
@@ -3460,6 +3606,9 @@ CSS = '''
     section, .two-col > div { break-inside: avoid; }
     /* Expand every collapsed evidence block when printed: a paper
        certificate must not hide the per-serial detail. */
+    /* Raw logs are for the on-screen copy; a printed certificate should not
+       carry megabytes of them. The adjudication and its evidence still print. */
+    .ev-block { display: none !important; }
     .acc-detail { break-inside: avoid; }
     .acc-detail > summary { list-style: none; }
     details.acc-detail > .acc-body { display: grid !important; }
@@ -3615,6 +3764,40 @@ section { margin-bottom: 2rem; }
     margin-bottom: .5rem;
 }
 .action-required p { margin: .35rem 0; font-size: .84rem; line-height: 1.5; }
+/* Raw log blocks. Pre-formatted text scrolls inside its own box -- the page
+   body must never scroll sideways. */
+.ev-block {
+    border: 1px solid var(--edge);
+    border-radius: 6px;
+    margin: 8px 0;
+    background: var(--card2);
+}
+.ev-block > summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+}
+.ev-block > summary:hover { background: var(--card); }
+.ev-block[open] > summary { border-bottom: 1px solid var(--edge); }
+.ev-meta { font-weight: 400; font-size: 11px; color: var(--dim); }
+.ev-link { font-weight: 400; font-size: 11px; margin-left: auto; }
+.ev-pre {
+    margin: 0;
+    padding: 10px 12px;
+    max-height: 460px;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    line-height: 1.45;
+    white-space: pre;
+    tab-size: 8;
+}
+
 .acc-detail {
     border: 1px solid var(--edge);
     border-radius: 4px;
@@ -3930,6 +4113,7 @@ Examples:
             dimms=data["dimms"],
             all_scripts=data["all_scripts"],
             cpu_topology=data.get("cpu_topology"),
+            script_logs=data.get("script_logs"),
             hostname_override=data["hostname"],
         )
 

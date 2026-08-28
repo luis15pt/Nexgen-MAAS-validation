@@ -263,6 +263,71 @@ print(f"  FAIL  REQUIRED_STAGES = {dc.REQUIRED_STAGES}")
 sys.exit(1)
 PYEOF
 
+hdr "Raw log evidence is attached, bounded, and escaped"
+python3 - <<'PYEOF' || rc=1
+import sys, json, re
+sys.path.insert(0, "reporting")
+import device_certificate as dc
+
+rc = 0
+
+# A gpu-burn-shaped log: its per-GPU verdict is the LAST thing printed, so a
+# head-biased bound would throw away exactly the evidence that matters.
+body = "".join("%.1f%%  proc'd: %d   errors: 0\n" % (i / 10.0, i) for i in range(8000))
+big = body + "Tested 8 GPUs:\n" + "".join("\tGPU %d: OK\n" % g for g in range(8))
+
+h = dc.render_log_block("gpu-burn", big, keep="tail", max_chars=5000)
+if "GPU 7: OK" in h and "earlier characters elided" in h and len(h) < 8000:
+    print("  ok    oversized log keeps the tail and states what it dropped")
+else:
+    print("  FAIL  tail-biased bounding lost the verdict or did not bound"); rc = 1
+
+h = dc.render_log_block("nvidia-smi -q", big, keep="head", max_chars=5000)
+if "0.0%" in h and "further characters elided" in h:
+    print("  ok    head-biased bounding keeps the start")
+else:
+    print("  FAIL  head-biased bounding wrong"); rc = 1
+
+# Absent evidence must render nothing at all, not an empty block.
+if all(dc.render_log_block("x", v) == "" for v in ("", None, "   \n")):
+    print("  ok    absent evidence renders no block")
+else:
+    print("  FAIL  empty input produced a block"); rc = 1
+
+# Log text is untrusted: it must be escaped, and bad base64 must not raise.
+h = dc.render_log_block("x", "a<script>alert(1)</script>")
+if "&lt;script&gt;" in h and "<script>alert" not in h:
+    print("  ok    log text is HTML-escaped")
+else:
+    print("  FAIL  log text not escaped"); rc = 1
+if dc.decode_b64_text("!!!bad!!!") == "" and dc.decode_b64_text(None) == "":
+    print("  ok    unusable base64 degrades to empty rather than raising")
+else:
+    print("  FAIL  base64 decode not defensive"); rc = 1
+
+# End to end: the artifact the specification names, per card.
+inv = json.load(open("tests/fixtures/reports/inventory-healthy.json"))
+stress = json.load(open("tests/fixtures/reports/stress-pass.json"))
+burn = json.load(open("tests/fixtures/reports/burnin-full.json"))
+html = dc.generate_report(None, inv, stress, burnin=burn)
+n_gpus = len(inv["gpus"])
+want = "nvidia-smi -q -d ROW_REMAPPER,ECC"
+if html.count(want) == n_gpus:
+    print("  ok    %s attached for each of %d cards" % (want, n_gpus))
+else:
+    print("  FAIL  %s appears %d times, want %d" % (want, html.count(want), n_gpus)); rc = 1
+if "Raw Evidence" in html and 'class="ev-block"' in html:
+    print("  ok    raw evidence section rendered, collapsed by default")
+else:
+    print("  FAIL  raw evidence section missing"); rc = 1
+# A printed certificate should not carry the logs.
+if ".ev-block { display: none !important; }" in html:
+    print("  ok    print stylesheet omits the raw logs")
+else:
+    print("  FAIL  raw logs would print"); rc = 1
+sys.exit(rc)
+PYEOF
+
 hdr "Rendered HTML is well-formed"
 python3 - <<'PY' || rc=1
 from html.parser import HTMLParser
