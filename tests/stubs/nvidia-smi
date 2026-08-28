@@ -18,6 +18,34 @@ H
   exit 0
 fi
 
+# Peer topology matrix. STUB_NVLINK=1 fits bridges, so NV<n> entries appear;
+# otherwise only PCIe-class links, which is what an H100 PCIe host without
+# bridges reports. Unset STUB_TOPO_FAIL to make topo unavailable entirely.
+if [[ "$args" == *"topo"* && "$args" == *-m* ]]; then
+  [[ -n "$STUB_TOPO_FAIL" ]] && exit 1
+  peer="SYS"; [[ -n "$STUB_NVLINK" ]] && peer="NV18"
+  printf '\t'; for ((i=0;i<N;i++)); do printf 'GPU%d\t' "$i"; done; printf 'CPU Affinity\n'
+  for ((i=0;i<N;i++)); do
+    printf 'GPU%d\t' "$i"
+    for ((j=0;j<N;j++)); do
+      if (( i == j )); then printf ' X \t'; else printf '%s\t' "$peer"; fi
+    done
+    printf '0-63\n'
+  done
+  exit 0
+fi
+
+if [[ "$args" == *nvlink* ]]; then
+  if [[ -z "$STUB_NVLINK" ]]; then
+    echo "NVML: Not Supported" >&2; exit 1
+  fi
+  for ((i=0;i<N;i++)); do
+    echo "GPU $i: NVIDIA H100"
+    for ((l=0;l<18;l++)); do echo "         Link $l: 26.562 GB/s"; done
+  done
+  exit 0
+fi
+
 # CSV queries first: "--query-gpu" contains the substring "-q", so matching the
 # -q document cases ahead of these would swallow every bulk query.
 if [[ "$args" == *--query-gpu=count* ]]; then echo "$N"; exit 0; fi

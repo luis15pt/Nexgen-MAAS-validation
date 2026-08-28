@@ -73,10 +73,11 @@ fail_json() {
         --arg v "$SCRIPT_VERSION" --arg m "$msg" \
         --arg drv "${SMI_DRIVER:-unknown}" --arg cuda "${SMI_CUDA:-unknown}" \
         --arg dcgm "${DCGM_VER:-unknown}" --argjson gpus "${SMI_GPU_COUNT:-0}" \
+        --argjson nvlink "$(case "${NVLINK_PRESENT:-unknown}" in true) echo true;; false) echo false;; *) echo null;; esac)" \
         '{
             report_metadata:{script_version:$v, script_name:"gpu-stress-test"},
             verdict:{overall:"FAIL", issues:[{"issue":$m,"severity":"critical"}]},
-            system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus},
+            system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus, nvlink_present:$nvlink},
             dcgm_diagnostics:{run_level:0, exit_code:-1, duration_seconds:0, test_results:[]}
         }'
     exit 1
@@ -185,6 +186,28 @@ collect_failure_diagnostics() {
 ###############################################################################
 # PREFLIGHT
 ###############################################################################
+# NVLink presence. nvbandwidth measures peer bandwidth over NVLink, so with no
+# NVLink fitted there is nothing for it to measure and DCGM skips it. That is
+# expected operation, not missing evidence -- and it is only a real gap when
+# NVLink IS present. H100 PCIe ships with or without bridges, so measure it
+# rather than assuming either way.
+NVLINK_PRESENT="unknown"
+detect_nvlink() {
+    local topo links=""
+    topo=$(nvidia-smi topo -m 2>/dev/null || true)
+    if [[ -n "$topo" ]]; then
+        if printf '%s\n' "$topo" | grep -qE '(^|[[:space:]])NV[0-9]+([[:space:]]|$)'; then
+            NVLINK_PRESENT="true"
+        else
+            NVLINK_PRESENT="false"
+        fi
+    fi
+    links=$(nvidia-smi nvlink --status 2>/dev/null | grep -cE '^[[:space:]]*Link [0-9]+:' || true)
+    links="${links//[^0-9]/}"
+    [[ -n "$links" && "$links" -gt 0 ]] && NVLINK_PRESENT="true"
+    log "NVLink present: $NVLINK_PRESENT"
+}
+
 preflight() {
     log "=== Preflight checks ==="
 
@@ -240,6 +263,7 @@ preflight() {
         fail_json "DCGM sees 0 GPUs while nvidia-smi sees $SMI_GPU_COUNT -- DCGM/driver incompatibility (driver $SMI_DRIVER, DCGM $DCGM_VER)"
     fi
 
+    detect_nvlink
     log "Run level: $DCGM_DIAG_LEVEL"
 }
 
@@ -436,14 +460,51 @@ run_diagnostics() {
         fi
 
         if [[ "$skip_count" -gt 0 ]]; then
-            [[ "$overall" == "PASS" ]] && overall="WARN"
-            local skip_details
+            local skip_details expected_skips unexplained unexplained_count
             skip_details=$(echo "$test_results" | jq -r '[
                 .[] | select([.results[].status | test("(?i)skip|not[ _-]?run")] | any) | .test
             ] | unique | join(", ")' 2>/dev/null | head -c 300 || echo "")
-            issues=$(echo "$issues" | jq \
-                --argjson n "$skip_count" --arg d "$skip_details" \
-                '. + [{"issue":"\($n) test(s) skipped -- they did not run, so they evidence nothing","severity":"warning","details":$d}]')
+
+            # Only excuse a skip when we positively measured NVLink as absent.
+            # "unknown" is not good enough to waive evidence.
+            expected_skips='[]'
+            [[ "$NVLINK_PRESENT" == "false" ]] && expected_skips='["nvbandwidth"]'
+
+            # jq scoping: inside index(...) the input is $exp, so writing
+            # index(.test) makes "." the ARRAY and jq errors with "Cannot index
+            # array with string". Bind the test name to $t first. The earlier
+            # form swallowed that error via `2>/dev/null || echo 0`, which made
+            # every skip read as expected no matter what NVLink reported.
+            local jq_err="$WORK_DIR/skipcalc.err"
+            unexplained=$(echo "$test_results" | jq -r --argjson exp "$expected_skips" '[
+                .[] | select([.results[].status | test("(?i)skip|not[ _-]?run")] | any)
+                    | .test as $t | select(($exp | index($t)) == null) | $t
+            ] | unique | join(", ")' 2>"$jq_err" | head -c 300)
+            unexplained_count=$(echo "$test_results" | jq --argjson exp "$expected_skips" '[
+                .[] | .test as $t | select(($exp | index($t)) == null)
+                    | .results[] | select(.status | test("(?i)skip|not[ _-]?run"))
+            ] | length' 2>>"$jq_err")
+            # A classification that could not be computed must not silently
+            # become "no unexplained skips" -- fall back to counting them all.
+            if [[ ! "$unexplained_count" =~ ^[0-9]+$ ]]; then
+                warn "Could not classify skipped tests; treating all $skip_count as unexplained"
+                [[ -s "$jq_err" ]] && { warn "  jq said:"; head -2 "$jq_err" >&2; }
+                unexplained_count="$skip_count"
+                unexplained="$skip_details"
+            fi
+
+            if [[ "$unexplained_count" -gt 0 ]]; then
+                [[ "$overall" == "PASS" ]] && overall="WARN"
+                issues=$(echo "$issues" | jq \
+                    --argjson n "$unexplained_count" --arg d "$unexplained" \
+                    '. + [{"issue":"\($n) test(s) skipped -- they did not run, so they evidence nothing","severity":"warning","details":$d}]')
+            else
+                # Every skip is accounted for, so the verdict is untouched.
+                issues=$(echo "$issues" | jq \
+                    --argjson n "$skip_count" --arg d "$skip_details" \
+                    '. + [{"issue":"\($n) result(s) skipped as expected on a host with no NVLink fitted -- nvbandwidth has no peer link to measure; host/device bandwidth is covered by the pcie test","severity":"info","details":$d}]')
+                log "  $skip_count skipped result(s) expected (no NVLink): $skip_details"
+            fi
         fi
 
         if [[ "$warn_count" -gt 0 ]]; then
@@ -529,6 +590,7 @@ run_diagnostics() {
         --arg verdict "$overall" --argjson issues "$issues" \
         --arg drv "$SMI_DRIVER" --arg cuda "$SMI_CUDA" \
         --arg dcgm "$DCGM_VER" --argjson gpus "${SMI_GPU_COUNT:-0}" \
+        --argjson nvlink "$(case "${NVLINK_PRESENT:-unknown}" in true) echo true;; false) echo false;; *) echo null;; esac)" \
         --arg level "$DCGM_DIAG_LEVEL" --argjson exit_code "$diag_exit" \
         --argjson diag_dur "$diag_dur" --argjson results "$test_results" \
         --argjson artifacts "${DIAG_ARTIFACTS:-[]}" \
@@ -536,7 +598,7 @@ run_diagnostics() {
         '{
             report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts, duration_seconds:$dur},
             verdict:{overall:$verdict, issues:$issues},
-            system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus},
+            system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus, nvlink_present:$nvlink},
             dcgm_diagnostics:{run_level:$level, exit_code:$exit_code, duration_seconds:$diag_dur, test_results:$results},
             diagnostic_artifacts:$artifacts,
             counters_since_baseline:$counters
