@@ -44,6 +44,14 @@
     body { font-size: 8.5pt; }
     .page { max-width: 100%; padding: .5rem; }
     section, .two-col > div { break-inside: avoid; }
+    /* Expand every collapsed evidence block when printed: a paper
+       certificate must not hide the per-serial detail. */
+    /* Raw logs are for the on-screen copy; a printed certificate should not
+       carry megabytes of them. The adjudication and its evidence still print. */
+    .ev-block { display: none !important; }
+    .acc-detail { break-inside: avoid; }
+    .acc-detail > summary { list-style: none; }
+    details.acc-detail > .acc-body { display: grid !important; }
     .tbl-wrap { overflow: visible; }
 }
 
@@ -179,9 +187,88 @@ section { margin-bottom: 2rem; }
     vertical-align: middle;
 }
 
+.action-required {
+    border: 1px solid var(--red-bd);
+    background: var(--red-bg);
+    border-left: 3px solid var(--red);
+    border-radius: 4px;
+    padding: .9rem 1.1rem;
+    margin: 1.25rem 0;
+}
+.action-required .action-title {
+    color: var(--red);
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    font-size: .78rem;
+    margin-bottom: .5rem;
+}
+.action-required p { margin: .35rem 0; font-size: .84rem; line-height: 1.5; }
+/* Raw log blocks. Pre-formatted text scrolls inside its own box -- the page
+   body must never scroll sideways. */
+.ev-block {
+    border: 1px solid var(--edge);
+    border-radius: 6px;
+    margin: 8px 0;
+    background: var(--card2);
+}
+.ev-block > summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+}
+.ev-block > summary:hover { background: var(--card); }
+.ev-block[open] > summary { border-bottom: 1px solid var(--edge); }
+.ev-meta { font-weight: 400; font-size: 11px; color: var(--txt2); }
+.ev-trunc {
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--amber);
+    margin-left: auto;
+}
+.ev-pre {
+    margin: 0;
+    padding: 10px 12px;
+    max-height: 460px;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    line-height: 1.45;
+    white-space: pre;
+    tab-size: 8;
+}
+
+.acc-detail {
+    border: 1px solid var(--edge);
+    border-radius: 4px;
+    margin-top: .5rem;
+    background: var(--card);
+}
+.acc-detail > summary {
+    cursor: pointer;
+    padding: .5rem .75rem;
+    font-size: .82rem;
+    letter-spacing: .02em;
+}
+.acc-detail > summary:hover { background: var(--card2); }
+.acc-detail[open] > summary { border-bottom: 1px solid var(--edge); }
+.acc-body {
+    padding: .75rem;
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 2fr;
+    gap: 1rem;
+    align-items: start;
+}
+@media (max-width: 900px) { .acc-body { grid-template-columns: 1fr; } }
+.acc-verdict td { border-top: 2px solid var(--edge2); padding-top: .4rem; }
 .vcards {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: .75rem;
     margin-bottom: 1.2rem;
 }
@@ -373,7 +460,7 @@ footer::before {
         </div>
         <div class="hdr-right">
             
-            <div class="overall"><span class="badge badge-warn">WARN</span></div>
+            <div class="overall"><span class="badge badge-pass">PASS</span></div>
         </div>
     </div>
     <div class="title-block">
@@ -381,9 +468,9 @@ footer::before {
         <div class="subtitle">
             <span class="hl">EXAMPLE-GPU-001</span>
             <span class="sep-dot"></span>
-            <span>PowerEdge R750xa</span>
+            <span></span>
             <span class="sep-dot"></span>
-            <span>8&times; NVIDIA A100 80GB PCIe</span>
+            <span>8&times; NVIDIA H100 PCIe</span>
         </div>
     </div>
 </header>
@@ -394,37 +481,1612 @@ footer::before {
         <div class="vcard">
             <div class="vcard-label">Install</div>
             <div class="vcard-badge"><span class="badge badge-pass">PASS</span></div>
-            <div class="card-meta">4m 40s</div>
+            <div class="card-meta">6m 50s</div>
+        </div>
+        <div class="vcard">
+            <div class="vcard-label">MIG/ECC</div>
+            <div class="vcard-badge"><span class="badge badge-pass">PASS</span></div>
+            
         </div>
         <div class="vcard">
             <div class="vcard-label">Inventory</div>
-            <div class="vcard-badge"><span class="badge badge-warn">WARN</span></div>
-            <div class="card-meta">5s</div>
+            <div class="vcard-badge"><span class="badge badge-pass">PASS</span></div>
+            <div class="card-meta">6s</div>
         </div>
         <div class="vcard">
-            <div class="vcard-label">Stress Test</div>
+            <div class="vcard-label">DCGM Diagnostics</div>
             <div class="vcard-badge"><span class="badge badge-pass">PASS</span></div>
-            <div class="card-meta">15m 0s</div>
+            <div class="card-meta">2s</div>
+        </div>
+        <div class="vcard">
+            <div class="vcard-label">Burn-In</div>
+            <div class="vcard-badge"><span class="badge badge-pass">PASS</span></div>
+            <div class="card-meta">3s</div>
         </div></div>
-    <table class="tbl issues"><thead><tr><th>Severity</th><th>Source</th><th>Issue</th></tr></thead><tbody><tr><td><span class="sev sev-crit">CRITICAL</span></td><td class="dim">Inventory</td><td>1 GPU(s) with ECC uncorrectable errors or double-bit retired pages</td></tr><tr><td><span class="sev sev-warn">WARNING</span></td><td class="dim">Inventory</td><td>1 GPU(s) with UCE remapped rows (degrading, not yet at failure threshold)</td></tr></tbody></table>
+    <div class="ok-msg">No issues detected across all stages</div>
 </section>
 
 <section class="two-col">
     <div>
         <div class="section-label">Hardware</div>
-        <table class="tbl kv"><tbody><tr><td class="kv-key">Hostname</td><td><span class="hl">EXAMPLE-GPU-001</span></td></tr><tr><td class="kv-key">Serial</td><td>ABCD1234567</td></tr><tr><td class="kv-key">Platform</td><td>PowerEdge R750xa</td></tr><tr><td class="kv-key">Motherboard</td><td>PowerEdge R750xa</td></tr><tr><td class="kv-key">BIOS</td><td>--</td></tr><tr><td class="kv-key">CPU</td><td>Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz &mdash; 128 threads</td></tr><tr><td class="kv-key">RAM</td><td>512 GB</td></tr></tbody></table>
+        <table class="tbl kv"><tbody><tr><td class="kv-key">Hostname</td><td><span class="hl">EXAMPLE-GPU-001</span></td></tr><tr><td class="kv-key">Serial</td><td>--</td></tr><tr><td class="kv-key">Platform</td><td>--</td></tr><tr><td class="kv-key">Motherboard</td><td></td></tr><tr><td class="kv-key">BIOS</td><td>--</td></tr><tr><td class="kv-key">CPU</td><td>2&times; Intel(R) Xeon(R) CPU E5-2660 v3 @ 2.60GHz &mdash; 40 logical CPUs</td></tr><tr><td class="kv-key">RAM</td><td>31 GB</td></tr></tbody></table>
     </div>
     <div>
         <div class="section-label">NUMA Topology</div>
-        <div class="numa-node-row"><span class="numa-id">NODE 0</span><span class="numa-gpu">GPU 0</span> <span class="numa-gpu">GPU 1</span> <span class="numa-gpu">GPU 2</span> <span class="numa-gpu">GPU 3</span></div><div class="numa-node-row"><span class="numa-id">NODE 1</span><span class="numa-gpu">GPU 4</span> <span class="numa-gpu">GPU 5</span> <span class="numa-gpu">GPU 6</span> <span class="numa-gpu">GPU 7</span></div>
+        <div class="numa-node-row"><span class="numa-id">NODE -1</span><span class="numa-gpu">GPU 0</span> <span class="numa-gpu">GPU 1</span> <span class="numa-gpu">GPU 2</span> <span class="numa-gpu">GPU 3</span> <span class="numa-gpu">GPU 4</span> <span class="numa-gpu">GPU 5</span> <span class="numa-gpu">GPU 6</span> <span class="numa-gpu">GPU 7</span></div>
         <div class="section-label" style="margin-top:1.5rem">Software</div>
-        <table class="tbl kv"><tbody><tr><td class="kv-key">Kernel</td><td>5.15.0-151-generic</td></tr><tr><td class="kv-key">Architecture</td><td>--</td></tr><tr><td class="kv-key">NVIDIA Driver</td><td>nvidia-driver-580-server-open (580.126.09)</td></tr><tr><td class="kv-key">CUDA</td><td>cuda-toolkit-12-8 (reports 13.0)</td></tr><tr><td class="kv-key">DCGM</td><td>v4.5.2</td></tr></tbody></table>
+        <table class="tbl kv"><tbody><tr><td class="kv-key">Kernel</td><td>5.15.0-177-generic</td></tr><tr><td class="kv-key">Architecture</td><td>--</td></tr><tr><td class="kv-key">NVIDIA Driver</td><td>nvidia-driver-595-server-open (595.10)</td></tr><tr><td class="kv-key">CUDA</td><td>cuda-toolkit-12-8 (reports 12.8)</td></tr><tr><td class="kv-key">DCGM</td><td>v4.2.3</td></tr></tbody></table>
     </div>
+</section>
+
+
+
+<section>
+    <div class="section-label">Hardware Acceptance &mdash; per GPU</div>
+    
+    <div class="table-note"><span class="st-pass">8 accept</span> &middot; <span class="st-warn">0 review</span> &middot; <span class="st-fail">0 reject</span> &mdash; Test evidence is 13.3 day(s) old.</div>
+    <div class="tbl-wrap">
+        <table class="tbl matrix">
+            <thead><tr><th>Criterion</th><th>Cond</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th></tr></thead>
+            <tbody>
+                <tr><td class="nowrap">Serial and UUID reported</td><td class="dim tiny nowrap">#8</td><td class="dot-pass" title="1571023456780 / GPU-3f1c8a20-1111-2222-3333-444455556660">&#10003;</td><td class="dot-pass" title="1571023456781 / GPU-3f1c8a20-1111-2222-3333-444455556661">&#10003;</td><td class="dot-pass" title="1571023456782 / GPU-3f1c8a20-1111-2222-3333-444455556662">&#10003;</td><td class="dot-pass" title="1571023456783 / GPU-3f1c8a20-1111-2222-3333-444455556663">&#10003;</td><td class="dot-pass" title="1571023456784 / GPU-3f1c8a20-1111-2222-3333-444455556664">&#10003;</td><td class="dot-pass" title="1571023456785 / GPU-3f1c8a20-1111-2222-3333-444455556665">&#10003;</td><td class="dot-pass" title="1571023456786 / GPU-3f1c8a20-1111-2222-3333-444455556666">&#10003;</td><td class="dot-pass" title="1571023456787 / GPU-3f1c8a20-1111-2222-3333-444455556667">&#10003;</td></tr><tr><td class="nowrap">Serial consistent across sources</td><td class="dim tiny nowrap">#8</td><td class="dot-pass" title="query and -q agree: 1571023456780">&#10003;</td><td class="dot-pass" title="query and -q agree: 1571023456781">&#10003;</td><td class="dot-pass" title="query and -q agree: 1571023456782">&#10003;</td><td class="dot-pass" title="query and -q agree: 1571023456783">&#10003;</td><td class="dot-pass" title="query and -q agree: 1571023456784">&#10003;</td><td class="dot-pass" title="query and -q agree: 1571023456785">&#10003;</td><td class="dot-pass" title="query and -q agree: 1571023456786">&#10003;</td><td class="dot-pass" title="query and -q agree: 1571023456787">&#10003;</td></tr><tr><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny nowrap">#8</td><td class="dot-pass" title="G520.0200.00.05">&#10003;</td><td class="dot-pass" title="G520.0200.00.05">&#10003;</td><td class="dot-pass" title="G520.0200.00.05">&#10003;</td><td class="dot-pass" title="G520.0200.00.05">&#10003;</td><td class="dot-pass" title="G520.0200.00.05">&#10003;</td><td class="dot-pass" title="G520.0200.00.05">&#10003;</td><td class="dot-pass" title="G520.0200.00.05">&#10003;</td><td class="dot-pass" title="G520.0200.00.05">&#10003;</td></tr><tr><td class="nowrap">No row-remapping failure</td><td class="dim tiny nowrap">#1</td><td class="dot-pass" title="no failure">&#10003;</td><td class="dot-pass" title="no failure">&#10003;</td><td class="dot-pass" title="no failure">&#10003;</td><td class="dot-pass" title="no failure">&#10003;</td><td class="dot-pass" title="no failure">&#10003;</td><td class="dot-pass" title="no failure">&#10003;</td><td class="dot-pass" title="no failure">&#10003;</td><td class="dot-pass" title="no failure">&#10003;</td></tr><tr><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny nowrap">#1</td><td class="dot-pass" title="0 uncorrectable, 3 correctable (delivery baseline)">&#10003;</td><td class="dot-pass" title="0 uncorrectable, 3 correctable (delivery baseline)">&#10003;</td><td class="dot-pass" title="0 uncorrectable, 3 correctable (delivery baseline)">&#10003;</td><td class="dot-pass" title="0 uncorrectable, 3 correctable (delivery baseline)">&#10003;</td><td class="dot-pass" title="0 uncorrectable, 3 correctable (delivery baseline)">&#10003;</td><td class="dot-pass" title="0 uncorrectable, 3 correctable (delivery baseline)">&#10003;</td><td class="dot-pass" title="0 uncorrectable, 3 correctable (delivery baseline)">&#10003;</td><td class="dot-pass" title="0 uncorrectable, 3 correctable (delivery baseline)">&#10003;</td></tr><tr><td class="nowrap">No pending row remap</td><td class="dim tiny nowrap">#2</td><td class="dot-pass" title="no remap pending">&#10003;</td><td class="dot-pass" title="no remap pending">&#10003;</td><td class="dot-pass" title="no remap pending">&#10003;</td><td class="dot-pass" title="no remap pending">&#10003;</td><td class="dot-pass" title="no remap pending">&#10003;</td><td class="dot-pass" title="no remap pending">&#10003;</td><td class="dot-pass" title="no remap pending">&#10003;</td><td class="dot-pass" title="no remap pending">&#10003;</td></tr><tr><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny nowrap">#2</td><td class="dot-pass" title="max=637, high=3, partial=0, low=0, none=0">&#10003;</td><td class="dot-pass" title="max=637, high=3, partial=0, low=0, none=0">&#10003;</td><td class="dot-pass" title="max=637, high=3, partial=0, low=0, none=0">&#10003;</td><td class="dot-pass" title="max=637, high=3, partial=0, low=0, none=0">&#10003;</td><td class="dot-pass" title="max=637, high=3, partial=0, low=0, none=0">&#10003;</td><td class="dot-pass" title="max=637, high=3, partial=0, low=0, none=0">&#10003;</td><td class="dot-pass" title="max=637, high=3, partial=0, low=0, none=0">&#10003;</td><td class="dot-pass" title="max=637, high=3, partial=0, low=0, none=0">&#10003;</td></tr><tr><td class="nowrap">ECC enabled during test</td><td class="dim tiny nowrap">#3</td><td class="dot-pass" title="Enabled">&#10003;</td><td class="dot-pass" title="Enabled">&#10003;</td><td class="dot-pass" title="Enabled">&#10003;</td><td class="dot-pass" title="Enabled">&#10003;</td><td class="dot-pass" title="Enabled">&#10003;</td><td class="dot-pass" title="Enabled">&#10003;</td><td class="dot-pass" title="Enabled">&#10003;</td><td class="dot-pass" title="Enabled">&#10003;</td></tr><tr><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny nowrap">#3</td><td class="dot-pass" title="corrected=0, uncorrected=0">&#10003;</td><td class="dot-pass" title="corrected=0, uncorrected=0">&#10003;</td><td class="dot-pass" title="corrected=0, uncorrected=0">&#10003;</td><td class="dot-pass" title="corrected=0, uncorrected=0">&#10003;</td><td class="dot-pass" title="corrected=0, uncorrected=0">&#10003;</td><td class="dot-pass" title="corrected=0, uncorrected=0">&#10003;</td><td class="dot-pass" title="corrected=0, uncorrected=0">&#10003;</td><td class="dot-pass" title="corrected=0, uncorrected=0">&#10003;</td></tr><tr><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny nowrap">#3</td><td class="dot-pass" title="ECC already enabled before commissioning">&#10003;</td><td class="dot-pass" title="ECC already enabled before commissioning">&#10003;</td><td class="dot-pass" title="ECC already enabled before commissioning">&#10003;</td><td class="dot-pass" title="ECC already enabled before commissioning">&#10003;</td><td class="dot-pass" title="ECC already enabled before commissioning">&#10003;</td><td class="dot-pass" title="ECC already enabled before commissioning">&#10003;</td><td class="dot-pass" title="ECC already enabled before commissioning">&#10003;</td><td class="dot-pass" title="ECC already enabled before commissioning">&#10003;</td></tr><tr><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny nowrap">#1</td><td class="dot-pass" title="0 aggregate uncorrectable">&#10003;</td><td class="dot-pass" title="0 aggregate uncorrectable">&#10003;</td><td class="dot-pass" title="0 aggregate uncorrectable">&#10003;</td><td class="dot-pass" title="0 aggregate uncorrectable">&#10003;</td><td class="dot-pass" title="0 aggregate uncorrectable">&#10003;</td><td class="dot-pass" title="0 aggregate uncorrectable">&#10003;</td><td class="dot-pass" title="0 aggregate uncorrectable">&#10003;</td><td class="dot-pass" title="0 aggregate uncorrectable">&#10003;</td></tr><tr><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny nowrap">#1</td><td class="dot-pass" title="0 SRAM uncorrectable">&#10003;</td><td class="dot-pass" title="0 SRAM uncorrectable">&#10003;</td><td class="dot-pass" title="0 SRAM uncorrectable">&#10003;</td><td class="dot-pass" title="0 SRAM uncorrectable">&#10003;</td><td class="dot-pass" title="0 SRAM uncorrectable">&#10003;</td><td class="dot-pass" title="0 SRAM uncorrectable">&#10003;</td><td class="dot-pass" title="0 SRAM uncorrectable">&#10003;</td><td class="dot-pass" title="0 SRAM uncorrectable">&#10003;</td></tr><tr><td class="nowrap">Link width x16</td><td class="dim tiny nowrap">#7</td><td class="dot-pass" title="x16 / x16">&#10003;</td><td class="dot-pass" title="x16 / x16">&#10003;</td><td class="dot-pass" title="x16 / x16">&#10003;</td><td class="dot-pass" title="x16 / x16">&#10003;</td><td class="dot-pass" title="x16 / x16">&#10003;</td><td class="dot-pass" title="x16 / x16">&#10003;</td><td class="dot-pass" title="x16 / x16">&#10003;</td><td class="dot-pass" title="x16 / x16">&#10003;</td></tr><tr><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny nowrap">#7</td><td class="dot-pass" title="Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card">&#10003;</td><td class="dot-pass" title="Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card">&#10003;</td><td class="dot-pass" title="Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card">&#10003;</td><td class="dot-pass" title="Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card">&#10003;</td><td class="dot-pass" title="Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card">&#10003;</td><td class="dot-pass" title="Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card">&#10003;</td><td class="dot-pass" title="Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card">&#10003;</td><td class="dot-pass" title="Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card">&#10003;</td></tr><tr><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny nowrap">#7</td><td class="dot-pass" title="+0 replays across the load window">&#10003;</td><td class="dot-pass" title="+0 replays across the load window">&#10003;</td><td class="dot-pass" title="+0 replays across the load window">&#10003;</td><td class="dot-pass" title="+0 replays across the load window">&#10003;</td><td class="dot-pass" title="+0 replays across the load window">&#10003;</td><td class="dot-pass" title="+0 replays across the load window">&#10003;</td><td class="dot-pass" title="+0 replays across the load window">&#10003;</td><td class="dot-pass" title="+0 replays across the load window">&#10003;</td></tr><tr><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny nowrap">#5</td><td class="dot-pass" title="level 3, 4 test(s) passed">&#10003;</td><td class="dot-pass" title="level 3, 4 test(s) passed">&#10003;</td><td class="dot-pass" title="level 3, 4 test(s) passed">&#10003;</td><td class="dot-pass" title="level 3, 4 test(s) passed">&#10003;</td><td class="dot-pass" title="level 3, 4 test(s) passed">&#10003;</td><td class="dot-pass" title="level 3, 4 test(s) passed">&#10003;</td><td class="dot-pass" title="level 3, 4 test(s) passed">&#10003;</td><td class="dot-pass" title="level 3, 4 test(s) passed">&#10003;</td></tr><tr><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny nowrap">#5</td><td class="dot-pass" title="level 3">&#10003;</td><td class="dot-pass" title="level 3">&#10003;</td><td class="dot-pass" title="level 3">&#10003;</td><td class="dot-pass" title="level 3">&#10003;</td><td class="dot-pass" title="level 3">&#10003;</td><td class="dot-pass" title="level 3">&#10003;</td><td class="dot-pass" title="level 3">&#10003;</td><td class="dot-pass" title="level 3">&#10003;</td></tr><tr><td class="nowrap">Sustained load applied</td><td class="dim tiny nowrap">#4</td><td class="dot-pass" title="gpu-burn, this GPU under load 1800s (characterize)">&#10003;</td><td class="dot-pass" title="gpu-burn, this GPU under load 1800s (characterize)">&#10003;</td><td class="dot-pass" title="gpu-burn, this GPU under load 1800s (characterize)">&#10003;</td><td class="dot-pass" title="gpu-burn, this GPU under load 1800s (characterize)">&#10003;</td><td class="dot-pass" title="gpu-burn, this GPU under load 1800s (characterize)">&#10003;</td><td class="dot-pass" title="gpu-burn, this GPU under load 1800s (characterize)">&#10003;</td><td class="dot-pass" title="gpu-burn, this GPU under load 1800s (characterize)">&#10003;</td><td class="dot-pass" title="gpu-burn, this GPU under load 1800s (characterize)">&#10003;</td></tr><tr><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny nowrap">#6</td><td class="dot-pass" title="no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load">&#10003;</td><td class="dot-pass" title="no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load">&#10003;</td><td class="dot-pass" title="no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load">&#10003;</td><td class="dot-pass" title="no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load">&#10003;</td><td class="dot-pass" title="no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load">&#10003;</td><td class="dot-pass" title="no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load">&#10003;</td><td class="dot-pass" title="no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load">&#10003;</td><td class="dot-pass" title="no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load">&#10003;</td></tr><tr><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny nowrap">#4</td><td class="dot-pass" title="power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz">&#10003;</td><td class="dot-pass" title="power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz">&#10003;</td><td class="dot-pass" title="power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz">&#10003;</td><td class="dot-pass" title="power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz">&#10003;</td><td class="dot-pass" title="power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz">&#10003;</td><td class="dot-pass" title="power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz">&#10003;</td><td class="dot-pass" title="power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz">&#10003;</td><td class="dot-pass" title="power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz">&#10003;</td></tr><tr><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny nowrap">#4</td><td class="dot-pass" title="gpu-burn: OK">&#10003;</td><td class="dot-pass" title="gpu-burn: OK">&#10003;</td><td class="dot-pass" title="gpu-burn: OK">&#10003;</td><td class="dot-pass" title="gpu-burn: OK">&#10003;</td><td class="dot-pass" title="gpu-burn: OK">&#10003;</td><td class="dot-pass" title="gpu-burn: OK">&#10003;</td><td class="dot-pass" title="gpu-burn: OK">&#10003;</td><td class="dot-pass" title="gpu-burn: OK">&#10003;</td></tr><tr><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny nowrap">#4</td><td class="dot-pass" title="none in the burn-in window">&#10003;</td><td class="dot-pass" title="none in the burn-in window">&#10003;</td><td class="dot-pass" title="none in the burn-in window">&#10003;</td><td class="dot-pass" title="none in the burn-in window">&#10003;</td><td class="dot-pass" title="none in the burn-in window">&#10003;</td><td class="dot-pass" title="none in the burn-in window">&#10003;</td><td class="dot-pass" title="none in the burn-in window">&#10003;</td><td class="dot-pass" title="none in the burn-in window">&#10003;</td></tr><tr><td class="nowrap">No new faults under load</td><td class="dim tiny nowrap">#4</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows">&#10003;</td></tr><tr><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny nowrap">#1</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)">&#10003;</td><td class="dot-pass" title="no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)">&#10003;</td></tr>
+                <tr class="acc-verdict"><td><strong>Verdict</strong></td><td></td><td><span class="badge badge-pass">ACCEPT</span></td><td><span class="badge badge-pass">ACCEPT</span></td><td><span class="badge badge-pass">ACCEPT</span></td><td><span class="badge badge-pass">ACCEPT</span></td><td><span class="badge badge-pass">ACCEPT</span></td><td><span class="badge badge-pass">ACCEPT</span></td><td><span class="badge badge-pass">ACCEPT</span></td><td><span class="badge badge-pass">ACCEPT</span></td></tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="table-note">Reject conditions are numbered per the acceptance specification.
+    <code>sw_power_cap</code> under sustained load is reported as expected operation, not a fault;
+    PCIe is judged against the maximum both card and host support rather than the idle value.</div>
+    
+        <details class="acc-detail">
+            <summary>GPU 0 &mdash; <span class="mono">1571023456780</span> <span class="badge badge-pass">ACCEPT</span></summary>
+            <div class="acc-body">
+                <table class="tbl kv"><tr><td class="kv-key">Product name</td><td class="mono">NVIDIA H100 PCIe</td></tr><tr><td class="kv-key">Serial</td><td class="mono">1571023456780</td></tr><tr><td class="kv-key">UUID</td><td class="mono">GPU-3f1c8a20-1111-2222-3333-444455556660</td></tr><tr><td class="kv-key">PCI device ID</td><td class="mono">0x2331</td></tr><tr><td class="kv-key">Board part number</td><td class="mono">900-21010-0000-000</td></tr><tr><td class="kv-key">GPU part number</td><td class="mono">2331-001-A1</td></tr><tr><td class="kv-key">VBIOS</td><td class="mono">96.00.61.00.01</td></tr><tr><td class="kv-key">InfoROM image</td><td class="mono">G520.0200.00.05</td></tr><tr><td class="kv-key">InfoROM ECC object</td><td class="mono">7.16</td></tr><tr><td class="kv-key">VRAM</td><td class="mono">81559 MiB</td></tr><tr><td class="kv-key">PCIe</td><td class="mono">Gen4 x16 (card Gen5, host Gen4)</td></tr><tr><td class="kv-key">Bus ID</td><td class="mono">00000000:1B:00.0</td></tr></table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial and UUID reported</td><td class="dim tiny">#8</td><td class="tiny">1571023456780 / GPU-3f1c8a20-1111-2222-3333-444455556660</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial consistent across sources</td><td class="dim tiny">#8</td><td class="tiny">query and -q agree: 1571023456780</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny">#8</td><td class="tiny">G520.0200.00.05</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No row-remapping failure</td><td class="dim tiny">#1</td><td class="tiny">no failure</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny">#1</td><td class="tiny">0 uncorrectable, 3 correctable (delivery baseline)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No pending row remap</td><td class="dim tiny">#2</td><td class="tiny">no remap pending</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny">#2</td><td class="tiny">max=637, high=3, partial=0, low=0, none=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC enabled during test</td><td class="dim tiny">#3</td><td class="tiny">Enabled</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny">#3</td><td class="tiny">corrected=0, uncorrected=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny">#3</td><td class="tiny">ECC already enabled before commissioning</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny">#1</td><td class="tiny">0 aggregate uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny">#1</td><td class="tiny">0 SRAM uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link width x16</td><td class="dim tiny">#7</td><td class="tiny">x16 / x16</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny">#7</td><td class="tiny">Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny">#7</td><td class="tiny">+0 replays across the load window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny">#5</td><td class="tiny">level 3, 4 test(s) passed</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny">#5</td><td class="tiny">level 3</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Sustained load applied</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn, this GPU under load 1800s (characterize)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny">#6</td><td class="tiny">no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny">#4</td><td class="tiny">power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn: OK</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny">#4</td><td class="tiny">none in the burn-in window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults under load</td><td class="dim tiny">#4</td><td class="tiny">no new uncorrectable errors or remapped rows</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny">#1</td><td class="tiny">no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)</td></tr></tbody>
+                </table>
+                <details class="ev-block"><summary>nvidia-smi -q -d ROW_REMAPPER,ECC<span class="ev-meta">3,968 characters &middot; memory-health evidence for this card</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1B:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456780
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556660
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1B:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details><details class="ev-block"><summary>nvidia-smi -q (full device record)<span class="ev-meta">3,968 characters &middot; identity, link, thermal and power state</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1B:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456780
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556660
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1B:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details>
+            </div>
+        </details>
+        <details class="acc-detail">
+            <summary>GPU 1 &mdash; <span class="mono">1571023456781</span> <span class="badge badge-pass">ACCEPT</span></summary>
+            <div class="acc-body">
+                <table class="tbl kv"><tr><td class="kv-key">Product name</td><td class="mono">NVIDIA H100 PCIe</td></tr><tr><td class="kv-key">Serial</td><td class="mono">1571023456781</td></tr><tr><td class="kv-key">UUID</td><td class="mono">GPU-3f1c8a20-1111-2222-3333-444455556661</td></tr><tr><td class="kv-key">PCI device ID</td><td class="mono">0x2331</td></tr><tr><td class="kv-key">Board part number</td><td class="mono">900-21010-0000-000</td></tr><tr><td class="kv-key">GPU part number</td><td class="mono">2331-001-A1</td></tr><tr><td class="kv-key">VBIOS</td><td class="mono">96.00.61.00.01</td></tr><tr><td class="kv-key">InfoROM image</td><td class="mono">G520.0200.00.05</td></tr><tr><td class="kv-key">InfoROM ECC object</td><td class="mono">7.16</td></tr><tr><td class="kv-key">VRAM</td><td class="mono">81559 MiB</td></tr><tr><td class="kv-key">PCIe</td><td class="mono">Gen4 x16 (card Gen5, host Gen4)</td></tr><tr><td class="kv-key">Bus ID</td><td class="mono">00000000:1C:00.0</td></tr></table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial and UUID reported</td><td class="dim tiny">#8</td><td class="tiny">1571023456781 / GPU-3f1c8a20-1111-2222-3333-444455556661</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial consistent across sources</td><td class="dim tiny">#8</td><td class="tiny">query and -q agree: 1571023456781</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny">#8</td><td class="tiny">G520.0200.00.05</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No row-remapping failure</td><td class="dim tiny">#1</td><td class="tiny">no failure</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny">#1</td><td class="tiny">0 uncorrectable, 3 correctable (delivery baseline)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No pending row remap</td><td class="dim tiny">#2</td><td class="tiny">no remap pending</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny">#2</td><td class="tiny">max=637, high=3, partial=0, low=0, none=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC enabled during test</td><td class="dim tiny">#3</td><td class="tiny">Enabled</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny">#3</td><td class="tiny">corrected=0, uncorrected=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny">#3</td><td class="tiny">ECC already enabled before commissioning</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny">#1</td><td class="tiny">0 aggregate uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny">#1</td><td class="tiny">0 SRAM uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link width x16</td><td class="dim tiny">#7</td><td class="tiny">x16 / x16</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny">#7</td><td class="tiny">Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny">#7</td><td class="tiny">+0 replays across the load window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny">#5</td><td class="tiny">level 3, 4 test(s) passed</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny">#5</td><td class="tiny">level 3</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Sustained load applied</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn, this GPU under load 1800s (characterize)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny">#6</td><td class="tiny">no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny">#4</td><td class="tiny">power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn: OK</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny">#4</td><td class="tiny">none in the burn-in window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults under load</td><td class="dim tiny">#4</td><td class="tiny">no new uncorrectable errors or remapped rows</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny">#1</td><td class="tiny">no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)</td></tr></tbody>
+                </table>
+                <details class="ev-block"><summary>nvidia-smi -q -d ROW_REMAPPER,ECC<span class="ev-meta">3,968 characters &middot; memory-health evidence for this card</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1C:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456781
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556661
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1C:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details><details class="ev-block"><summary>nvidia-smi -q (full device record)<span class="ev-meta">3,968 characters &middot; identity, link, thermal and power state</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1C:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456781
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556661
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1C:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details>
+            </div>
+        </details>
+        <details class="acc-detail">
+            <summary>GPU 2 &mdash; <span class="mono">1571023456782</span> <span class="badge badge-pass">ACCEPT</span></summary>
+            <div class="acc-body">
+                <table class="tbl kv"><tr><td class="kv-key">Product name</td><td class="mono">NVIDIA H100 PCIe</td></tr><tr><td class="kv-key">Serial</td><td class="mono">1571023456782</td></tr><tr><td class="kv-key">UUID</td><td class="mono">GPU-3f1c8a20-1111-2222-3333-444455556662</td></tr><tr><td class="kv-key">PCI device ID</td><td class="mono">0x2331</td></tr><tr><td class="kv-key">Board part number</td><td class="mono">900-21010-0000-000</td></tr><tr><td class="kv-key">GPU part number</td><td class="mono">2331-001-A1</td></tr><tr><td class="kv-key">VBIOS</td><td class="mono">96.00.61.00.01</td></tr><tr><td class="kv-key">InfoROM image</td><td class="mono">G520.0200.00.05</td></tr><tr><td class="kv-key">InfoROM ECC object</td><td class="mono">7.16</td></tr><tr><td class="kv-key">VRAM</td><td class="mono">81559 MiB</td></tr><tr><td class="kv-key">PCIe</td><td class="mono">Gen4 x16 (card Gen5, host Gen4)</td></tr><tr><td class="kv-key">Bus ID</td><td class="mono">00000000:1D:00.0</td></tr></table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial and UUID reported</td><td class="dim tiny">#8</td><td class="tiny">1571023456782 / GPU-3f1c8a20-1111-2222-3333-444455556662</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial consistent across sources</td><td class="dim tiny">#8</td><td class="tiny">query and -q agree: 1571023456782</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny">#8</td><td class="tiny">G520.0200.00.05</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No row-remapping failure</td><td class="dim tiny">#1</td><td class="tiny">no failure</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny">#1</td><td class="tiny">0 uncorrectable, 3 correctable (delivery baseline)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No pending row remap</td><td class="dim tiny">#2</td><td class="tiny">no remap pending</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny">#2</td><td class="tiny">max=637, high=3, partial=0, low=0, none=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC enabled during test</td><td class="dim tiny">#3</td><td class="tiny">Enabled</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny">#3</td><td class="tiny">corrected=0, uncorrected=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny">#3</td><td class="tiny">ECC already enabled before commissioning</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny">#1</td><td class="tiny">0 aggregate uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny">#1</td><td class="tiny">0 SRAM uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link width x16</td><td class="dim tiny">#7</td><td class="tiny">x16 / x16</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny">#7</td><td class="tiny">Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny">#7</td><td class="tiny">+0 replays across the load window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny">#5</td><td class="tiny">level 3, 4 test(s) passed</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny">#5</td><td class="tiny">level 3</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Sustained load applied</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn, this GPU under load 1800s (characterize)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny">#6</td><td class="tiny">no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny">#4</td><td class="tiny">power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn: OK</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny">#4</td><td class="tiny">none in the burn-in window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults under load</td><td class="dim tiny">#4</td><td class="tiny">no new uncorrectable errors or remapped rows</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny">#1</td><td class="tiny">no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)</td></tr></tbody>
+                </table>
+                <details class="ev-block"><summary>nvidia-smi -q -d ROW_REMAPPER,ECC<span class="ev-meta">3,968 characters &middot; memory-health evidence for this card</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1D:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456782
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556662
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1D:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details><details class="ev-block"><summary>nvidia-smi -q (full device record)<span class="ev-meta">3,968 characters &middot; identity, link, thermal and power state</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1D:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456782
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556662
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1D:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details>
+            </div>
+        </details>
+        <details class="acc-detail">
+            <summary>GPU 3 &mdash; <span class="mono">1571023456783</span> <span class="badge badge-pass">ACCEPT</span></summary>
+            <div class="acc-body">
+                <table class="tbl kv"><tr><td class="kv-key">Product name</td><td class="mono">NVIDIA H100 PCIe</td></tr><tr><td class="kv-key">Serial</td><td class="mono">1571023456783</td></tr><tr><td class="kv-key">UUID</td><td class="mono">GPU-3f1c8a20-1111-2222-3333-444455556663</td></tr><tr><td class="kv-key">PCI device ID</td><td class="mono">0x2331</td></tr><tr><td class="kv-key">Board part number</td><td class="mono">900-21010-0000-000</td></tr><tr><td class="kv-key">GPU part number</td><td class="mono">2331-001-A1</td></tr><tr><td class="kv-key">VBIOS</td><td class="mono">96.00.61.00.01</td></tr><tr><td class="kv-key">InfoROM image</td><td class="mono">G520.0200.00.05</td></tr><tr><td class="kv-key">InfoROM ECC object</td><td class="mono">7.16</td></tr><tr><td class="kv-key">VRAM</td><td class="mono">81559 MiB</td></tr><tr><td class="kv-key">PCIe</td><td class="mono">Gen4 x16 (card Gen5, host Gen4)</td></tr><tr><td class="kv-key">Bus ID</td><td class="mono">00000000:1E:00.0</td></tr></table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial and UUID reported</td><td class="dim tiny">#8</td><td class="tiny">1571023456783 / GPU-3f1c8a20-1111-2222-3333-444455556663</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial consistent across sources</td><td class="dim tiny">#8</td><td class="tiny">query and -q agree: 1571023456783</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny">#8</td><td class="tiny">G520.0200.00.05</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No row-remapping failure</td><td class="dim tiny">#1</td><td class="tiny">no failure</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny">#1</td><td class="tiny">0 uncorrectable, 3 correctable (delivery baseline)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No pending row remap</td><td class="dim tiny">#2</td><td class="tiny">no remap pending</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny">#2</td><td class="tiny">max=637, high=3, partial=0, low=0, none=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC enabled during test</td><td class="dim tiny">#3</td><td class="tiny">Enabled</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny">#3</td><td class="tiny">corrected=0, uncorrected=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny">#3</td><td class="tiny">ECC already enabled before commissioning</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny">#1</td><td class="tiny">0 aggregate uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny">#1</td><td class="tiny">0 SRAM uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link width x16</td><td class="dim tiny">#7</td><td class="tiny">x16 / x16</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny">#7</td><td class="tiny">Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny">#7</td><td class="tiny">+0 replays across the load window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny">#5</td><td class="tiny">level 3, 4 test(s) passed</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny">#5</td><td class="tiny">level 3</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Sustained load applied</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn, this GPU under load 1800s (characterize)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny">#6</td><td class="tiny">no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny">#4</td><td class="tiny">power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn: OK</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny">#4</td><td class="tiny">none in the burn-in window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults under load</td><td class="dim tiny">#4</td><td class="tiny">no new uncorrectable errors or remapped rows</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny">#1</td><td class="tiny">no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)</td></tr></tbody>
+                </table>
+                <details class="ev-block"><summary>nvidia-smi -q -d ROW_REMAPPER,ECC<span class="ev-meta">3,968 characters &middot; memory-health evidence for this card</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1E:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456783
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556663
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1E:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details><details class="ev-block"><summary>nvidia-smi -q (full device record)<span class="ev-meta">3,968 characters &middot; identity, link, thermal and power state</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1E:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456783
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556663
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1E:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details>
+            </div>
+        </details>
+        <details class="acc-detail">
+            <summary>GPU 4 &mdash; <span class="mono">1571023456784</span> <span class="badge badge-pass">ACCEPT</span></summary>
+            <div class="acc-body">
+                <table class="tbl kv"><tr><td class="kv-key">Product name</td><td class="mono">NVIDIA H100 PCIe</td></tr><tr><td class="kv-key">Serial</td><td class="mono">1571023456784</td></tr><tr><td class="kv-key">UUID</td><td class="mono">GPU-3f1c8a20-1111-2222-3333-444455556664</td></tr><tr><td class="kv-key">PCI device ID</td><td class="mono">0x2331</td></tr><tr><td class="kv-key">Board part number</td><td class="mono">900-21010-0000-000</td></tr><tr><td class="kv-key">GPU part number</td><td class="mono">2331-001-A1</td></tr><tr><td class="kv-key">VBIOS</td><td class="mono">96.00.61.00.01</td></tr><tr><td class="kv-key">InfoROM image</td><td class="mono">G520.0200.00.05</td></tr><tr><td class="kv-key">InfoROM ECC object</td><td class="mono">7.16</td></tr><tr><td class="kv-key">VRAM</td><td class="mono">81559 MiB</td></tr><tr><td class="kv-key">PCIe</td><td class="mono">Gen4 x16 (card Gen5, host Gen4)</td></tr><tr><td class="kv-key">Bus ID</td><td class="mono">00000000:1F:00.0</td></tr></table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial and UUID reported</td><td class="dim tiny">#8</td><td class="tiny">1571023456784 / GPU-3f1c8a20-1111-2222-3333-444455556664</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial consistent across sources</td><td class="dim tiny">#8</td><td class="tiny">query and -q agree: 1571023456784</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny">#8</td><td class="tiny">G520.0200.00.05</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No row-remapping failure</td><td class="dim tiny">#1</td><td class="tiny">no failure</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny">#1</td><td class="tiny">0 uncorrectable, 3 correctable (delivery baseline)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No pending row remap</td><td class="dim tiny">#2</td><td class="tiny">no remap pending</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny">#2</td><td class="tiny">max=637, high=3, partial=0, low=0, none=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC enabled during test</td><td class="dim tiny">#3</td><td class="tiny">Enabled</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny">#3</td><td class="tiny">corrected=0, uncorrected=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny">#3</td><td class="tiny">ECC already enabled before commissioning</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny">#1</td><td class="tiny">0 aggregate uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny">#1</td><td class="tiny">0 SRAM uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link width x16</td><td class="dim tiny">#7</td><td class="tiny">x16 / x16</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny">#7</td><td class="tiny">Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny">#7</td><td class="tiny">+0 replays across the load window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny">#5</td><td class="tiny">level 3, 4 test(s) passed</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny">#5</td><td class="tiny">level 3</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Sustained load applied</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn, this GPU under load 1800s (characterize)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny">#6</td><td class="tiny">no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny">#4</td><td class="tiny">power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn: OK</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny">#4</td><td class="tiny">none in the burn-in window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults under load</td><td class="dim tiny">#4</td><td class="tiny">no new uncorrectable errors or remapped rows</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny">#1</td><td class="tiny">no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)</td></tr></tbody>
+                </table>
+                <details class="ev-block"><summary>nvidia-smi -q -d ROW_REMAPPER,ECC<span class="ev-meta">3,968 characters &middot; memory-health evidence for this card</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1F:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456784
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556664
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1F:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details><details class="ev-block"><summary>nvidia-smi -q (full device record)<span class="ev-meta">3,968 characters &middot; identity, link, thermal and power state</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:1F:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456784
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556664
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:1F:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details>
+            </div>
+        </details>
+        <details class="acc-detail">
+            <summary>GPU 5 &mdash; <span class="mono">1571023456785</span> <span class="badge badge-pass">ACCEPT</span></summary>
+            <div class="acc-body">
+                <table class="tbl kv"><tr><td class="kv-key">Product name</td><td class="mono">NVIDIA H100 PCIe</td></tr><tr><td class="kv-key">Serial</td><td class="mono">1571023456785</td></tr><tr><td class="kv-key">UUID</td><td class="mono">GPU-3f1c8a20-1111-2222-3333-444455556665</td></tr><tr><td class="kv-key">PCI device ID</td><td class="mono">0x2331</td></tr><tr><td class="kv-key">Board part number</td><td class="mono">900-21010-0000-000</td></tr><tr><td class="kv-key">GPU part number</td><td class="mono">2331-001-A1</td></tr><tr><td class="kv-key">VBIOS</td><td class="mono">96.00.61.00.01</td></tr><tr><td class="kv-key">InfoROM image</td><td class="mono">G520.0200.00.05</td></tr><tr><td class="kv-key">InfoROM ECC object</td><td class="mono">7.16</td></tr><tr><td class="kv-key">VRAM</td><td class="mono">81559 MiB</td></tr><tr><td class="kv-key">PCIe</td><td class="mono">Gen4 x16 (card Gen5, host Gen4)</td></tr><tr><td class="kv-key">Bus ID</td><td class="mono">00000000:20:00.0</td></tr></table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial and UUID reported</td><td class="dim tiny">#8</td><td class="tiny">1571023456785 / GPU-3f1c8a20-1111-2222-3333-444455556665</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial consistent across sources</td><td class="dim tiny">#8</td><td class="tiny">query and -q agree: 1571023456785</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny">#8</td><td class="tiny">G520.0200.00.05</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No row-remapping failure</td><td class="dim tiny">#1</td><td class="tiny">no failure</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny">#1</td><td class="tiny">0 uncorrectable, 3 correctable (delivery baseline)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No pending row remap</td><td class="dim tiny">#2</td><td class="tiny">no remap pending</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny">#2</td><td class="tiny">max=637, high=3, partial=0, low=0, none=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC enabled during test</td><td class="dim tiny">#3</td><td class="tiny">Enabled</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny">#3</td><td class="tiny">corrected=0, uncorrected=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny">#3</td><td class="tiny">ECC already enabled before commissioning</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny">#1</td><td class="tiny">0 aggregate uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny">#1</td><td class="tiny">0 SRAM uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link width x16</td><td class="dim tiny">#7</td><td class="tiny">x16 / x16</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny">#7</td><td class="tiny">Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny">#7</td><td class="tiny">+0 replays across the load window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny">#5</td><td class="tiny">level 3, 4 test(s) passed</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny">#5</td><td class="tiny">level 3</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Sustained load applied</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn, this GPU under load 1800s (characterize)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny">#6</td><td class="tiny">no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny">#4</td><td class="tiny">power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn: OK</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny">#4</td><td class="tiny">none in the burn-in window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults under load</td><td class="dim tiny">#4</td><td class="tiny">no new uncorrectable errors or remapped rows</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny">#1</td><td class="tiny">no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)</td></tr></tbody>
+                </table>
+                <details class="ev-block"><summary>nvidia-smi -q -d ROW_REMAPPER,ECC<span class="ev-meta">3,968 characters &middot; memory-health evidence for this card</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:20:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456785
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556665
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:20:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details><details class="ev-block"><summary>nvidia-smi -q (full device record)<span class="ev-meta">3,968 characters &middot; identity, link, thermal and power state</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:20:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456785
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556665
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:20:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details>
+            </div>
+        </details>
+        <details class="acc-detail">
+            <summary>GPU 6 &mdash; <span class="mono">1571023456786</span> <span class="badge badge-pass">ACCEPT</span></summary>
+            <div class="acc-body">
+                <table class="tbl kv"><tr><td class="kv-key">Product name</td><td class="mono">NVIDIA H100 PCIe</td></tr><tr><td class="kv-key">Serial</td><td class="mono">1571023456786</td></tr><tr><td class="kv-key">UUID</td><td class="mono">GPU-3f1c8a20-1111-2222-3333-444455556666</td></tr><tr><td class="kv-key">PCI device ID</td><td class="mono">0x2331</td></tr><tr><td class="kv-key">Board part number</td><td class="mono">900-21010-0000-000</td></tr><tr><td class="kv-key">GPU part number</td><td class="mono">2331-001-A1</td></tr><tr><td class="kv-key">VBIOS</td><td class="mono">96.00.61.00.01</td></tr><tr><td class="kv-key">InfoROM image</td><td class="mono">G520.0200.00.05</td></tr><tr><td class="kv-key">InfoROM ECC object</td><td class="mono">7.16</td></tr><tr><td class="kv-key">VRAM</td><td class="mono">81559 MiB</td></tr><tr><td class="kv-key">PCIe</td><td class="mono">Gen4 x16 (card Gen5, host Gen4)</td></tr><tr><td class="kv-key">Bus ID</td><td class="mono">00000000:21:00.0</td></tr></table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial and UUID reported</td><td class="dim tiny">#8</td><td class="tiny">1571023456786 / GPU-3f1c8a20-1111-2222-3333-444455556666</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial consistent across sources</td><td class="dim tiny">#8</td><td class="tiny">query and -q agree: 1571023456786</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny">#8</td><td class="tiny">G520.0200.00.05</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No row-remapping failure</td><td class="dim tiny">#1</td><td class="tiny">no failure</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny">#1</td><td class="tiny">0 uncorrectable, 3 correctable (delivery baseline)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No pending row remap</td><td class="dim tiny">#2</td><td class="tiny">no remap pending</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny">#2</td><td class="tiny">max=637, high=3, partial=0, low=0, none=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC enabled during test</td><td class="dim tiny">#3</td><td class="tiny">Enabled</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny">#3</td><td class="tiny">corrected=0, uncorrected=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny">#3</td><td class="tiny">ECC already enabled before commissioning</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny">#1</td><td class="tiny">0 aggregate uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny">#1</td><td class="tiny">0 SRAM uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link width x16</td><td class="dim tiny">#7</td><td class="tiny">x16 / x16</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny">#7</td><td class="tiny">Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny">#7</td><td class="tiny">+0 replays across the load window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny">#5</td><td class="tiny">level 3, 4 test(s) passed</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny">#5</td><td class="tiny">level 3</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Sustained load applied</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn, this GPU under load 1800s (characterize)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny">#6</td><td class="tiny">no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny">#4</td><td class="tiny">power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn: OK</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny">#4</td><td class="tiny">none in the burn-in window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults under load</td><td class="dim tiny">#4</td><td class="tiny">no new uncorrectable errors or remapped rows</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny">#1</td><td class="tiny">no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)</td></tr></tbody>
+                </table>
+                <details class="ev-block"><summary>nvidia-smi -q -d ROW_REMAPPER,ECC<span class="ev-meta">3,968 characters &middot; memory-health evidence for this card</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:21:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456786
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556666
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:21:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details><details class="ev-block"><summary>nvidia-smi -q (full device record)<span class="ev-meta">3,968 characters &middot; identity, link, thermal and power state</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:21:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456786
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556666
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:21:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details>
+            </div>
+        </details>
+        <details class="acc-detail">
+            <summary>GPU 7 &mdash; <span class="mono">1571023456787</span> <span class="badge badge-pass">ACCEPT</span></summary>
+            <div class="acc-body">
+                <table class="tbl kv"><tr><td class="kv-key">Product name</td><td class="mono">NVIDIA H100 PCIe</td></tr><tr><td class="kv-key">Serial</td><td class="mono">1571023456787</td></tr><tr><td class="kv-key">UUID</td><td class="mono">GPU-3f1c8a20-1111-2222-3333-444455556667</td></tr><tr><td class="kv-key">PCI device ID</td><td class="mono">0x2331</td></tr><tr><td class="kv-key">Board part number</td><td class="mono">900-21010-0000-000</td></tr><tr><td class="kv-key">GPU part number</td><td class="mono">2331-001-A1</td></tr><tr><td class="kv-key">VBIOS</td><td class="mono">96.00.61.00.01</td></tr><tr><td class="kv-key">InfoROM image</td><td class="mono">G520.0200.00.05</td></tr><tr><td class="kv-key">InfoROM ECC object</td><td class="mono">7.16</td></tr><tr><td class="kv-key">VRAM</td><td class="mono">81559 MiB</td></tr><tr><td class="kv-key">PCIe</td><td class="mono">Gen4 x16 (card Gen5, host Gen4)</td></tr><tr><td class="kv-key">Bus ID</td><td class="mono">00000000:22:00.0</td></tr></table>
+                <table class="tbl gpu">
+                    <thead><tr><th></th><th>Criterion</th><th>Cond</th><th>Evidence</th></tr></thead>
+                    <tbody><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial and UUID reported</td><td class="dim tiny">#8</td><td class="tiny">1571023456787 / GPU-3f1c8a20-1111-2222-3333-444455556667</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Serial consistent across sources</td><td class="dim tiny">#8</td><td class="tiny">query and -q agree: 1571023456787</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">InfoROM not corrupted</td><td class="dim tiny">#8</td><td class="tiny">G520.0200.00.05</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No row-remapping failure</td><td class="dim tiny">#1</td><td class="tiny">no failure</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable-error remapped rows</td><td class="dim tiny">#1</td><td class="tiny">0 uncorrectable, 3 correctable (delivery baseline)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No pending row remap</td><td class="dim tiny">#2</td><td class="tiny">no remap pending</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Bank remap availability at Max/High</td><td class="dim tiny">#2</td><td class="tiny">max=637, high=3, partial=0, low=0, none=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC enabled during test</td><td class="dim tiny">#3</td><td class="tiny">Enabled</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Aggregate ECC counters reported</td><td class="dim tiny">#3</td><td class="tiny">corrected=0, uncorrected=0</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">ECC history covers the card&#x27;s prior life</td><td class="dim tiny">#3</td><td class="tiny">ECC already enabled before commissioning</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No uncorrectable ECC errors</td><td class="dim tiny">#1</td><td class="tiny">0 aggregate uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">SRAM uncorrectable errors zero</td><td class="dim tiny">#1</td><td class="tiny">0 SRAM uncorrectable</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link width x16</td><td class="dim tiny">#7</td><td class="tiny">x16 / x16</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Link trained to host+card maximum</td><td class="dim tiny">#7</td><td class="tiny">Gen4 = min(card Gen5, host Gen4) -- host is the limit, not the card</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">PCIe replay counter stable under load</td><td class="dim tiny">#7</td><td class="tiny">+0 replays across the load window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">DCGM diagnostic executed and passed</td><td class="dim tiny">#5</td><td class="tiny">level 3, 4 test(s) passed</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Diagnostic level 3 or higher</td><td class="dim tiny">#5</td><td class="tiny">level 3</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Sustained load applied</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn, this GPU under load 1800s (characterize)</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No thermal or power-brake throttling</td><td class="dim tiny">#6</td><td class="tiny">no hardware thermal or power-brake slowdown in 180 loaded sample(s); sw_power_cap active in 2 sample(s), which is expected at full load</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Loaded power and temperature recorded</td><td class="dim tiny">#4</td><td class="tiny">power max 340 W, GPU temp max 34 C, SM clock mean 1755 MHz</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">Arithmetic correct under load</td><td class="dim tiny">#4</td><td class="tiny">gpu-burn: OK</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No disqualifying Xid events</td><td class="dim tiny">#4</td><td class="tiny">none in the burn-in window</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults under load</td><td class="dim tiny">#4</td><td class="tiny">no new uncorrectable errors or remapped rows</td></tr><tr><td class="dot-pass">&#10003;</td><td class="nowrap">No new faults across the whole test sequence</td><td class="dim tiny">#1</td><td class="tiny">no new uncorrectable errors or remapped rows (corrected ECC +0, PCIe replays +0)</td></tr></tbody>
+                </table>
+                <details class="ev-block"><summary>nvidia-smi -q -d ROW_REMAPPER,ECC<span class="ev-meta">3,968 characters &middot; memory-health evidence for this card</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:22:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456787
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556667
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:22:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details><details class="ev-block"><summary>nvidia-smi -q (full device record)<span class="ev-meta">3,968 characters &middot; identity, link, thermal and power state</span></summary><pre class="ev-pre">
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Aug 26 14:00:00 2026
+Driver Version                            : 595.10
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:22:00.0
+    Product Name                          : NVIDIA H100 PCIe
+    Product Brand                         : NVIDIA
+    Product Architecture                  : Hopper
+    Serial Number                         : 1571023456787
+    GPU UUID                              : GPU-3f1c8a20-1111-2222-3333-444455556667
+    VBIOS Version                         : 96.00.61.00.01
+    Board ID                              : 0x1b00
+    Board Part Number                     : 900-21010-0000-000
+    GPU Part Number                       : 2331-001-A1
+    Inforom Version
+        Image Version                     : G520.0200.00.05
+        OEM Object                        : 2.1
+        ECC Object                        : 7.16
+        Power Management Object            : N/A
+    GSP Firmware Version                  : 595.10
+    PCI
+        Bus                               : 0x1B
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x233110DE
+        Bus Id                            : 00000000:22:00.0
+        Sub System Id                     : 0x188110DE
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 1
+                Device Current            : 1
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Bridge Chip
+            Type                          : N/A
+            Firmware                      : N/A
+        Replays Since Reset               : 0
+        Replay Number Rollovers           : 0
+    ECC Mode
+        Current                           : Enabled
+        Pending                           : Enabled
+    ECC Errors
+        Volatile
+            SRAM Correctable              : 0
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 0
+            DRAM Uncorrectable            : 0
+        Aggregate
+            SRAM Correctable              : 12
+            SRAM Uncorrectable            : 0
+            DRAM Correctable              : 340
+            DRAM Uncorrectable            : 0
+            SRAM Threshold Exceeded       : No
+    Remapped Rows
+        Correctable Error                 : 3
+        Uncorrectable Error               : 0
+        Pending                           : No
+        Remapping Failure Occurred        : No
+        Bank Remap Availability Histogram
+            Max                           : 637 bank(s)
+            High                          : 3 bank(s)
+            Partial                       : 0 bank(s)
+            Low                           : 0 bank(s)
+            None                          : 0 bank(s)
+    Temperature
+        GPU Current Temp                  : 34 C
+        GPU Shutdown Temp                 : 92 C
+        GPU Slowdown Temp                 : 89 C
+        Memory Current Temp               : 40 C
+    GPU Power Readings
+        Power Draw                        : 71.22 W
+        Current Power Limit               : 350.00 W
+        Requested Power Limit             : 350.00 W
+        Default Power Limit               : 350.00 W
+        Enforced Power Limit              : 350.00 W
+    Clocks
+        Graphics                          : 345 MHz
+        SM                                : 345 MHz
+        Memory                            : 1593 MHz
+    Max Clocks
+        Graphics                          : 1980 MHz
+        SM                                : 1980 MHz
+        Memory                            : 1593 MHz
+</pre></details>
+            </div>
+        </details>
 </section>
 
 <section>
     <div class="section-label">GPU Fleet</div>
-    <div class="table-note">8&times; NVIDIA A100 80GB PCIe &mdash; 81920 MiB HBM2e</div>
+    <div class="table-note">8&times; NVIDIA H100 PCIe &mdash; 81559 MiB HBM3</div>
         <div class="tbl-wrap">
             <table class="tbl gpu">
                 <thead><tr>
@@ -432,140 +2094,95 @@ footer::before {
         <th>Idle</th><th>Idle Power</th><th>ECC</th>
         <th>Remapped Rows</th><th>Banks</th>
         
-            <th title="Compute GFLOPS from DCGM diagnostic test">GFLOPS</th>
-            <th title="PCIe bidirectional bandwidth">PCIe BW</th>
-            <th title="Average / Max power under targeted_power test">Power Stress</th>
-            <th title="DCGM targeted_stress relative level">Stress Lvl</th>
-            <th title="Memory test coverage percentage">Mem Test</th>
     </tr></thead>
                 <tbody><tr>
             <td>0</td>
-            <td class="mono">0000000000001</td>
+            <td class="mono">1571023456780</td>
             <td class="nowrap">Gen4 x16</td>
-            <td>0</td>
-            <td>28&deg;C</td>
-            <td class="nowrap">50.0W / 300.0W</td>
+            <td>-1</td>
+            <td>34&deg;C</td>
+            <td class="nowrap">71.2W / 350W</td>
             <td><span class="dim">Clean</span></td>
-            <td><span class="dim">None</span></td>
-            <td class="nowrap">Max:640</td>
+            <td>CE:3</td>
+            <td class="nowrap">Max:637 High:3</td>
             
-                <td class="mono">49483.35</td>
-                <td class="mono nowrap"><span class="dim">--</span> <span class="dim">(3.162us)</span></td>
-                <td class="mono nowrap">297.0W / 308.1W</td>
-                <td class="mono">2688</td>
-                <td class="mono">98.5%</td>
         </tr><tr>
             <td>1</td>
-            <td class="mono">0000000000002</td>
+            <td class="mono">1571023456781</td>
             <td class="nowrap">Gen4 x16</td>
-            <td>0</td>
-            <td>29&deg;C</td>
-            <td class="nowrap">52.3W / 300.0W</td>
-            <td><span class="warn">CA:3</span></td>
-            <td><span class="dim">None</span></td>
-            <td class="nowrap">Max:640</td>
+            <td>-1</td>
+            <td>34&deg;C</td>
+            <td class="nowrap">71.2W / 350W</td>
+            <td><span class="dim">Clean</span></td>
+            <td>CE:3</td>
+            <td class="nowrap">Max:637 High:3</td>
             
-                <td class="mono">49483.35</td>
-                <td class="mono nowrap"><span class="dim">--</span> <span class="dim">(3.162us)</span></td>
-                <td class="mono nowrap">297.0W / 308.1W</td>
-                <td class="mono">2688</td>
-                <td class="mono">98.5%</td>
         </tr><tr>
             <td>2</td>
-            <td class="mono">0000000000003</td>
+            <td class="mono">1571023456782</td>
             <td class="nowrap">Gen4 x16</td>
-            <td>0</td>
-            <td>30&deg;C</td>
-            <td class="nowrap">54.6W / 300.0W</td>
-            <td><span class="warn">CA:1,891</span></td>
-            <td><span class="dim">None</span></td>
-            <td class="nowrap">Max:640</td>
+            <td>-1</td>
+            <td>34&deg;C</td>
+            <td class="nowrap">71.2W / 350W</td>
+            <td><span class="dim">Clean</span></td>
+            <td>CE:3</td>
+            <td class="nowrap">Max:637 High:3</td>
             
-                <td class="mono">49483.35</td>
-                <td class="mono nowrap"><span class="dim">--</span> <span class="dim">(3.162us)</span></td>
-                <td class="mono nowrap">297.0W / 308.1W</td>
-                <td class="mono">2688</td>
-                <td class="mono">98.5%</td>
         </tr><tr>
             <td>3</td>
-            <td class="mono">0000000000004</td>
+            <td class="mono">1571023456783</td>
             <td class="nowrap">Gen4 x16</td>
-            <td>0</td>
-            <td>31&deg;C</td>
-            <td class="nowrap">56.9W / 300.0W</td>
-            <td><span class="warn">CA:15</span> <span class="alert">UA:58</span></td>
-            <td><span class="dim">None</span></td>
-            <td class="nowrap"><span class="dim">N/A</span></td>
+            <td>-1</td>
+            <td>34&deg;C</td>
+            <td class="nowrap">71.2W / 350W</td>
+            <td><span class="dim">Clean</span></td>
+            <td>CE:3</td>
+            <td class="nowrap">Max:637 High:3</td>
             
-                <td class="mono">49483.35</td>
-                <td class="mono nowrap"><span class="dim">--</span> <span class="dim">(3.162us)</span></td>
-                <td class="mono nowrap">297.0W / 308.1W</td>
-                <td class="mono">2688</td>
-                <td class="mono">98.5%</td>
         </tr><tr>
             <td>4</td>
-            <td class="mono">0000000000005</td>
+            <td class="mono">1571023456784</td>
             <td class="nowrap">Gen4 x16</td>
-            <td>1</td>
-            <td>32&deg;C</td>
-            <td class="nowrap">59.2W / 300.0W</td>
+            <td>-1</td>
+            <td>34&deg;C</td>
+            <td class="nowrap">71.2W / 350W</td>
             <td><span class="dim">Clean</span></td>
-            <td><span class="alert">UCE:1</span></td>
-            <td class="nowrap">Max:639 Part:1</td>
+            <td>CE:3</td>
+            <td class="nowrap">Max:637 High:3</td>
             
-                <td class="mono">49483.35</td>
-                <td class="mono nowrap"><span class="dim">--</span> <span class="dim">(3.162us)</span></td>
-                <td class="mono nowrap">297.0W / 308.1W</td>
-                <td class="mono">2688</td>
-                <td class="mono">98.5%</td>
         </tr><tr>
             <td>5</td>
-            <td class="mono">0000000000006</td>
+            <td class="mono">1571023456785</td>
             <td class="nowrap">Gen4 x16</td>
-            <td>1</td>
-            <td>33&deg;C</td>
-            <td class="nowrap">61.5W / 300.0W</td>
-            <td><span class="warn">CA:26</span> <span class="alert">UA:30</span></td>
-            <td><span class="alert">UCE:2</span></td>
-            <td class="nowrap">Max:639 <span class="warn">Low:1</span></td>
+            <td>-1</td>
+            <td>34&deg;C</td>
+            <td class="nowrap">71.2W / 350W</td>
+            <td><span class="dim">Clean</span></td>
+            <td>CE:3</td>
+            <td class="nowrap">Max:637 High:3</td>
             
-                <td class="mono">49483.35</td>
-                <td class="mono nowrap"><span class="dim">--</span> <span class="dim">(3.162us)</span></td>
-                <td class="mono nowrap">297.0W / 308.1W</td>
-                <td class="mono">2688</td>
-                <td class="mono">98.5%</td>
         </tr><tr>
             <td>6</td>
-            <td class="mono">0000000000007</td>
+            <td class="mono">1571023456786</td>
             <td class="nowrap">Gen4 x16</td>
-            <td>1</td>
+            <td>-1</td>
             <td>34&deg;C</td>
-            <td class="nowrap">63.8W / 300.0W</td>
-            <td><span class="warn">CA:248</span> <span class="alert">UA:651</span></td>
-            <td><span class="dim">None</span></td>
-            <td class="nowrap"><span class="dim">N/A</span></td>
+            <td class="nowrap">71.2W / 350W</td>
+            <td><span class="dim">Clean</span></td>
+            <td>CE:3</td>
+            <td class="nowrap">Max:637 High:3</td>
             
-                <td class="mono">49483.35</td>
-                <td class="mono nowrap"><span class="dim">--</span> <span class="dim">(3.162us)</span></td>
-                <td class="mono nowrap">297.0W / 308.1W</td>
-                <td class="mono">2688</td>
-                <td class="mono">98.5%</td>
         </tr><tr>
             <td>7</td>
-            <td class="mono">0000000000008</td>
+            <td class="mono">1571023456787</td>
             <td class="nowrap">Gen4 x16</td>
-            <td>1</td>
-            <td>35&deg;C</td>
-            <td class="nowrap">66.1W / 300.0W</td>
+            <td>-1</td>
+            <td>34&deg;C</td>
+            <td class="nowrap">71.2W / 350W</td>
             <td><span class="dim">Clean</span></td>
-            <td>CE:1</td>
-            <td class="nowrap">Max:640</td>
+            <td>CE:3</td>
+            <td class="nowrap">Max:637 High:3</td>
             
-                <td class="mono">49483.35</td>
-                <td class="mono nowrap"><span class="dim">--</span> <span class="dim">(3.162us)</span></td>
-                <td class="mono nowrap">297.0W / 308.1W</td>
-                <td class="mono">2688</td>
-                <td class="mono">98.5%</td>
         </tr></tbody>
             </table>
         </div>
@@ -576,14 +2193,48 @@ footer::before {
     
         <div class="stress-bar">
             <span>Level <strong>3</strong></span>
-            <span>Duration <strong>14m 10s</strong></span>
+            <span>Duration <strong>--</strong></span>
             <span>Exit <strong>0</strong></span>
         </div>
-    <div class="matrix-summary"><span class="st-pass">40 passed</span></div>
+    <div class="matrix-summary"><span class="st-pass">32 passed</span></div>
     <table class="tbl matrix">
         <thead><tr><th>Test</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th></tr></thead>
-        <tbody><tr><td class="test-name">diagnostic</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr><tr><td class="test-name">memory</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr><tr><td class="test-name">pcie</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr><tr><td class="test-name">targeted_power</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr><tr><td class="test-name">targeted_stress</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr></tbody>
+        <tbody><tr><td class="test-name">Targeted Stress</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr><tr><td class="test-name">Targeted Power</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr><tr><td class="test-name">Memory Bandwidth</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr><tr><td class="test-name">PCIe</td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td><td><span class="dot-pass">&#10003;</span></td></tr></tbody>
     </table>
+</section>
+
+<section>
+    <div class="section-label">Chassis &amp; Components</div>
+    
+    <div class="two-col">
+        <div><div class="table-note">Baseboard management &amp; identity</div>
+            <div class="tbl-wrap"><table class="tbl gpu"><tbody><tr><td>BMC firmware</td><td class="mono">1.01</td></tr><tr><td>BMC access</td><td class="mono">in-band KCS (/dev/ipmi0), no credentials</td></tr><tr><td>Board manufactured</td><td class="mono">Mon Oct  2 10:19:00 2023</td></tr><tr><td>Board serial</td><td class="mono">230520500000001</td></tr><tr><td>Chassis serial (FRU)</td><td class="mono">I000000001</td></tr><tr><td>Product serial (FRU)</td><td class="mono">R9S0MD0000AB</td></tr></tbody></table></div></div>
+        <div><div class="table-note">Power-on hours &mdash; Sch 4 para 1(f)</div>
+            <div class="tbl-wrap"><table class="tbl gpu"><tbody><tr><td>Power-on hours</td><td class="mono">18,318 h</td></tr><tr><td>Source</td><td>highest of 3 drive(s), spread 1 h; no BMC sensor exists on this chassis &mdash; all drives agree, so fitted from new</td></tr><tr><td>Service span (SEL)</td><td class="mono">809 days &mdash; 763 powered days of 809 elapsed, 94% powered</td></tr></tbody></table></div></div>
+    </div>
+    
+    <div class="section-label" style="margin-top:14px">Power supplies</div>
+    
+    <div class="table-note">4 of 4 bays populated</div>
+    <div class="tbl-wrap"><table class="tbl gpu">
+        <thead><tr><th>Bay</th><th>Manufacturer</th><th>Model</th>
+        <th>Serial</th><th>Rating</th><th>Status</th></tr></thead>
+        <tbody><tr><td class="mono">PSU1</td><td>GOSPOWER</td><td>G1236-3000WNA</td><td class="mono tiny">G1236302NA000000001</td><td class="mono">3000 W</td><td>Present, OK</td></tr><tr><td class="mono">PSU2</td><td>GOSPOWER</td><td>G1236-3000WNA</td><td class="mono tiny">G1236302NA000000002</td><td class="mono">3000 W</td><td>Present, OK</td></tr><tr><td class="mono">PSU3</td><td>GOSPOWER</td><td>G1236-3000WNA</td><td class="mono tiny">G1236302NA000000003</td><td class="mono">3000 W</td><td>Present, OK</td></tr><tr><td class="mono">PSU4</td><td>GOSPOWER</td><td>G1236-3000WNA</td><td class="mono tiny">G1236302NA000000004</td><td class="mono">3000 W</td><td>Present, OK</td></tr></tbody></table></div>
+    <div class="section-label" style="margin-top:14px">Drives</div>
+    
+    <div class="table-note">4 drive(s) &mdash; 2 read through the RAID controller, invisible to lsblk, lshw and MAAS</div>
+    <div class="tbl-wrap"><table class="tbl gpu">
+        <thead><tr><th>Model</th><th>Serial</th><th>Capacity</th>
+        <th>Firmware</th><th>Power-on h</th><th>Reached via</th></tr></thead>
+        <tbody><tr><td>MR9560-16i</td><td class="mono tiny">00000000000000000000000000000002</td><td class="mono">480 GB</td><td class="mono">5.20</td><td class="mono"><span class="dim">--</span></td><td class="tiny">direct</td></tr><tr><td>SAMSUNG MZQL27T6HBLA-00A07</td><td class="mono tiny">S6CKNE0R000001</td><td class="mono">7.68 TB</td><td class="mono">GDC5302Q</td><td class="mono">18,318</td><td class="tiny">direct</td></tr><tr><td>SAMSUNG MZ7L3480HCHQ-00A07</td><td class="mono tiny">S664NE0T000002</td><td class="mono">480 GB</td><td class="mono">JXTC304Q</td><td class="mono">18,317</td><td class="tiny"><strong>behind RAID</strong></td></tr><tr><td>SAMSUNG MZ7L3480HCHQ-00A07</td><td class="mono tiny">S664NE0T000001</td><td class="mono">480 GB</td><td class="mono">JXTC304Q</td><td class="mono">18,317</td><td class="tiny"><strong>behind RAID</strong></td></tr></tbody></table></div>
+    <div class="section-label" style="margin-top:14px">Add-in card serials (PCI VPD)</div>
+    
+    <div class="table-note">1 card(s) publishing Vital Product Data;
+        cards without VPD carry no readable serial and are omitted</div>
+    <div class="tbl-wrap"><table class="tbl gpu">
+        <thead><tr><th>Card</th><th>Part number</th><th>Board serial</th>
+        <th>PCI functions</th></tr></thead>
+        <tbody><tr><td>Mellanox Technologies MT2910 Family [ConnectX-7]</td><td class="mono">MCX755106AS-HEAT</td><td class="mono tiny">MT0000XZ0000</td><td class="mono tiny">09:00.0, 09:00.1</td></tr></tbody></table></div>
 </section>
 
 <section>
@@ -607,12 +2258,35 @@ footer::before {
     <span class="dim">No commissioning data</span>
 </section>
 
+<section>
+    <div class="section-label">Raw Evidence &mdash; full logs</div>
+    <div class="table-note">Complete logs, embedded in this file and collapsed by default — no external system is needed to read them. Progress lines rewritten in place by the load tool are collapsed to one line per reported step; the count is stated on each block.</div><details class="ev-block"><summary>gpu-burn output (sustained load)<span class="ev-meta">551 characters &middot; per-GPU OK/FAULTY verdict is at the end</span></summary><pre class="ev-pre">GPU 0: NVIDIA H100 PCIe (UUID: GPU-synthetic-0)
+GPU 1: NVIDIA H100 PCIe (UUID: GPU-synthetic-1)
+GPU 2: NVIDIA H100 PCIe (UUID: GPU-synthetic-2)
+GPU 3: NVIDIA H100 PCIe (UUID: GPU-synthetic-3)
+GPU 4: NVIDIA H100 PCIe (UUID: GPU-synthetic-4)
+GPU 5: NVIDIA H100 PCIe (UUID: GPU-synthetic-5)
+GPU 6: NVIDIA H100 PCIe (UUID: GPU-synthetic-6)
+GPU 7: NVIDIA H100 PCIe (UUID: GPU-synthetic-7)
+100.0%  proc&#x27;d: 4096 (398000 Gflop/s)   errors: 0   temps: 71 C
+Tested 8 GPUs:
+	GPU 0: OK
+	GPU 1: OK
+	GPU 2: OK
+	GPU 3: OK
+	GPU 4: OK
+	GPU 5: OK
+	GPU 6: OK
+	GPU 7: OK
+</pre></details>
+</section>
+
 <footer>
     <div class="foot-left">
-        <div class="foot-brand">nexgen-gpu-report v3.2.1 &mdash; Local files</div>
-        <div class="foot-ts">2026-03-23 15:26 UTC</div>
+        <div class="foot-brand">nexgen-gpu-report v3.3.0 &mdash; Local files</div>
+        <div class="foot-ts">2026-09-09 22:02 UTC</div>
     </div>
-    <div class="foot-right">Install v2.1.3 &mdash; 2026-03-23T11:55:00Z (4m 40s)<br>Inventory v2.1.0 &mdash; 2026-03-23T12:00:00Z (5s)<br>Stress Test v2.1.5 &mdash; 2026-03-23T12:45:00Z (15m 0s)</div>
+    <div class="foot-right">Install v2.1.6 &mdash; 2026-08-26T14:00:00Z (6m 50s)<br>MIG/ECC v1.3.0 &mdash; 2026-08-27T10:06:36Z (--)<br>Inventory v2.3.0 &mdash; 2026-08-27T13:51:31Z (6s)<br>DCGM Diagnostics v2.3.0 &mdash; 2026-08-27T13:51:33Z (2s)<br>Burn-In v1.5.0 &mdash; 2026-08-27T13:51:38Z (3s)</div>
 </footer>
 
 </div>

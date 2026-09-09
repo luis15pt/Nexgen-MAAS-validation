@@ -204,3 +204,18 @@ history by definition.
 > `fabric_state`, and `fabric_ready` in its JSON, but the HTML report does not
 > render them yet. On NVSwitch nodes, check the fabric verdict in the MAAS
 > commissioning output for script `90` directly.
+
+## Regenerating the published example
+
+`examples/EXAMPLE-GPU-001-MAAS-validation.html` is built from the committed test
+fixtures, not from a real machine:
+
+```bash
+./examples/regenerate.sh
+```
+
+It runs the generator in file mode — no MAAS, no network — over
+`tests/fixtures/`, rewriting only the hostname to `EXAMPLE-GPU-001` so the
+published filename and URL stay stable. Output is deterministic apart from the
+generation timestamp in the footer. Re-run it whenever the generator changes, so
+the published example does not drift behind the code again.
