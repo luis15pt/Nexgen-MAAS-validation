@@ -115,9 +115,16 @@ acceptance rules are in [docs/report-generator.md](docs/report-generator.md).
 
 ## Example Report
 
-**[View live example report](https://luis15pt.github.io/Nexgen-MAAS-validation/examples/EXAMPLE-GPU-001-MAAS-validation.html)**
+### ▶ [Open the rendered report](https://luis15pt.github.io/Nexgen-MAAS-validation/examples/EXAMPLE-GPU-001-MAAS-validation.html)
 
-Or see the source at [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/EXAMPLE-GPU-001-MAAS-validation.html).
+Served from GitHub Pages, so it displays as a page.
+
+The file itself is [`examples/EXAMPLE-GPU-001-MAAS-validation.html`](examples/EXAMPLE-GPU-001-MAAS-validation.html)
+— note that GitHub shows `.html` files as **source code**, never rendered, so
+use the Pages link above to actually read the report.
+
+Rebuild it with [`./examples/regenerate.sh`](examples/regenerate.sh).
+
 ## Folder Structure
 
 ```
