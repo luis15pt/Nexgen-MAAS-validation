@@ -1,0 +1,48 @@
+Stubs for 95-nexgen-storage-sanitize only.
+
+Kept apart from ../stubs and ../stubs-hw because this script needs an nvme that
+models SANICAP and the sanitize log, an lsblk that answers -J with a TRAN
+column, and a findmnt that can claim the root filesystem is on a drive about to
+be erased. run-all.sh prepends this directory ahead of stubs-hw for the
+sanitisation tests alone, so nothing here perturbs the other scripts.
+
+The machine modelled is the real 183 node: one NVMe namespace behind
+/dev/nvme0, and a MegaRAID volume at /dev/sda whose two SATA members lsblk
+cannot see.
+
+Destructive commands are never executed. Every one that WOULD have run is
+appended to $STUB_STATE_DIR/stub-destructive-calls instead, so a test can assert
+that audit mode issued none. Several stubs also read its presence as "this run
+has erased something" when reporting residual filesystem signatures.
+
+STUB_STATE_DIR defaults to /tmp but run-all.sh points it at a directory of its
+own, so two suite runs -- or a suite and an ad-hoc run alongside it -- cannot
+clobber each other's record of what was issued. Sharing fixed /tmp paths made
+the suite fail differently on each run, which reads as flaky code and is not.
+
+nvme      SANICAP and FNA per STUB_SANICAP/STUB_FNA; the sanitize log advances
+          through STUB_SANITIZE_TICKS in-progress polls to a terminal SSTAT set
+          by STUB_SANITIZE_RESULT. STUB_SANITIZE_JSON=0 removes -o json support
+          so the text parser is exercised. STUB_SANITIZE_LIES=1 makes the text
+          log claim success while SSTAT reports failure -- the vendor-wording
+          trap the runbook itself warns about.
+lsblk     one namespace per controller plus the MegaRAID volume;
+          STUB_DIRECT_SATA=1 adds a directly attached SSD, STUB_MOUNTED_TARGET
+          gives a device a mountpoint, STUB_NS_MISMATCH=1 hides a namespace
+          that nvme list declares, STUB_NO_MOUNTPOINTS=1 models pre-2.37
+          util-linux which has no MOUNTPOINTS column.
+findmnt   overlay root by default; STUB_ROOT_FSTYPE=ext4 models the case
+          section 6 forbids outright.
+hdparm    -I reports the ATA SANITIZE feature set per STUB_ATA_CAPS;
+          --sanitize-status advances like the nvme log, per STUB_ATA_RESULT.
+smartctl  megaraid members answer with exit 4 and a good identity, as the real
+          controller does. STUB_NO_SERIAL=1 blanks a serial, which is a section
+          7 stop condition.
+sg_inq    serial per /dev/sg node; STUB_SG_PASSTHROUGH=1 exposes the RAID
+          members, which is the one purge path that needs no vendor binary.
+sg_opcodes / sg_sanitize   SCSI SANITIZE support and execution.
+hostname  a fixed name, so a generated fixture does not carry the hostname of
+          whichever workstation produced it.
+id        reports uid 0. The script refuses to run unprivileged and the suite
+          is not root.
+apt-get   exits 0. Package installation is not what these tests exercise.

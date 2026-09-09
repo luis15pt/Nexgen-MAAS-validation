@@ -24,8 +24,12 @@ DCGM_DIAG_LEVEL="${DCGM_DIAG_LEVEL:-3}"
 # the script timeout with NO JSON emitted, so the run yields no evidence
 # either way.  Level 4 can legitimately take ~90 min, hence the wide default.
 DCGM_DIAG_TIMEOUT="${DCGM_DIAG_TIMEOUT:-6000}"
+# Chassis sensors sampled across the diagnostic, on their own slower cadence:
+# the BMC is read over the in-band KCS interface, which serialises requests,
+# and fan RPM and inlet air move on a timescale of minutes. 0 disables.
+CHASSIS_SAMPLE_INTERVAL="${CHASSIS_SAMPLE_INTERVAL:-30}"
 WORK_DIR="/tmp/gpu-stress-$$"
-SCRIPT_VERSION="2.3.0"
+SCRIPT_VERSION="2.6.0"
 
 ###############################################################################
 # LOGGING
@@ -183,6 +187,139 @@ collect_failure_diagnostics() {
 }
 
 ###############################################################################
+# nvbandwidth AVAILABILITY
+###############################################################################
+# DCGM's nvbandwidth plugin shells out to the standalone nvbandwidth binary.
+# When it is absent the test reports status "Skip" with an empty info field and
+# no warning, which is unattributable: the same output appears on a machine
+# with no NVLink to measure, on a machine whose fabric is untested because the
+# tool is missing, and on a machine DCGM skipped for a reason of its own.
+# Recording whether the binary is discoverable turns that into evidence, and
+# the report can then say which case it is rather than inferring from NVLink
+# presence -- an inference that gave the right answer for the wrong reason on
+# a PCIe host and the wrong answer on a bridged one.
+nvbandwidth_state() {
+    local path ver
+    path=$(command -v nvbandwidth 2>/dev/null || true)
+    if [[ -z "$path" ]]; then
+        # DCGM ships it under plugins/cuda<major>/, where <major> is the CUDA
+        # driver major version -- cuda13 for a 5xx driver, cuda12 for older.
+        # Omitting that segment reported available:false on a machine where the
+        # binary was present, which is worse than not checking: it attributed a
+        # by-design SKU skip to a missing tool. Globbed rather than pinned so a
+        # DCGM repackaging does not silently reintroduce the false negative.
+        for c in /usr/local/bin/nvbandwidth /usr/bin/nvbandwidth \
+                 /usr/libexec/datacenter-gpu-manager-4/plugins/cuda*/nvbandwidth \
+                 /usr/libexec/datacenter-gpu-manager*/plugins/*/nvbandwidth \
+                 /usr/libexec/datacenter-gpu-manager-4/nvbandwidth; do
+            [[ -x "$c" ]] && { path="$c"; break; }
+        done
+    fi
+    if [[ -z "$path" ]]; then
+        jq -n '{available:false, path:null, version:null,
+                note:"nvbandwidth binary not found in any known location; DCGM cannot run its nvbandwidth plugin. Note a missing binary makes the plugin FAIL, not Skip, so this does not by itself explain a Skip result"}'
+        return 0
+    fi
+    ver=$("$path" --version 2>&1 | head -1 || true)
+    jq -n --arg p "$path" --arg v "${ver:-unknown}" \
+        '{available:true, path:$p, version:$v, note:null}'
+}
+
+###############################################################################
+# CHASSIS SAMPLER -- fans, inlet air, board zones, PSU draw
+###############################################################################
+start_chassis_sampler() {
+    local out="$1"
+    [[ "${CHASSIS_SAMPLE_INTERVAL:-0}" -gt 0 ]] || return 0
+    command -v ipmitool >/dev/null 2>&1 || {
+        warn "ipmitool unavailable -- no fan or inlet telemetry for the diagnostic"
+        return 0; }
+    # stdout is closed for the sampler on purpose. A backgrounded subshell
+    # inherits the script's stdout, and when the subshell is killed the `sleep`
+    # it spawned is orphaned and keeps that descriptor open. Anything reading
+    # the script's output -- MAAS capturing the result, or $( ) in a test --
+    # blocks until every writer closes, so the run appears to hang for up to
+    # one sample interval after it has actually finished. The samples go to a
+    # file by explicit redirect, so nothing is lost by detaching stdout.
+    (
+        while :; do
+            ipmitool sdr elist full 2>/dev/null | awk -v ts="$(date +%s)" -F'|' '
+                {
+                    name = $1; gsub(/^[ \t]+|[ \t]+$/, "", name)
+                    val  = $5; gsub(/^[ \t]+|[ \t]+$/, "", val)
+                    if (val ~ /^-?[0-9.]+ /) {
+                        n = val; sub(/ .*/, "", n)
+                        u = val; sub(/^[^ ]+ /, "", u)
+                        if (u ~ /RPM/)          u = "RPM"
+                        else if (u ~ /degrees/) u = "C"
+                        else if (u ~ /Watts/)   u = "W"
+                        else next
+                        printf "%s|%s|%s|%s\n", ts, name, n, u
+                    }
+                }' >> "$out" || true
+            sleep "$CHASSIS_SAMPLE_INTERVAL"
+        done
+    ) >/dev/null 2>&1 &
+    CHASSIS_PID=$!
+}
+
+stop_chassis_sampler() {
+    [[ -n "${CHASSIS_PID:-}" ]] && kill "$CHASSIS_PID" 2>/dev/null || true
+    wait "${CHASSIS_PID:-}" 2>/dev/null || true
+}
+
+aggregate_chassis() {
+    local raw="$1"
+    [[ -s "$raw" ]] || { echo 'null'; return 0; }
+    awk -F'|' '
+        { key = $2 "|" $4
+          n[key]++; sum[key] += $3
+          if (!(key in mn) || $3 + 0 < mn[key]) mn[key] = $3 + 0
+          if (!(key in mx) || $3 + 0 > mx[key]) mx[key] = $3 + 0 }
+        END {
+            printf "["; first = 1
+            for (k in n) {
+                split(k, p, "|")
+                if (!first) printf ","; first = 0
+                printf "{\"sensor\":\"%s\",\"unit\":\"%s\",\"samples\":%d,", p[1], p[2], n[k]
+                printf "\"min\":%.1f,\"max\":%.1f,\"mean\":%.1f}", mn[k], mx[k], sum[k] / n[k]
+            }
+            printf "]"
+        }' "$raw" 2>/dev/null | jq '
+        # What this is for: confirming every fan turns, and that it responds to
+        # load. Absolute RPM answers neither on its own, because the reading
+        # depends on the BMC fan-control mode -- 9880 might be full throttle or
+        # an energy-saving curve, and nothing readable from the host says which.
+        # A fan at 0 RPM is unambiguous in any mode, so that is the primitive.
+        #
+        # Spread is secondary and grouped BY BANK. Measured on a live
+        # ESC8000A-E12P the GPU bank sits near 9880 RPM and the system bank near
+        # 8300: different fans, different duty curves. Pooling them shows ~21%
+        # with nothing wrong, which would have flagged every server in the fleet.
+        . as $sensors
+        | [ $sensors[] | select(.unit == "RPM")
+            | . + {bank: (.sensor | sub("[0-9]+$"; "") | sub("_$"; ""))} ] as $rpm
+        | ($rpm | group_by(.bank)
+           | map({ bank: .[0].bank, count: length,
+                   slowest: (map(.mean) | min), fastest: (map(.mean) | max),
+                   slowest_sensor: (min_by(.mean).sensor),
+                   spread_pct: (if (map(.mean) | max) > 0
+                                then (((map(.mean) | max) - (map(.mean) | min))
+                                      / (map(.mean) | max) * 100 | . * 10 | round / 10)
+                                else 0 end) })) as $banks
+        | { sensors: $sensors,
+            fans: { banks: $banks,
+                    fan_count: ($rpm | length),
+                    stopped: [ $rpm[] | select(.max == 0) | .sensor ],
+                    all_spinning: (([ $rpm[] | select(.max == 0) ] | length) == 0),
+                    worst_bank: ($banks | if length > 0 then (max_by(.spread_pct) | .bank) else null end),
+                    worst_spread_pct: ($banks | map(.spread_pct) | max // 0) },
+            inlet_c: ($sensors | map(select(.sensor | test("Inlet"; "i")))
+                      | if length > 0 then {min: .[0].min, max: .[0].max, mean: .[0].mean} else null end)
+          }' 2>/dev/null || echo 'null'
+}
+
+###############################################################################
 # PREFLIGHT
 ###############################################################################
 preflight() {
@@ -253,9 +390,17 @@ run_diagnostics() {
     local diag_start diag_end diag_exit
     diag_start=$(date +%s)
 
+    # The diagnostic is the hottest phase before the burn-in, so the chassis is
+    # sampled across it too. Whether a card throttled here is only half the
+    # story; whether its fans were turning and the inlet was in spec is the
+    # other half, and neither is recoverable once the run is over.
+    start_chassis_sampler "$WORK_DIR/chassis.psv"
+
     timeout "$DCGM_DIAG_TIMEOUT" dcgmi diag -r "$DCGM_DIAG_LEVEL" -j \
         > "$WORK_DIR/diag_raw.json" 2>"$WORK_DIR/diag_stderr.txt"
     diag_exit=$?
+
+    stop_chassis_sampler
     diag_end=$(date +%s)
 
     local diag_dur=$(( diag_end - diag_start ))
@@ -533,11 +678,15 @@ run_diagnostics() {
         --argjson diag_dur "$diag_dur" --argjson results "$test_results" \
         --argjson artifacts "${DIAG_ARTIFACTS:-[]}" \
         --argjson counters "${POST_COUNTERS:-null}" \
+        --argjson chassis "$(aggregate_chassis "$WORK_DIR/chassis.psv")" \
+        --argjson nvbw "$(nvbandwidth_state)" \
         '{
             report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts, duration_seconds:$dur},
             verdict:{overall:$verdict, issues:$issues},
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus},
             dcgm_diagnostics:{run_level:$level, exit_code:$exit_code, duration_seconds:$diag_dur, test_results:$results},
+            chassis:$chassis,
+            nvbandwidth:$nvbw,
             diagnostic_artifacts:$artifacts,
             counters_since_baseline:$counters
         }'

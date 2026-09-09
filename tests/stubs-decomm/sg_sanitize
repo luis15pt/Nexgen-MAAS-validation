@@ -1,0 +1,11 @@
+#!/bin/bash
+# SCSI SANITIZE. --wait blocks until the device reports a terminal state, so the
+# exit status IS the outcome.
+#   STUB_SG_RESULT  success | fail | hang  (default success)
+SD="${STUB_STATE_DIR:-/tmp}"
+echo "$(date -u +%FT%TZ) sg_sanitize $*" >> ${SD}/stub-destructive-calls
+case "${STUB_SG_RESULT:-success}" in
+    fail) echo "sanitize: sense key: Hardware Error" >&2; exit 3 ;;
+    hang) exec sleep 3600 ;;
+    *)    echo "Sanitize completed"; exit 0 ;;
+esac

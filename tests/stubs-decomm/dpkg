@@ -1,0 +1,11 @@
+#!/bin/bash
+# Models the Broadcom package: one file, into a path given by
+# STORCLI_INSTALL_PATH so the test does not need to write to /opt.
+#   STUB_DPKG=fail  installation fails
+[[ "$1" == "-i" ]] || exec /usr/bin/dpkg "$@"
+[[ "${STUB_DPKG:-ok}" == "fail" ]] && exit 1
+dest="${STORCLI_INSTALL_PATH:-/opt/MegaRAID/storcli/storcli64}"
+mkdir -p "$(dirname "$dest")" 2>/dev/null || exit 1
+cp "${STUB_STORCLI_BIN:-tests/stubs-raidcli/storcli64}" "$dest" 2>/dev/null || exit 1
+chmod +x "$dest"
+exit 0

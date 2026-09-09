@@ -77,6 +77,7 @@ REQUIRED_STAGES = ("Inventory", "DCGM Diagnostics")
 
 # Map short names used internally to the MAAS script names
 SCRIPT_ALIASES = {
+    "hwinv":     "89-nexgen-hw-inventory.sh",
     "install":   "90-nexgen-gpu-install-595-13.sh",
     "config":    "91-nexgen-gpu-mig-ecc-config.sh",
     "inventory": "92-nexgen-gpu-inventory.sh",
@@ -716,11 +717,30 @@ def _check_pcie(gpu, burn_gpu, burn_csb=None, burn_ran=None):
     return out
 
 
-# DCGM skips nvbandwidth when there is no NVLink to measure. H100 PCIe ships
-# with or without bridges, so on a host with none this is expected operation,
-# not missing evidence -- the pcie test already measures host/device bandwidth
-# (it reported 84 GB/s bidirectional here). It stays a WARN when NVLink IS
-# present, because then the skip is unexplained.
+# Why DCGM skips nvbandwidth, established from DCGM 4.6.1's own source and the
+# SKU table compiled into its nvvs binary rather than inferred.
+#
+# The plugin has exactly one Skip path: `is_allowed` false. That parameter
+# defaults to False and is enabled per-SKU. The table's entry for PCI device
+# 0x2331 (H100 PCIe) has no `nvbandwidth` key at all, so it stays false and the
+# test skips -- on every H100 PCIe, whether or not NVLink bridges are fitted.
+# The message ("The nvbandwidth test is skipped.") goes through AddInfo, which
+# is log-only, which is why `info` comes back empty with no warning.
+#
+# The previous rule keyed off NVLink presence. That produced the right answer on
+# a bridgeless host for the wrong reason, and the wrong answer on a bridged one
+# -- EXAMPLE-NODE-03 has four working NV12 bridges and still skipped, which is
+# what exposed it. Absence of the binary would be FAIL (DCGM_FR_INTERNAL), not
+# Skip, so a skip never indicates a missing tool either.
+#
+# Keyed on device ID, and deliberately an allow-list of SKUs where the skip is
+# known to be by design. An unrecognised SKU keeps the warning: evidence is not
+# waived on a guess.
+NVBANDWIDTH_UNQUALIFIED_SKUS = {
+    "0x2331": "H100 PCIe",
+    "0x2322": "H800 PCIe",
+    "0x2324": "H800 80GB",
+}
 SKIP_EXPECTED_WITHOUT_NVLINK = {"nvbandwidth"}
 
 # Informational notes the burn-in writes about its own mode and about the
@@ -779,10 +799,10 @@ def _check_stress(gpu_index, stress, gpu_results, context=None):
                          "FAIL", f"{len(gpu_results)} result(s), none passed"))
     elif skipped:
         skipped_tests = {r.get("test", "?") for r in skipped}
-        nvlink = (context or {}).get("nvlink_present")
-        # Only excuse the skip when we positively know there is no NVLink.
-        excused = (SKIP_EXPECTED_WITHOUT_NVLINK
-                   if nvlink is False else set())
+        dev_id = str((context or {}).get("pci_device_id") or "").lower()
+        sku = NVBANDWIDTH_UNQUALIFIED_SKUS.get(dev_id)
+        # Excused only for a SKU where DCGM is known not to qualify the plugin.
+        excused = SKIP_EXPECTED_WITHOUT_NVLINK if sku else set()
         unexplained = skipped_tests - excused
         if unexplained:
             out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
@@ -791,7 +811,11 @@ def _check_stress(gpu_index, stress, gpu_results, context=None):
                              + ", ".join(sorted(unexplained))))
         else:
             out.append(_crit("stress_present", 5, "DCGM diagnostic executed and passed",
-                             "PASS",
+                             "PASS", f"level {level}, {len(passed)} passed; "
+                             f"nvbandwidth skipped by design -- DCGM does not "
+                             f"qualify that plugin for {sku} ({dev_id}), so it "
+                             f"is disabled for this SKU regardless of NVLink"
+                             if sku else
                              f"level {level}, {len(passed)} test(s) passed; "
                              + ", ".join(sorted(skipped_tests))
                              + " skipped as expected (no NVLink fitted)"))
@@ -954,19 +978,51 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None):
         out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
                          "N/A", "throttle reasons unavailable on this driver"))
     else:
-        hard = {k: int(_n(th.get(k)) or 0) for k in
-                ("hw_thermal_slowdown", "hw_power_brake_slowdown", "sw_thermal_slowdown")}
+        # Thermal slowdown and a power brake are different faults and are
+        # graded differently.
+        #
+        # Thermal is WARN, not FAIL. A card that throttles because its airflow
+        # is restricted or a fan is slow is a serviceable condition, not a
+        # rejectable card -- and it is not one of the Schedule 4 paragraph 4
+        # health criteria either. Grading it REJECT overstated what the
+        # contract measures and pre-empted a repair decision that belongs to
+        # whoever inspects the chassis. It is still surfaced, and still
+        # disclosed under limb 1(g) in the Server Report.
+        #
+        # hw_power_brake_slowdown stays FAIL: the brake is asserted externally
+        # by power delivery, not by temperature, so no amount of airflow work
+        # addresses it and it is not covered by the thermal decision above.
+        thermal = {k: int(_n(th.get(k)) or 0) for k in
+                   ("hw_thermal_slowdown", "sw_thermal_slowdown")}
+        brake = int(_n(th.get("hw_power_brake_slowdown")) or 0)
         capped = int(_n(th.get("sw_power_cap")) or 0)
-        hit = {k: v for k, v in hard.items() if v > 0}
+        hot = {k: v for k, v in thermal.items() if v > 0}
         # sw_power_cap is the limiter doing its job at full load, and is
         # reported rather than penalised.
         cap_note = f"sw_power_cap active in {capped} sample(s), which is expected at full load" \
                    if capped else "no power capping observed"
-        if hit:
+        if brake:
+            detail = f"hw_power_brake_slowdown in {brake} sample(s)"
+            if hot:
+                detail += "; " + "; ".join(f"{k} in {v} sample(s)" for k, v in hot.items())
             out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
-                             "FAIL",
-                             "; ".join(f"{k} in {v} sample(s)" for k, v in hit.items())
-                             + f" ({cap_note})"))
+                             "FAIL", detail + f" ({cap_note})"))
+        elif hot:
+            # Recorded as an observation, not a diagnosis. What is evidenced is
+            # that the card reduced clocks under sustained load; the cause is
+            # not, and speculating on it ("restricted airflow", "poor seating")
+            # in a document whose accuracy is warranted would be asserting more
+            # than was measured. The functional result stands separately: DCGM
+            # passed every test and gpu-burn returned OK with no computation
+            # errors, so no fault was found in the GPU itself.
+            out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
+                             "WARN",
+                             "; ".join(f"{k} in {v} sample(s)" for k, v in hot.items())
+                             + f" -- clocks reduced under sustained load. Not a "
+                               f"Sch 4 para 4 criterion, and no fault was found "
+                               f"in the GPU: the DCGM diagnostic passed and "
+                               f"gpu-burn returned OK with no computation errors "
+                               f"({cap_note})"))
         else:
             # State the negative outright. "sw_power_cap active, which is
             # expected" is true but answers a question nobody asked; what the
@@ -1208,6 +1264,7 @@ def render_raw_evidence(inventory=None, stress=None, burnin=None,
     blocks = []
 
     stages = (
+        ("Chassis inventory", "hwinv"),
         ("Driver install", "install"),
         ("MIG / ECC configuration", "config"),
         ("Inventory \u2014 full nvidia-smi -q and topology", "inventory"),
@@ -1260,7 +1317,11 @@ def build_acceptance_context(inventory=None, all_scripts=None) -> dict:
                       parseable report".
     """
     sys_info = (inventory or {}).get("system") or {}
-    ctx = {"nvlink_present": sys_info.get("nvlink_present")}
+    gpus = (inventory or {}).get("gpus") or []
+    dev_id = ((gpus[0].get("identity") or {}).get("pci_device_id")
+              if gpus else None)
+    ctx = {"nvlink_present": sys_info.get("nvlink_present"),
+           "pci_device_id": dev_id}
 
     if all_scripts is None:
         ctx["burn_script_ran"] = None
@@ -2072,6 +2133,12 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
 
     # Step 2: Fetch GPU commissioning scripts
     log("Fetching GPU commissioning script outputs...")
+    hwinv_data = client.get_script_json(system_id, SCRIPT_ALIASES["hwinv"])
+    if hwinv_data:
+        log(f"  89-hw-inventory: loaded ({hwinv_data.get('verdict', {}).get('overall', '?')})")
+    else:
+        log("  89-hw-inventory: not found (optional -- no chassis component detail)")
+
     install_data = client.get_script_json(system_id, SCRIPT_ALIASES["install"])
     if install_data:
         log(f"  90-install: loaded ({install_data.get('verdict', {}).get('overall', '?')})")
@@ -2271,6 +2338,7 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
     log(f"  {len(all_scripts)} total commissioning scripts")
 
     return {
+        "hwinv": hwinv_data,
         "install": install_data,
         "inventory": inventory_data,
         "stress": stress_data,
@@ -2800,6 +2868,335 @@ def render_nic_table(nics: list[dict]) -> str:
     </div>'''
 
 
+def render_fan_response(hwinv=None, stress=None, burnin=None) -> str:
+    """Compare each fan at idle against the same fan under load.
+
+    This is the mode-independent question. An absolute RPM says nothing on its
+    own, because the reading depends on the BMC's fan-control mode -- 9,880 RPM
+    might be full throttle or an energy-saving curve, and nothing readable from
+    the host says which. But a fan that does not speed up when the GPUs heat is
+    either held at fixed duty or not responding, whatever curve is in force.
+
+    Read from the per-sensor arrays rather than the summary blocks, so it works
+    against both the pooled and the per-bank shapes script 89 has emitted.
+
+    What it does NOT claim: that a flat fan is faulty. Fixed-duty BMC policy
+    looks identical from here. What is diagnostic is asymmetry -- fans in the
+    same bank behaving differently under the same load.
+    """
+    idle = ((hwinv or {}).get("chassis_idle") or {}).get("sensors") or []
+    load_src, phase = None, None
+    for cand, name in (((burnin or {}).get("burn_in") or {}).get("chassis"), "sustained load"), \
+                      ((stress or {}).get("chassis"), "DCGM diagnostic"):
+        if cand and cand.get("sensors"):
+            load_src, phase = cand["sensors"], name
+            break
+    if not idle or not load_src:
+        return ""
+
+    idle_rpm = {d["sensor"]: d.get("value") for d in idle
+                if d.get("unit") == "RPM" and d.get("value") is not None}
+    load_rpm = {d["sensor"]: d for d in load_src if d.get("unit") == "RPM"}
+    common = sorted(set(idle_rpm) & set(load_rpm))
+    if not common:
+        return ""
+
+    # Percentage change alone is NOT the signal, and measuring it that way
+    # produced a false positive on both real machines. On one chassis GPU_FAN4
+    # and 5 idled at 15,470 RPM while their bank-mates idled at 9,490; under
+    # load all five converged near 16,000, so the two that started high rose
+    # only 6% -- and a ramp threshold flagged the two FASTEST fans in the bank.
+    # Percentage change is confounded by the idle starting point.
+    #
+    # What actually matters is where a fan ends up: under the same load, fans on
+    # one duty curve should converge. So a fan is only questioned when it is
+    # both well below its bank under load AND did not rise to get there.
+    per_bank = {}
+    for name in common:
+        i, mean = idle_rpm[name], load_rpm[name].get("mean")
+        if not i or mean is None:
+            continue
+        per_bank.setdefault(re.sub(r"[0-9]+$", "", name).rstrip("_"), {})[name] = (i, mean)
+
+    rows, suspect = "", []
+    for bank, fans in sorted(per_bank.items()):
+        top = max(m for _, m in fans.values())
+        for name, (i, mean) in sorted(fans.items()):
+            ramp = (mean - i) / i * 100
+            lagging = top > 0 and mean < top * 0.75 and ramp < 10
+            if lagging:
+                suspect.append(name)
+            cls = ' class="dim"' if lagging else ""
+            rows += (f'<tr><td class="mono">{escape(name)}</td>'
+                     f'<td class="mono">{i:,.0f}</td>'
+                     f'<td class="mono">{mean:,.0f}</td>'
+                     f'<td class="mono">{ramp:+.0f}%</td>'
+                     f'<td class="mono"{cls}>{mean / top * 100:.0f}%</td></tr>')
+    if not rows:
+        return ""
+
+    note = f"idle from script 89, under-load figures from the {phase} phase"
+    if suspect:
+        note += (f". <strong>{', '.join(suspect)} sat well below the rest of "
+                 f"its bank under load and did not rise to meet it</strong> — "
+                 f"worth inspecting, since fans on one duty curve should "
+                 f"converge under the same load")
+    else:
+        note += (". Every fan converged with its bank under load. A small "
+                 "percentage rise on a fan that was already running fast at "
+                 "idle is expected, not a fault")
+
+    return f'''
+    <div class="table-note">{note}</div>
+    <div class="tbl-wrap"><table class="tbl gpu">
+        <thead><tr><th>Fan</th><th>Idle RPM</th><th>Under load (mean)</th>
+        <th>Change</th><th>of bank max</th></tr></thead>
+        <tbody>{rows}</tbody></table></div>'''
+
+
+def render_chassis_inventory(hwinv: dict | None, stress=None, burnin=None) -> str:
+    """Render script 89's chassis inventory: BMC, FRU, power-on hours, PSUs,
+    drives (including the ones behind a RAID controller) and card VPD.
+
+    These are the Schedule 4 limbs the GPU scripts cannot reach: 1(c) component
+    make/model/quantity, 1(d) firmware versions, and 1(f) power-on hours.
+    """
+    if not hwinv:
+        return ('<span class="dim">Chassis inventory not available &mdash; '
+                'script 89 did not run on this machine</span>')
+
+    bmc = hwinv.get("bmc") or {}
+    fru = hwinv.get("fru") or {}
+    po = hwinv.get("power_on") or {}
+    psus = hwinv.get("psus") or []
+    drives = hwinv.get("drives") or []
+    cards = hwinv.get("add_in_cards") or []
+
+    fr = render_fan_response(hwinv, stress, burnin)
+    fan_response = ('<div class="section-label" style="margin-top:14px">'
+                    'Fan response to load</div>' + fr) if fr else ""
+
+    def cell(x):
+        return escape(str(x)) if x not in (None, "") else '<span class="dim">--</span>'
+
+    # -- Facts: BMC firmware (limb 1(d)) and the FRU build date --
+    facts = [
+        ("BMC firmware", bmc.get("firmware_revision")),
+        ("BMC access", bmc.get("access")),
+        ("Board manufactured", fru.get("board_mfg_date")),
+        ("Board serial", fru.get("board_serial")),
+        ("Chassis serial (FRU)", fru.get("chassis_serial")),
+        ("Product serial (FRU)", fru.get("product_serial")),
+    ]
+    facts_rows = "".join(
+        f'<tr><td>{escape(k)}</td><td class="mono">{cell(val)}</td></tr>'
+        for k, val in facts)
+
+    # -- Power-on hours. The BMC sensor where one exists, else the drives.
+    #    Both the spread and the SEL span are shown, because what makes the
+    #    drive figure usable as the *server's* hours is that every drive agrees.
+    # Which figure, and why the highest. An internal drive only accumulates
+    # hours while the server is powered, so every drive's count is <= the
+    # server's and max() is the tightest lower bound available. A *replacement*
+    # drive reads low and cannot drag the figure down. A drive *transplanted
+    # from another server* reads high and would silently inflate it -- which is
+    # what the two guards below are for. The controller is not a candidate: it
+    # reports no lifetime hours, and it is a replaceable part in any case.
+    hours = po.get("hours")
+    dmax, dmin = po.get("drive_hours_max"), po.get("drive_hours_min")
+    poh_warn = ""
+    if hours is not None:
+        poh_val = f'{hours:,} h'
+        poh_src = f'BMC sensor ({escape(str(po.get("source") or "ipmi"))})'
+    elif dmax is not None:
+        poh_val = f'{dmax:,} h'
+        spread = po.get("drive_hours_spread")
+        n = po.get("drives_reporting_hours") or 0
+        detail = f'highest of {n} drive(s)'
+        if spread is not None:
+            detail += f', spread {spread:,} h'
+        poh_src = f'{detail}; no BMC sensor exists on this chassis'
+
+        # Powered time cannot exceed elapsed time, so if it appears to, one of
+        # the two records is wrong. Which one is decided by the spread, not by
+        # assuming: drives agreeing to the hour cannot each have been swapped
+        # in separately, so they corroborate one another and the event log is
+        # the outlier -- a cleared SEL restarts the span while the drives keep
+        # counting. Drives that disagree point the other way, at one drive
+        # carrying a previous life. Seen on real hardware in both directions,
+        # which is why this distinguishes rather than just raising a hand.
+        span = po.get("sel_span_days")
+        tight = spread is not None and spread <= 24
+        over = bool(span) and dmax > span * 24
+
+        if over and tight:
+            poh_src += ' &mdash; all drives agree, so fitted from new'
+            poh_warn = (
+                f'<tr><td>Note</td><td>The drives report {dmax // 24:,} powered '
+                f'days, more than the {span:,} days the event log covers. All '
+                f'{n} agree to within {spread:,} h, so they were fitted '
+                f'together and the drive figure stands; it is the event log '
+                f'that is short, which is what a cleared SEL looks like. Treat '
+                f'the service span below as a floor, not the age.</td></tr>')
+        elif over:
+            poh_warn = (
+                f'<tr><td>Review</td><td>The highest drive reports {dmax:,} h, '
+                f'more than the {span * 24:,} h the chassis has existed per its '
+                f'event log, and the drives differ by {spread:,} h. That points '
+                f'to a drive carrying hours from another machine. Do not use '
+                f'this as the server figure until it is resolved.</td></tr>')
+        elif tight:
+            poh_src += ' &mdash; all drives agree, so fitted from new'
+        elif spread is not None:
+            poh_warn = (
+                f'<tr><td>Note</td><td>The drives differ by {spread:,} h, '
+                f'so at least one was not fitted with the chassis. The '
+                f'figure above remains a lower bound on the server.</td></tr>')
+    else:
+        poh_val = '<span class="dim">not evidenced</span>'
+        poh_src = 'no BMC sensor and no drive reported hours'
+
+    sel_days = po.get("sel_span_days")
+    sel_row = ""
+    if sel_days is not None:
+        corroborate = ""
+        if dmax:
+            pct = round((dmax / 24) / sel_days * 100) if sel_days else None
+            if pct is not None:
+                corroborate = (f' &mdash; {dmax // 24:,} powered days of '
+                               f'{sel_days:,} elapsed, {pct}% powered')
+        sel_row = (f'<tr><td>Service span (SEL)</td>'
+                   f'<td class="mono">{sel_days:,} days{corroborate}</td></tr>')
+
+    poh_rows = (f'<tr><td>Power-on hours</td><td class="mono">{poh_val}</td></tr>'
+                f'<tr><td>Source</td><td>{poh_src}</td></tr>{sel_row}{poh_warn}')
+
+    # -- PSUs, per bay. An empty bay is a fact the Server Report needs.
+    if psus:
+        present = [p for p in psus if p.get("present")]
+        # SMBIOS type 39 is written by the BIOS and has been seen to
+        # under-report: a chassis with four PSUs fitted recorded only two
+        # entries. The BMC exposes a sensor pair per bay regardless, so where
+        # the two disagree the BMC is the presence evidence and DMI is only
+        # the serial source. Reporting the DMI count alone would understate
+        # what is being sold.
+        sensors = hwinv.get("psu_sensors") or {}
+        sens = sensors.get("bays")
+        bay_note = f'{len(present)} of {len(psus)} bays populated'
+
+        psu_rows = "".join(
+            f'<tr><td class="mono">{cell(p.get("location"))}</td>'
+            f'<td>{cell(p.get("manufacturer"))}</td>'
+            f'<td>{cell(p.get("model") or p.get("name"))}</td>'
+            f'<td class="mono tiny">{cell(p.get("serial_number"))}</td>'
+            f'<td class="mono">{cell(p.get("max_power_watts"))}</td>'
+            f'<td>{cell(p.get("status"))}</td></tr>' for p in psus)
+
+        # Where the BMC sees more bays than SMBIOS records, the extra bays are
+        # listed anyway. They are fitted and drawing power -- the BMC has a
+        # sensor pair for each -- so omitting them would understate what is
+        # being sold. Their identity fields are left blank rather than guessed
+        # from a sibling bay. Cause is the BIOS: on this platform SMBIOS type
+        # 39 lists every bay only from BIOS 1003 onward, two below it.
+        if sens and sens > len(present):
+            listed = {(p.get("location") or "").strip() for p in psus}
+            missing = [l for l in (sensors.get("labels") or [])
+                       if l.strip() not in listed]
+            if not missing:
+                missing = [f'Bay {n}' for n in
+                           range(len(present) + 1, sens + 1)]
+            psu_rows += "".join(
+                f'<tr class="dim"><td class="mono">{cell(loc)}</td>'
+                f'<td>&mdash;</td><td>&mdash;</td>'
+                f'<td class="tiny">not in SMBIOS</td><td>&mdash;</td>'
+                f'<td>Present per BMC sensor</td></tr>' for loc in missing)
+            bay_note = (
+                f'<strong>{sens} bays fitted and drawing power</strong> per the '
+                f'BMC, which exposes a sensor pair for each. SMBIOS type 39 '
+                f'records only {len(present)}, so the make, model and serial of '
+                f'{sens - len(present)} bay(s) are not readable in band. This is '
+                f'a BIOS limitation, not a missing supply: on this platform '
+                f'SMBIOS lists all bays only from BIOS 1003 onward. A BIOS '
+                f'update, or reading the labels, is required to complete those '
+                f'rows.')
+        psu_html = f'''
+    <div class="table-note">{bay_note}</div>
+    <div class="tbl-wrap"><table class="tbl gpu">
+        <thead><tr><th>Bay</th><th>Manufacturer</th><th>Model</th>
+        <th>Serial</th><th>Rating</th><th>Status</th></tr></thead>
+        <tbody>{psu_rows}</tbody></table></div>'''
+    else:
+        psu_html = '<span class="dim">No PSU records in SMBIOS type 39</span>'
+
+    # -- Drives. "reached_via" is the point: megaraid rows are the member
+    #    drives, which nothing else on this report can see.
+    if drives:
+        hidden = sum(1 for d in drives if d.get("reached_via") == "megaraid")
+        drv_rows = ""
+        for d in drives:
+            cap = d.get("capacity_bytes")
+            cap_s = f'{cap / 1e12:.2f} TB' if cap and cap >= 1e12 else (
+                f'{cap / 1e9:.0f} GB' if cap else "--")
+            hrs = d.get("power_on_hours")
+            hrs_s = f'{hrs:,}' if hrs is not None else '<span class="dim">--</span>'
+            via = d.get("reached_via") or "--"
+            via_s = ('<strong>behind RAID</strong>' if via == "megaraid" else via)
+            drv_rows += (
+                f'<tr><td>{cell(d.get("model"))}</td>'
+                f'<td class="mono tiny">{cell(d.get("serial_number"))}</td>'
+                f'<td class="mono">{cap_s}</td>'
+                f'<td class="mono">{cell(d.get("firmware"))}</td>'
+                f'<td class="mono">{hrs_s}</td>'
+                f'<td class="tiny">{via_s}</td></tr>')
+        note = f'{len(drives)} drive(s)'
+        if hidden:
+            note += (f' &mdash; {hidden} read through the RAID controller, '
+                     f'invisible to lsblk, lshw and MAAS')
+        drv_html = f'''
+    <div class="table-note">{note}</div>
+    <div class="tbl-wrap"><table class="tbl gpu">
+        <thead><tr><th>Model</th><th>Serial</th><th>Capacity</th>
+        <th>Firmware</th><th>Power-on h</th><th>Reached via</th></tr></thead>
+        <tbody>{drv_rows}</tbody></table></div>'''
+    else:
+        drv_html = '<span class="dim">No drive records collected</span>'
+
+    # -- Add-in card serials from PCI VPD. Not every card publishes VPD, and
+    #    the ones that do not are simply absent rather than shown blank.
+    if cards:
+        card_rows = "".join(
+            f'<tr><td>{cell(c.get("description"))}</td>'
+            f'<td class="mono">{cell(c.get("part_number"))}</td>'
+            f'<td class="mono tiny">{cell(c.get("serial_number"))}</td>'
+            f'<td class="mono tiny">{escape(", ".join(c.get("pci_functions") or []))}</td>'
+            f'</tr>' for c in cards)
+        card_html = f'''
+    <div class="table-note">{len(cards)} card(s) publishing Vital Product Data;
+        cards without VPD carry no readable serial and are omitted</div>
+    <div class="tbl-wrap"><table class="tbl gpu">
+        <thead><tr><th>Card</th><th>Part number</th><th>Board serial</th>
+        <th>PCI functions</th></tr></thead>
+        <tbody>{card_rows}</tbody></table></div>'''
+    else:
+        card_html = ('<span class="dim">No add-in card published VPD &mdash; '
+                     'card serials remain a physical label check</span>')
+
+    return f'''
+    <div class="two-col">
+        <div><div class="table-note">Baseboard management &amp; identity</div>
+            <div class="tbl-wrap"><table class="tbl gpu"><tbody>{facts_rows}</tbody></table></div></div>
+        <div><div class="table-note">Power-on hours &mdash; Sch 4 para 1(f)</div>
+            <div class="tbl-wrap"><table class="tbl gpu"><tbody>{poh_rows}</tbody></table></div></div>
+    </div>
+    {fan_response}
+    <div class="section-label" style="margin-top:14px">Power supplies</div>
+    {psu_html}
+    <div class="section-label" style="margin-top:14px">Drives</div>
+    {drv_html}
+    <div class="section-label" style="margin-top:14px">Add-in card serials (PCI VPD)</div>
+    {card_html}'''
+
+
 def render_storage_table(block_devs: list[dict]) -> str:
     """Render storage device table with RAID member support."""
     if not block_devs:
@@ -3066,6 +3463,7 @@ def generate_report(
     hostname_override: str | None = None,
     config: dict | None = None,
     burnin: dict | None = None,
+    hwinv: dict | None = None,
 ) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -3142,9 +3540,10 @@ def generate_report(
     #   data gets the corrected reading without re-running anything, and the
     #   rule exists in exactly one place.
     #
-    #   Only ever applied when NVLink was positively measured absent -- an
-    #   unknown is not grounds to waive evidence -- and only when the excused
-    #   tests are the ONLY ones skipped.
+    #   Applied only for a SKU where DCGM is known not to qualify the plugin
+    #   (see NVBANDWIDTH_UNQUALIFIED_SKUS), and only when the excused tests are
+    #   the ONLY ones skipped. An unrecognised SKU is not grounds to waive
+    #   evidence.
     # - Burn-in mode and throttle commentary: see BURN_MODE_NOTE_MARKERS. Done
     #   here rather than by not emitting it, so it also applies to reports built
     #   from commissioning data MAAS already holds, and so the raw JSON keeps the
@@ -3155,7 +3554,10 @@ def generate_report(
                           and any(m in i.get("issue", "").lower()
                                   for m in BURN_MODE_NOTE_MARKERS))]
 
-    if sys_info.get("nvlink_present") is False:
+    _gpus0 = (inventory or {}).get("gpus") or []
+    _dev_id = str(((_gpus0[0].get("identity") or {}).get("pci_device_id")
+                   if _gpus0 else "") or "").lower()
+    if _dev_id in NVBANDWIDTH_UNQUALIFIED_SKUS:
         skipped = skipped_test_names(diag)
         if skipped and skipped <= SKIP_EXPECTED_WITHOUT_NVLINK:
             for i in all_issues:
@@ -3165,9 +3567,13 @@ def generate_report(
                     continue
                 i["severity"] = "info"
                 i["issue"] = (
-                    "%s skipped as expected: no NVLink is fitted, so there is no "
-                    "peer bandwidth to measure. Host/device bandwidth is covered "
-                    "by the pcie test." % ", ".join(sorted(skipped)))
+                    "%s skipped by design: DCGM does not qualify that plugin for "
+                    "%s (PCI %s), so it is disabled for this SKU whether or not "
+                    "NVLink bridges are fitted. Host/device bandwidth is covered "
+                    "by the pcie test; peer bandwidth, where bridges are present, "
+                    "needs the standalone nvbandwidth tool."
+                    % (", ".join(sorted(skipped)),
+                       NVBANDWIDTH_UNQUALIFIED_SKUS[_dev_id], _dev_id))
 
     # Per-GPU acceptance is adjudicated here rather than after rendering, so a
     # server holding a rejectable card cannot show a PASS headline.
@@ -3535,6 +3941,9 @@ def generate_report(
     # --- DIMM table ---
     dimm_html = render_dimm_table(dimms or [])
 
+    # --- Chassis inventory (script 89) ---
+    chassis_html = render_chassis_inventory(hwinv, stress, burnin)
+
     # --- NIC table (prefer PCI devices, fallback to MAAS interface_set) ---
     pci = pci_devices or {}
     if pci.get("network"):
@@ -3653,6 +4062,11 @@ def generate_report(
 <section>
     <div class="section-label">DCGM Test Matrix</div>
     {stress_section}
+</section>
+
+<section>
+    <div class="section-label">Chassis &amp; Components</div>
+    {chassis_html}
 </section>
 
 <section>
@@ -4201,6 +4615,8 @@ Examples:
     file_grp = p.add_argument_group("file-based mode (backward compatible)")
     file_grp.add_argument("--install", metavar="FILE", help="90-install JSON file")
     file_grp.add_argument("--config", metavar="FILE", help="91-mig-ecc-config JSON file")
+    file_grp.add_argument("--hwinv", metavar="FILE",
+                          help="89-hw-inventory JSON file (chassis, PSUs, drives, BMC)")
     file_grp.add_argument("--burnin", metavar="FILE", help="92-burn-in JSON file")
     file_grp.add_argument("--inventory", metavar="FILE", help="98-inventory JSON file")
     file_grp.add_argument("--stress", metavar="FILE", help="99-stress-test JSON file")
@@ -4237,6 +4653,7 @@ Examples:
             stress=data["stress"],
             config=data.get("config"),
             burnin=data.get("burnin"),
+            hwinv=data.get("hwinv"),
             maas_url=maas_url,
             system_id=data["system_id"],
             machine=data["machine"],
@@ -4253,7 +4670,8 @@ Examples:
             hostname_override=data["hostname"],
         )
 
-    elif any([args.install, args.inventory, args.stress, args.config, args.burnin]):
+    elif any([args.install, args.inventory, args.stress, args.config, args.burnin,
+              args.hwinv]):
         # === FILE-BASED MODE (backward compatible) ===
         log("File-based mode (no MAAS API)")
         install = load_json_file(args.install)
@@ -4261,8 +4679,9 @@ Examples:
         stress = load_json_file(args.stress)
         config = load_json_file(args.config)
         burnin = load_json_file(args.burnin)
+        hwinv = load_json_file(args.hwinv)
 
-        if not any([install, inventory, stress, config, burnin]):
+        if not any([install, inventory, stress, config, burnin, hwinv]):
             print("Error: No valid JSON loaded from files", file=sys.stderr)
             sys.exit(1)
 
@@ -4272,6 +4691,7 @@ Examples:
             stress=stress,
             config=config,
             burnin=burnin,
+            hwinv=hwinv,
             maas_url=args.maas_url,
         )
 

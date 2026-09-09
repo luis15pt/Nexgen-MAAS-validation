@@ -1,0 +1,6 @@
+#!/bin/bash
+if [[ "$*" == *"NAME,TYPE"* ]]; then
+  printf 'sda disk\nnvme0n1 disk\n'
+elif [[ "$*" == *"NAME,MODEL"* ]]; then
+  printf 'sda MR9560-16i\nnvme0n1 SAMSUNG MZQL27T6HBLA-00A07\n'
+fi

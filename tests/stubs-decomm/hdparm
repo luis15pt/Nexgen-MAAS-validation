@@ -1,0 +1,62 @@
+#!/bin/bash
+# ATA identity, capability and sanitise status.
+#   STUB_ATA_CAPS         crypto | block | none  (default crypto)
+#   STUB_ATA_RESULT       success | fail | idle | timeout  (default success)
+#   STUB_ATA_TICKS        in-progress polls before the terminal state
+#   STUB_ATA_REJECT       1 makes the sanitise command itself fail
+SD="${STUB_STATE_DIR:-/tmp}"
+for a in "$@"; do [[ "$a" == /dev/* ]] && DEV="$a"; done
+# The JBOD-exposed members answer like any directly attached SATA drive.
+
+if [[ "$*" == *"-I"* ]]; then
+    echo "ATA device, with non-removable media"
+    echo "        Model Number:       SAMSUNG MZ7L3480HCHQ-00A07"
+    echo "        Serial Number:      S664NE0R900001"
+    echo "Commands/features:"
+    case "${STUB_ATA_CAPS:-crypto}" in
+        crypto) echo "           *    SANITIZE feature set"
+                echo "           *            BLOCK_ERASE_EXT command"
+                echo "           *            CRYPTO_SCRAMBLE_EXT command" ;;
+        block)  echo "           *    SANITIZE feature set"
+                echo "           *            BLOCK_ERASE_EXT command" ;;
+        none)   echo "                SANITIZE feature set not supported" ;;
+    esac
+    echo "Security:"
+    echo "        Master password revision code = 65534"
+    echo "                supported"
+    echo "        not     enabled"
+    exit 0
+fi
+
+if [[ "$*" == *"--sanitize-status"* ]]; then
+    st="${SD}/stub-ata-$(basename "${DEV:-sdb}")"
+    [[ -f "$st" ]] || { echo "	Sanitize Idle"; exit 0; }
+    polls=$(cat "$st"); echo $(( polls + 1 )) > "$st"
+    if (( polls < ${STUB_ATA_TICKS:-0} )); then
+        echo "	Sanitize Operation In Progress: 45.5% complete"; exit 0
+    fi
+    # The real wording, captured from a member exposed in JBOD on an
+    # MR9560-16i after a crypto scramble that worked. Note the state returns
+    # to Idle and the outcome is on the following line -- matching on
+    # "succeeded" found nothing and marked a good erase as a failure.
+    echo "	Sanitize status:"
+    case "${STUB_ATA_RESULT:-success}" in
+        fail)     echo "	    State:    SD3 Sanitize Operation Failed" ;;
+        frozen)   echo "	    State:    SD1 Sanitize Frozen" ;;
+        idle)     echo "	    State:    SD0 Sanitize Idle" ;;
+        timeout)  echo "	    State:    SD2 Sanitize Operation In Progress"
+                  echo "	    Progress: 45.5%" ;;
+        succeeded) echo "	    State:    SD2 Sanitize Operation Succeeded" ;;
+        *)        echo "	    State:    SD0 Sanitize Idle"
+                  echo "	    Last Sanitize Operation Completed Without Error" ;;
+    esac
+    exit 0
+fi
+
+if [[ "$*" == *"--sanitize-crypto-scramble"* || "$*" == *"--sanitize-block-erase"* ]]; then
+    echo "$(date -u +%FT%TZ) hdparm $*" >> ${SD}/stub-destructive-calls
+    [[ "$STUB_ATA_REJECT" == "1" ]] && { echo "SG_IO: bad/missing sense data" >&2; exit 5; }
+    echo 0 > "${SD}/stub-ata-$(basename "${DEV:-sdb}")"
+    exit 0
+fi
+exit 1

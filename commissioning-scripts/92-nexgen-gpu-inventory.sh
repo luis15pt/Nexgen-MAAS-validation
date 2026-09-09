@@ -22,7 +22,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 WORK_DIR="/tmp/gpu-inventory-$$"
-SCRIPT_VERSION="2.3.0"
+SCRIPT_VERSION="2.4.0"
 
 ###############################################################################
 # LOGGING
@@ -205,21 +205,47 @@ lscpu_num() {
 NVLINK_PRESENT="false"
 NVLINK_ACTIVE_LINKS=""
 detect_nvlink() {
-    local topo links=""
-    topo=$(nvidia-smi topo -m 2>/dev/null || true)
-    # NV<n> in the peer matrix is a bonded set of n NVLinks between two GPUs.
-    if printf '%s\n' "$topo" | grep -qE '(^|[[:space:]])NV[0-9]+([[:space:]]|$)'; then
+    # The peer matrix is the authority. NV<n> between two GPUs means a bonded
+    # set of n NVLinks, so counting the NV cells gives the bridge topology
+    # directly, in the same terms the specification uses ("4 x 2-way bridges").
+    #
+    # `nvidia-smi nvlink --status` is NOT used for the count. It enumerates
+    # every NVLink *port* the silicon has, connected or not, so line-counting
+    # it reported 139 "active links" on a machine whose real topology is four
+    # 2-way bridges of 12 links -- 48. A number that large is obviously not a
+    # link count, but it read as one, and it reached a customer-facing report.
+    local topo pairs=0 per=0 total=0
+    topo=$(nvidia-smi topo -m 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
+
+    # One line per source GPU; only the upper triangle, so each bridge counts
+    # once. Emits "<pairs> <links-per-pair> <total>".
+    read -r pairs per total <<<"$(printf '%s\n' "$topo" | awk '
+        /^GPU[0-9]+\t/ {
+            split($0, f, "\t")
+            src = f[1]; sub(/^GPU/, "", src) + 0
+            for (j = 2; j <= length(f); j++) {
+                cell = f[j]; gsub(/[[:space:]]/, "", cell)
+                if (cell ~ /^NV[0-9]+$/ && (j - 1) > src) {
+                    n = cell; sub(/^NV/, "", n)
+                    pairs++; total += n; per = n
+                }
+            }
+        }
+        END { printf "%d %d %d\n", pairs+0, per+0, total+0 }')"
+
+    if [[ "${pairs:-0}" -gt 0 ]]; then
         NVLINK_PRESENT="true"
-    fi
-    links=$(nvidia-smi nvlink --status 2>/dev/null | grep -cE '^[[:space:]]*Link [0-9]+:' || true)
-    links="${links//[^0-9]/}"
-    if [[ -n "$links" && "$links" -gt 0 ]]; then
-        NVLINK_PRESENT="true"
-        NVLINK_ACTIVE_LINKS="$links"
+        NVLINK_BRIDGES="$pairs"
+        NVLINK_LINKS_PER_BRIDGE="$per"
+        NVLINK_ACTIVE_LINKS="$total"
+        log "NVLink present: true -- ${pairs} x 2-way bridge(s), ${per} links each, ${total} bonded links"
     else
-        NVLINK_ACTIVE_LINKS="${links:-0}"
+        NVLINK_PRESENT="false"
+        NVLINK_BRIDGES=0
+        NVLINK_LINKS_PER_BRIDGE=0
+        NVLINK_ACTIVE_LINKS=0
+        log "NVLink present: false -- no NV<n> peers in the topology matrix"
     fi
-    log "NVLink present: $NVLINK_PRESENT (active links: $NVLINK_ACTIVE_LINKS)"
 }
 
 # Physical cores, not threads. A report that sums logical CPUs and labels them
@@ -250,6 +276,8 @@ collect_system_context() {
         --argjson cores   "$(to_json_num "$(cpu_total_cores)")" \
         --argjson nvlink  "$NVLINK_PRESENT" \
         --argjson nvlinks "$(to_json_num "$NVLINK_ACTIVE_LINKS")" \
+        --argjson nvbridges "$(to_json_num "${NVLINK_BRIDGES:-0}")" \
+        --argjson nvper "$(to_json_num "${NVLINK_LINKS_PER_BRIDGE:-0}")" \
         --argjson ram "$(awk '/MemTotal/{printf "%d",$2/1024/1024}' /proc/meminfo)" \
         --arg kernel "$(uname -r)" \
         --arg drv "$SMI_DRIVER" \
@@ -260,6 +288,7 @@ collect_system_context() {
             cpu_model:$cpu, cpu_sockets:$sockets, cpu_total_threads:$threads,
             cpu_cores_per_socket:$cps, cpu_total_cores:$cores,
             nvlink_present:$nvlink, nvlink_active_links:$nvlinks,
+            nvlink_bridges:$nvbridges, nvlink_links_per_bridge:$nvper,
             ram_total_gb:$ram, kernel_version:$kernel,
             nvidia_driver_version:$drv, cuda_version:$cuda
         }' > "$WORK_DIR/system.json"

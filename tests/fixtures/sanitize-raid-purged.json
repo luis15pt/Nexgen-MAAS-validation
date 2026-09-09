@@ -1,0 +1,457 @@
+{
+  "report_metadata": {
+    "script_version": "1.0.0",
+    "script_name": "storage-sanitize",
+    "generated_at": "2026-09-09T09:23:24Z",
+    "duration_seconds": 1,
+    "mode": "sanitize",
+    "runbook": "Remove Host for Sale - Secure Decommissioning Procedure, sections 6 to 10",
+    "standard": "NIST SP 800-88r1. Levels: Clear sanitises all user-addressable locations against simple non-invasive recovery; Purge renders recovery infeasible using state-of-the-art laboratory techniques. On flash media an overwrite reaches only user-addressable blocks, so it is a Clear -- over-provisioned capacity, retired blocks and unmapped FTL copies are outside it. Purge on flash is a firmware operation: ATA or NVMe SANITIZE, or a cryptographic erase.",
+    "required_level": "purge",
+    "accept_clear": false,
+    "data_hash_sha256": "ff2ff384046aa389e7c54606983eb54243309521c20879f3eb70014733b986f5"
+  },
+  "verdict": {
+    "overall": "PASS",
+    "issues": [
+      {
+        "issue": "The target machine was not pinned by serial",
+        "severity": "advisory",
+        "details": "EXPECT_SYSTEM_SERIAL is unset, so the script erased whichever host it ran on. Set it to the DMI system serial -- or to a whitespace- or comma-separated list of them -- to have the run refuse a machine it was not intended for."
+      }
+    ]
+  },
+  "environment": {
+    "root_source": "overlayroot",
+    "root_fstype": "overlay",
+    "root_backing_disk": null,
+    "is_ephemeral": true,
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "hostname": "EXAMPLE-NODE-01.example.lan",
+    "system_serial": "R9S0MD0000AB",
+    "nvme_cli_version": "nvme version 2.4",
+    "nvme_sanitize_log_json": true,
+    "smartctl_version": "smartctl 7.4 2023-08-01 r5530",
+    "raid_cli": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64",
+    "maas_indicators": "cloud-init etc-cloud",
+    "attestation": "Running from an ephemeral root (overlay); no sanitised device holds the running system."
+  },
+  "inventory": {
+    "counts": {
+      "media_records": 5,
+      "physical_media": 3,
+      "nvme_controllers": 1,
+      "raid_members": 2,
+      "other_media": 0,
+      "purge_planned": 3,
+      "purged": 3,
+      "no_method": 0
+    },
+    "lsblk_b64": "TkFNRSAgICAgICAgUEFUSCAgICAgICAgICAgICAgICBUWVBFICBTSVpFIE1PREVMICAgICAgICAgICAgICAgICAgICAgIFNFUklBTCAgICAgICAgICBXV04gICAgICAgICAgICAgICAgICBUUkFOICBST1RBIEhPVFBMVUcgTU9VTlRQT0lOVFMKbnZtZTBuMSAgICAgL2Rldi9udm1lMG4xICAgICAgICBkaXNrICA3LjBUIFNBTVNVTkcgTVpRTDI3VDZIQkxBLTAwQTA3IFM2Q0tORTBSMDAwMDAxIGV1aS4zNjM0NTg0MDAwMDAwMDAxIG52bWUgICAgIDAgICAgICAgMCAKc2RhICAgICAgICAgL2Rldi9zZGEgICAgICAgICAgICBkaXNrICA0NDdHIE1SOTU2MC0xNmkgICAgICAgICAgICAgICAgIDAwZTFiNGUwZjFhMmIzYzQgMHg2MDA2MDViMCAgICAgICAgICAgc2FzICAgICAgMCAgICAgICAwCnNkeiAgICAgICAgIC9kZXYvc2R6ICAgICAgICAgICAgZGlzayAgICAwQiBWaXJ0dWFsIEhEaXNrMCAgICAgICAgICAgICBBQUFBQkJCQkNDQ0MzICAgICAgICAgICAgICAgICAgICAgICAgdXNiICAgICAgIDEgICAgICAgMQo=",
+    "nvme_list_b64": "Tm9kZSAgICAgICAgICAgICAgICAgIFNOICAgICAgICAgICAgICAgICAgIE1vZGVsICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgTmFtZXNwYWNlIFVzYWdlICAgICAgICAgICAgICAgICAgICAgIEZvcm1hdCAgICAgICAgICAgRlcgUmV2Ci9kZXYvbnZtZTBuMSAgICAgICAgICBTNkNLTkUwUjAwMDAwMSAgICAgICBTQU1TVU5HIE1aUUwyN1Q2SEJMQS0wMEEwNyAgICAgICAgICAgICAgIDEgICAgICAgICAgIDcuNjggIFRCIC8gICA3LjY4ICBUQiAgICA1MTIgICBCICsgIDAgQiAgIEdEQzUzMDJRCg==",
+    "nvme_id_ctrl_b64": "PT09PT0gL2Rldi9udm1lMCA9PT09PQpOVk1FIElkZW50aWZ5IENvbnRyb2xsZXI6CnNuICAgICAgOiBTNkNLTkUwUjAwMDAwMQptbiAgICAgIDogU0FNU1VORyBNWlFMMjdUNkhCTEEtMDBBMDcKZnIgICAgICA6IEdEQzUzMDJRCmZuYSAgICAgOiAwCnNhbmljYXAgOiAzCiAgWzA6MF0gOiAxCUNyeXB0byBFcmFzZSBTYW5pdGl6ZSBPcGVyYXRpb24gU3VwcG9ydGVkCiAgWzE6MV0gOiAxCUJsb2NrIEVyYXNlIFNhbml0aXplIE9wZXJhdGlvbiBTdXBwb3J0ZWQK"
+  },
+  "media": [
+    {
+      "device": "/dev/nvme0",
+      "controller": "/dev/nvme0",
+      "reached_via": "nvme-controller",
+      "device_type": "nvme",
+      "transport": "nvme",
+      "manufacturer": null,
+      "model": "SAMSUNG MZQL27T6HBLA-00A07",
+      "serial_number": "S6CKNE0R000001",
+      "wwn": null,
+      "firmware": "GDC5302Q",
+      "capacity_bytes": 7681501126656,
+      "mountpoints": [],
+      "capabilities": {
+        "sanicap_raw": 3,
+        "fna_raw": 0,
+        "nvme_sanitize_crypto": true,
+        "nvme_sanitize_block": true,
+        "nvme_sanitize_overwrite": false,
+        "nvme_format_crypto": false
+      },
+      "physical_media": true,
+      "method": "nvme-sanitize-crypto",
+      "method_level": "purge",
+      "method_reason": "Controller reports SANICAP crypto erase. Preferred method.",
+      "command": "nvme sanitize /dev/nvme0 --sanact=4",
+      "started_at": "2026-09-09T09:23:24Z",
+      "completed_at": "2026-09-09T09:23:24Z",
+      "duration_seconds": 0,
+      "status_code": "1",
+      "result": "success",
+      "verification": {
+        "serial_reread": "S6CKNE0R000001",
+        "serial_matches": true,
+        "residual_filesystem_signature": null,
+        "read_back_probe": null,
+        "read_back": {
+          "first_mib_sha256": null,
+          "last_mib_sha256": null
+        },
+        "note": "The serial re-read proves the record belongs to the device that was erased. The signature check and block hashes corroborate only: a cryptographic erase leaves random-looking data by design, so the device status field is what evidences the purge."
+      },
+      "nist_level": "purge",
+      "sanact": 4,
+      "evidence_b64": "PT09PT0gMjAyNi0wOS0wOVQwOToyMzoyNFogIC9kZXYvbnZtZTAgPT09PT0KY29tbWFuZDogbnZtZSBzYW5pdGl6ZSAvZGV2L252bWUwIC0tc2FuYWN0PTQKU2FuaXRpemUgUHJvZ3Jlc3MgICAgICAgICAgICAgICAgICAgICAgKFNQUk9HKSA6ICA2NTUzNQpTYW5pdGl6ZSBTdGF0dXMgICAgICAgICAgICAgICAgICAgICAgICAoU1NUQVQpIDogIDB4MTAxCg=="
+    },
+    {
+      "device": "/dev/sda",
+      "controller": null,
+      "reached_via": "direct",
+      "device_type": "raid-volume",
+      "transport": "sas",
+      "manufacturer": null,
+      "model": "MR9560-16i",
+      "serial_number": "00e1b4e0f1a2b3c4",
+      "wwn": "0x600605b0",
+      "firmware": null,
+      "capacity_bytes": 479559942144,
+      "mountpoints": [],
+      "capabilities": {
+        "note": "virtual disk presented by a RAID controller",
+        "filesystem_signatures": [
+          "ext4",
+          "vfat"
+        ]
+      },
+      "physical_media": false,
+      "method": "not-applicable",
+      "method_level": "n/a",
+      "method_reason": "Virtual disk presented by a RAID controller. The physical drives inside it are inventoried and sanitised in their own right.",
+      "command": null,
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "status_code": null,
+      "result": "not applicable",
+      "verification": null,
+      "nist_level": null,
+      "sanact": null
+    },
+    {
+      "device": "/dev/sdz",
+      "controller": null,
+      "reached_via": "direct",
+      "device_type": "bmc-virtual-media",
+      "transport": "usb",
+      "manufacturer": null,
+      "model": "Virtual HDisk0",
+      "serial_number": "AAAABBBBCCCC3",
+      "wwn": null,
+      "firmware": null,
+      "capacity_bytes": 0,
+      "mountpoints": [],
+      "capabilities": {
+        "note": "emulated by the BMC; not media present in the chassis",
+        "media_attached": false
+      },
+      "physical_media": false,
+      "method": "not-applicable",
+      "method_level": "n/a",
+      "method_reason": "Virtual disk presented by a RAID controller. The physical drives inside it are inventoried and sanitised in their own right.",
+      "command": null,
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "status_code": null,
+      "result": "not applicable",
+      "verification": null,
+      "nist_level": null,
+      "sanact": null
+    },
+    {
+      "device": "/dev/sda",
+      "controller": "/dev/sda",
+      "reached_via": "megaraid,0",
+      "device_type": "raid-member",
+      "transport": null,
+      "manufacturer": "ATA",
+      "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+      "serial_number": "S664NE0R123456",
+      "wwn": null,
+      "firmware": "JXTC104Q",
+      "capacity_bytes": 480103981056,
+      "mountpoints": [],
+      "capabilities": {
+        "sg_node": null,
+        "scsi_sanitize": false,
+        "ata_security": {
+          "state": 33,
+          "string": "Disabled, NOT FROZEN [SEC1]",
+          "enabled": false,
+          "frozen": false,
+          "supported": true
+        },
+        "ata_security_supported": true,
+        "raid_cli": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64"
+      },
+      "physical_media": true,
+      "method": "ata-sanitize-via-jbod",
+      "method_level": "purge",
+      "method_reason": "This controller cannot issue a drive sanitise (Support Sanitize = No) and cannot do an instant secure erase (Allow Ctrl Encryption = no, drive Secured = No). It does support JBOD, which presents the drive as its own SCSI target -- and the drive reports Sanitize Support = CryptoErase, BlockErase. The erase is therefore addressed to the drive itself inside a JBOD window, and the array is rebuilt afterwards.",
+      "command": "hdparm --yes-i-know-what-i-am-doing --sanitize-crypto-scramble /dev/sdj0",
+      "started_at": "2026-09-09T09:23:24Z",
+      "completed_at": "2026-09-09T09:23:24Z",
+      "duration_seconds": 0,
+      "status_code": "completed without error",
+      "result": "success",
+      "verification": {
+        "serial_reread": "S664NE0R123456",
+        "serial_matches": true,
+        "residual_filesystem_signature": null,
+        "read_back_probe": null,
+        "read_back": {
+          "first_mib_sha256": null,
+          "last_mib_sha256": null
+        },
+        "note": "The serial re-read proves the record belongs to the device that was erased. The signature check and block hashes corroborate only: a cryptographic erase leaves random-looking data by design, so the device status field is what evidences the purge."
+      },
+      "nist_level": "purge",
+      "sanact": null,
+      "evidence_b64": "PT09PT0gMjAyNi0wOS0wOVQwOToyMzoyNFogIC9kZXYvc2RhID09PT09CmNvbW1hbmQ6IGhkcGFybSAtLXllcy1pLWtub3ctd2hhdC1pLWFtLWRvaW5nIC0tc2FuaXRpemUtY3J5cHRvLXNjcmFtYmxlIDxyZXNvbHZlZCBieSBzZXJpYWwgaW4gSkJPRD4KCVNhbml0aXplIHN0YXR1czoKCSAgICBTdGF0ZTogICAgU0QwIFNhbml0aXplIElkbGUKCSAgICBMYXN0IFNhbml0aXplIE9wZXJhdGlvbiBDb21wbGV0ZWQgV2l0aG91dCBFcnJvcgo="
+    },
+    {
+      "device": "/dev/sda",
+      "controller": "/dev/sda",
+      "reached_via": "megaraid,1",
+      "device_type": "raid-member",
+      "transport": null,
+      "manufacturer": "ATA",
+      "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+      "serial_number": "S664NE0R123457",
+      "wwn": null,
+      "firmware": "JXTC104Q",
+      "capacity_bytes": 480103981056,
+      "mountpoints": [],
+      "capabilities": {
+        "sg_node": null,
+        "scsi_sanitize": false,
+        "ata_security": {
+          "state": 33,
+          "string": "Disabled, NOT FROZEN [SEC1]",
+          "enabled": false,
+          "frozen": false,
+          "supported": true
+        },
+        "ata_security_supported": true,
+        "raid_cli": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64"
+      },
+      "physical_media": true,
+      "method": "ata-sanitize-via-jbod",
+      "method_level": "purge",
+      "method_reason": "This controller cannot issue a drive sanitise (Support Sanitize = No) and cannot do an instant secure erase (Allow Ctrl Encryption = no, drive Secured = No). It does support JBOD, which presents the drive as its own SCSI target -- and the drive reports Sanitize Support = CryptoErase, BlockErase. The erase is therefore addressed to the drive itself inside a JBOD window, and the array is rebuilt afterwards.",
+      "command": "hdparm --yes-i-know-what-i-am-doing --sanitize-crypto-scramble /dev/sdj1",
+      "started_at": "2026-09-09T09:23:24Z",
+      "completed_at": "2026-09-09T09:23:24Z",
+      "duration_seconds": 0,
+      "status_code": "completed without error",
+      "result": "success",
+      "verification": {
+        "serial_reread": "S664NE0R123457",
+        "serial_matches": true,
+        "residual_filesystem_signature": null,
+        "read_back_probe": null,
+        "read_back": {
+          "first_mib_sha256": null,
+          "last_mib_sha256": null
+        },
+        "note": "The serial re-read proves the record belongs to the device that was erased. The signature check and block hashes corroborate only: a cryptographic erase leaves random-looking data by design, so the device status field is what evidences the purge."
+      },
+      "nist_level": "purge",
+      "sanact": null,
+      "evidence_b64": "PT09PT0gMjAyNi0wOS0wOVQwOToyMzoyNFogIC9kZXYvc2RhID09PT09CmNvbW1hbmQ6IGhkcGFybSAtLXllcy1pLWtub3ctd2hhdC1pLWFtLWRvaW5nIC0tc2FuaXRpemUtY3J5cHRvLXNjcmFtYmxlIDxyZXNvbHZlZCBieSBzZXJpYWwgaW4gSkJPRD4KCVNhbml0aXplIHN0YXR1czoKCSAgICBTdGF0ZTogICAgU0QwIFNhbml0aXplIElkbGUKCSAgICBMYXN0IFNhbml0aXplIE9wZXJhdGlvbiBDb21wbGV0ZWQgV2l0aG91dCBFcnJvcgo="
+    }
+  ],
+  "raid_reconfiguration": {
+    "performed": true,
+    "cli": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64",
+    "jbod_window": true,
+    "restored": true,
+    "restored_as": "type=r1 drives=252:0,252:1",
+    "steps": [
+      {
+        "at": "2026-09-09T09:23:23Z",
+        "step": "delete virtual disk",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0/v239 del force",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2VzcwpEZXNjcmlwdGlvbiA9IERlbGV0ZSBWRCBTdWNjZWVkZWQK"
+      },
+      {
+        "at": "2026-09-09T09:23:23Z",
+        "step": "set drive Unconfigured Good",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0/e252/s0 set good force",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2Vzcwo="
+      },
+      {
+        "at": "2026-09-09T09:23:23Z",
+        "step": "set drive Unconfigured Good",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0/e252/s1 set good force",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2Vzcwo="
+      },
+      {
+        "at": "2026-09-09T09:23:23Z",
+        "step": "enable controller JBOD (optional on some controllers)",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0 set jbod=on",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2Vzcwo="
+      },
+      {
+        "at": "2026-09-09T09:23:23Z",
+        "step": "set drive JBOD",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0/e252/s0 set jbod",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2Vzcwo="
+      },
+      {
+        "at": "2026-09-09T09:23:23Z",
+        "step": "set drive JBOD",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0/e252/s1 set jbod",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2Vzcwo="
+      },
+      {
+        "at": "2026-09-09T09:23:23Z",
+        "step": "confirm drive states",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0/eall/sall show",
+        "exit_status": 0,
+        "output_b64": "RUlEOlNsdCBESUQgU3RhdGUgREcgICAgICAgU2l6ZSBJbnRmIE1lZCBTRUQgUEkgU2VTeiBNb2RlbCAgICAgICAgICAgICAgICAgICAgICBTcCBUeXBlCjI1MjowICAgICAxIFVHb29kICAgLSA0NDYuNjI1IEdCIFNBVEEgU1NEIFllcyBOICA1MTJCIFNBTVNVTkcgTVo3TDM0ODBIQ0hRLTAwQTA3IFUgIC0K"
+      },
+      {
+        "at": "2026-09-09T09:23:24Z",
+        "step": "return drive to Unconfigured Good",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0/e252/s0 set good force",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2Vzcwo="
+      },
+      {
+        "at": "2026-09-09T09:23:24Z",
+        "step": "return drive to Unconfigured Good",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0/e252/s1 set good force",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2Vzcwo="
+      },
+      {
+        "at": "2026-09-09T09:23:24Z",
+        "step": "disable controller JBOD (optional on some controllers)",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0 set jbod=off",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2Vzcwo="
+      },
+      {
+        "at": "2026-09-09T09:23:24Z",
+        "step": "recreate virtual disk",
+        "command": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64 /c0 add vd type=r1 drives=252:0,252:1",
+        "exit_status": 0,
+        "output_b64": "U3RhdHVzID0gU3VjY2VzcwpEZXNjcmlwdGlvbiA9IEFkZCBWRCBTdWNjZWVkZWQK"
+      }
+    ]
+  },
+  "jbod_probe": {
+    "attempted": false
+  },
+  "remediation": [],
+  "controller_survey": {
+    "raid_cli": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64",
+    "raid_cli_provenance": {
+      "attempted": false,
+      "reason": "already present",
+      "path": "/home/luis/Nexgen-MAAS-validation/tests/stubs-raidcli/storcli64"
+    },
+    "raid_controllers_pci": null,
+    "commands_run": [
+      "/c0 show all",
+      "/c0/eall/sall show all",
+      "/c0/eall/sall show",
+      "/c0/vall show",
+      "/c0/vall show all"
+    ],
+    "drives": [
+      {
+        "slot": "/c0/e252/s0",
+        "serial_number": "S664NE0R123456",
+        "sed_capable": "Yes",
+        "sed_enabled": "No",
+        "secured": "No",
+        "firmware": "JXTC404Q",
+        "crypto_erase_capable": "Yes",
+        "sanitize_support": "CryptoErase, BlockErase",
+        "sanitize_crypto": true,
+        "sanitize_block": true
+      },
+      {
+        "slot": "/c0/e252/s1",
+        "serial_number": "S664NE0R123457",
+        "sed_capable": "Yes",
+        "sed_enabled": "No",
+        "secured": "No",
+        "firmware": "JXTC404Q",
+        "crypto_erase_capable": "Yes",
+        "sanitize_support": "CryptoErase, BlockErase",
+        "sanitize_crypto": true,
+        "sanitize_block": true
+      }
+    ],
+    "virtual_disks": [
+      {
+        "dg": 0,
+        "vd": 239,
+        "type": "RAID1",
+        "state": "Optl"
+      }
+    ],
+    "controller_sanitize_support": "no",
+    "controller_jbod_support": "yes",
+    "controller_encryption_allowed": "no",
+    "raw_survey_b64": "RHJpdmUgL2MwL2UyNTIvczAgOgo9PT09PT09PT09PT09PT09CkVJRDpTbHQgRElEIFN0YXRlIERHICAgICAgIFNpemUgSW50ZiBNZWQgU0VEIFBJIFNlU3ogTW9kZWwgICAgICAgICAgICAgICAgICAgICAgU3AgVHlwZQoyNTI6MCAgICAgOSAgT25sbiAgIDAgNDQ2LjYyNSBHQiBTQVRBIFNTRCBZZXMgIE4gIDUxMkIgU0FNU1VORyBNWjdMMzQ4MEhDSFEtMDBBMDcgVSAgLQpEcml2ZSAvYzAvZTI1Mi9zMCBTdGF0ZSA6ClNOID0gUzY2NE5FMFIxMjM0NTYKU0VEIENhcGFibGUgPSBZZXMKU0VEIEVuYWJsZWQgPSBObwpTZWN1cmVkID0gTm8KQ3J5cHRvZ3JhcGhpYyBFcmFzZSBDYXBhYmxlID0gWWVzCkZpcm13YXJlIFJldmlzaW9uID0gSlhUQzQwNFEKU2FuaXRpemUgU3VwcG9ydCA9IENyeXB0b0VyYXNlLCBCbG9ja0VyYXNlCkRyaXZlIC9jMC9lMjUyL3MxIDoKPT09PT09PT09PT09PT09PQpFSUQ6U2x0IERJRCBTdGF0ZSBERyAgICAgICBTaXplIEludGYgTWVkIFNFRCBQSSBTZVN6IE1vZGVsICAgICAgICAgICAgICAgICAgICAgIFNwIFR5cGUKMjUyOjEgICAgIDEwICBPbmxuICAgMCA0NDYuNjI1IEdCIFNBVEEgU1NEIFllcyAgTiAgNTEyQiBTQU1TVU5HIE1aN0wzNDgwSENIUS0wMEEwNyBVICAtCkRyaXZlIC9jMC9lMjUyL3MxIFN0YXRlIDoKU04gPSBTNjY0TkUwUjEyMzQ1NwpTRUQgQ2FwYWJsZSA9IFllcwpTRUQgRW5hYmxlZCA9IE5vClNlY3VyZWQgPSBObwpDcnlwdG9ncmFwaGljIEVyYXNlIENhcGFibGUgPSBZZXMKRmlybXdhcmUgUmV2aXNpb24gPSBKWFRDNDA0UQpTYW5pdGl6ZSBTdXBwb3J0ID0gQ3J5cHRvRXJhc2UsIEJsb2NrRXJhc2UK",
+    "virtual_disk_config_b64": "REcvVkQgVFlQRSAgU3RhdGUgQWNjZXNzIENvbnNpc3QgQ2FjaGUgQ2FjIHNDQyAgICAgICBTaXplIE5hbWUKMC8yMzkgICBSQUlEMSBPcHRsICBSVyAgICAgWWVzICAgICBSV1REICAtICAgT04gIDQ0Ni42MjUgR0IgUkFJRAo=",
+    "drive_list": "252:0,252:1",
+    "config_capture_note": "The full virtual-disk configuration is captured here before anything is deleted, because deleting the volume destroys its geometry and the array is expected back afterwards. The array configuration is not data: the drives are purged and the same RAID 1 is then recreated empty.",
+    "purge_verb": "secureerase force -- the controller reports that it cannot issue a drive sanitize, so start sanitize is not a route here however the drives advertise themselves. Every surveyed drive is SED Capable, so a cryptographic erase through the controller is.",
+    "members_seen": 2,
+    "member_ata_security": [
+      {
+        "serial_number": "S664NE0R123456",
+        "ata_security_supported": true,
+        "ata_security": {
+          "state": 33,
+          "string": "Disabled, NOT FROZEN [SEC1]",
+          "enabled": false,
+          "frozen": false,
+          "supported": true
+        }
+      },
+      {
+        "serial_number": "S664NE0R123457",
+        "ata_security_supported": true,
+        "ata_security": {
+          "state": 33,
+          "string": "Disabled, NOT FROZEN [SEC1]",
+          "enabled": false,
+          "frozen": false,
+          "supported": true
+        }
+      }
+    ],
+    "note": "Drive identity traverses the controller passthrough because it comes from IDENTIFY DEVICE; the SANITIZE command does not. Where ata_security_supported is true, the drive implements the ATA Security feature set and an erase issued with the drive presented directly would reach NIST Purge. Where it is null, smartctl could not read that word through this controller and the capability is unproven rather than absent.",
+    "to_complete_the_picture": []
+  },
+  "attestation": {
+    "hostname": "EXAMPLE-NODE-01.example.lan",
+    "system_serial": "R9S0MD0000AB",
+    "jira_ticket": null,
+    "engineer": null,
+    "reviewer": null,
+    "confirmation_phrase": "SANITIZE ALL MEDIA",
+    "out_of_scope": [
+      "Non-disk persistent configuration -- BMC, BIOS/UEFI, TPM and RAID controller settings -- is not covered by this script. Sanitising the drives does not sanitise the server.",
+      "An independent reviewer must confirm this evidence. This script cannot be its own second engineer, so reviewer is null."
+    ]
+  },
+  "audit_log_b64": "MjAyNi0wOS0wOVQwOToyMzoyM1ogIGVudmlyb25tZW50OiByb290PW92ZXJsYXlyb290IChvdmVybGF5KSBlcGhlbWVyYWw9dHJ1ZQoyMDI2LTA5LTA5VDA5OjIzOjIzWiAgaW52ZW50b3J5OiAzIHBoeXNpY2FsIGRldmljZShzKTsgMSBOVk1lIGNvbnRyb2xsZXIocyksIDEgbmFtZXNwYWNlKHMpIGRlY2xhcmVkLCAxIGluIHRoZSBrZXJuZWwKMjAyNi0wOS0wOVQwOToyMzoyM1ogIHBsYW46IC9kZXYvbnZtZTAgbnZtZS1jb250cm9sbGVyIC0+IG52bWUtc2FuaXRpemUtY3J5cHRvIChwdXJnZSkgLS0gQ29udHJvbGxlciByZXBvcnRzIFNBTklDQVAgY3J5cHRvIGVyYXNlLiBQcmVmZXJyZWQgbWV0aG9kLgoyMDI2LTA5LTA5VDA5OjIzOjIzWiAgcGxhbjogL2Rldi9zZGEgZGlyZWN0IC0+IG5vdC1hcHBsaWNhYmxlIChuL2EpIC0tIFZpcnR1YWwgZGlzayBwcmVzZW50ZWQgYnkgYSBSQUlEIGNvbnRyb2xsZXIuIFRoZSBwaHlzaWNhbCBkcml2ZXMgaW5zaWRlIGl0IGFyZSBpbnZlbnRvcmllZCBhbmQgc2FuaXRpc2VkIGluIHRoZWlyIG93biByaWdodC4KMjAyNi0wOS0wOVQwOToyMzoyM1ogIHBsYW46IC9kZXYvc2R6IGRpcmVjdCAtPiBub3QtYXBwbGljYWJsZSAobi9hKSAtLSBWaXJ0dWFsIGRpc2sgcHJlc2VudGVkIGJ5IGEgUkFJRCBjb250cm9sbGVyLiBUaGUgcGh5c2ljYWwgZHJpdmVzIGluc2lkZSBpdCBhcmUgaW52ZW50b3JpZWQgYW5kIHNhbml0aXNlZCBpbiB0aGVpciBvd24gcmlnaHQuCjIwMjYtMDktMDlUMDk6MjM6MjNaICBwbGFuOiAvZGV2L3NkYSBtZWdhcmFpZCwwIC0+IGF0YS1zYW5pdGl6ZS12aWEtamJvZCAocHVyZ2UpIC0tIFRoaXMgY29udHJvbGxlciBjYW5ub3QgaXNzdWUgYSBkcml2ZSBzYW5pdGlzZSAoU3VwcG9ydCBTYW5pdGl6ZSA9IE5vKSBhbmQgY2Fubm90IGRvIGFuIGluc3RhbnQgc2VjdXJlIGVyYXNlIChBbGxvdyBDdHJsIEVuY3J5cHRpb24gPSBubywgZHJpdmUgU2VjdXJlZCA9IE5vKS4gSXQgZG9lcyBzdXBwb3J0IEpCT0QsIHdoaWNoIHByZXNlbnRzIHRoZSBkcml2ZSBhcyBpdHMgb3duIFNDU0kgdGFyZ2V0IC0tIGFuZCB0aGUgZHJpdmUgcmVwb3J0cyBTYW5pdGl6ZSBTdXBwb3J0ID0gQ3J5cHRvRXJhc2UsIEJsb2NrRXJhc2UuIFRoZSBlcmFzZSBpcyB0aGVyZWZvcmUgYWRkcmVzc2VkIHRvIHRoZSBkcml2ZSBpdHNlbGYgaW5zaWRlIGEgSkJPRCB3aW5kb3csIGFuZCB0aGUgYXJyYXkgaXMgcmVidWlsdCBhZnRlcndhcmRzLgoyMDI2LTA5LTA5VDA5OjIzOjIzWiAgcGxhbjogL2Rldi9zZGEgbWVnYXJhaWQsMSAtPiBhdGEtc2FuaXRpemUtdmlhLWpib2QgKHB1cmdlKSAtLSBUaGlzIGNvbnRyb2xsZXIgY2Fubm90IGlzc3VlIGEgZHJpdmUgc2FuaXRpc2UgKFN1cHBvcnQgU2FuaXRpemUgPSBObykgYW5kIGNhbm5vdCBkbyBhbiBpbnN0YW50IHNlY3VyZSBlcmFzZSAoQWxsb3cgQ3RybCBFbmNyeXB0aW9uID0gbm8sIGRyaXZlIFNlY3VyZWQgPSBObykuIEl0IGRvZXMgc3VwcG9ydCBKQk9ELCB3aGljaCBwcmVzZW50cyB0aGUgZHJpdmUgYXMgaXRzIG93biBTQ1NJIHRhcmdldCAtLSBhbmQgdGhlIGRyaXZlIHJlcG9ydHMgU2FuaXRpemUgU3VwcG9ydCA9IENyeXB0b0VyYXNlLCBCbG9ja0VyYXNlLiBUaGUgZXJhc2UgaXMgdGhlcmVmb3JlIGFkZHJlc3NlZCB0byB0aGUgZHJpdmUgaXRzZWxmIGluc2lkZSBhIEpCT0Qgd2luZG93LCBhbmQgdGhlIGFycmF5IGlzIHJlYnVpbHQgYWZ0ZXJ3YXJkcy4KMjAyNi0wOS0wOVQwOToyMzoyM1ogIENPTkZJUk1FRDogZW50ZXJpbmcgc2FuaXRpc2UgbW9kZSBvbiBSOVMwTUQwMDAwQUIKMjAyNi0wOS0wOVQwOToyMzoyM1ogIFJBSUQgcmVjb25maWd1cmF0aW9uOiAyIGRyaXZlKHMpIG5lZWQgdG8gbGVhdmUgdGhlIHZpcnR1YWwgZGlzayB0byBiZSBwdXJnZWQKMjAyNi0wOS0wOVQwOToyMzoyM1ogICAgZGVsZXRpbmcgdmlydHVhbCBkaXNrIC9jMC92MjM5IChyZW1vdmVzIHRoZSBtYXBwaW5nIG9ubHk7IHRoZSBkYXRhIGlzIGVyYXNlZCBiZWxvdykKMjAyNi0wOS0wOVQwOToyMzoyM1ogICAgZHJpdmVzIGV4cG9zZWQgZm9yIGEgaG9zdC1pc3N1ZWQgZXJhc2UKMjAyNi0wOS0wOVQwOToyMzoyNFogIFNBTklUSVNFIC9kZXYvbnZtZTAgKG52bWUtY29udHJvbGxlcikgbWV0aG9kPW52bWUtc2FuaXRpemUtY3J5cHRvIGxldmVsPXB1cmdlCjIwMjYtMDktMDlUMDk6MjM6MjRaICAgIGNvbW1hbmQ6IG52bWUgc2FuaXRpemUgL2Rldi9udm1lMCAtLXNhbmFjdD00CjIwMjYtMDktMDlUMDk6MjM6MjRaICAgIC9kZXYvbnZtZTA6IFNTVEFUPTEgLS0gY29tcGxldGVkIHN1Y2Nlc3NmdWxseQoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgICByZXN1bHQ6IHN1Y2Nlc3MgKDBzKQoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgU0FOSVRJU0UgL2Rldi9zZGEgKG1lZ2FyYWlkLDApIG1ldGhvZD1hdGEtc2FuaXRpemUtdmlhLWpib2QgbGV2ZWw9cHVyZ2UKMjAyNi0wOS0wOVQwOToyMzoyNFogICAgY29tbWFuZDogaGRwYXJtIC0teWVzLWkta25vdy13aGF0LWktYW0tZG9pbmcgLS1zYW5pdGl6ZS1jcnlwdG8tc2NyYW1ibGUgPHJlc29sdmVkIGJ5IHNlcmlhbCBpbiBKQk9EPgoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgICBTNjY0TkUwUjEyMzQ1NiBleHBvc2VkIGFzIC9kZXYvc2RqMAoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgICBjb21tYW5kOiBoZHBhcm0gLS15ZXMtaS1rbm93LXdoYXQtaS1hbS1kb2luZyAtLXNhbml0aXplLWNyeXB0by1zY3JhbWJsZSAvZGV2L3NkajAKMjAyNi0wOS0wOVQwOToyMzoyNFogICAgL2Rldi9zZGowOiBzYW5pdGlzZSBjb21wbGV0ZWQgd2l0aG91dCBlcnJvcgoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgICByZXN1bHQ6IHN1Y2Nlc3MgKDBzKQoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgU0FOSVRJU0UgL2Rldi9zZGEgKG1lZ2FyYWlkLDEpIG1ldGhvZD1hdGEtc2FuaXRpemUtdmlhLWpib2QgbGV2ZWw9cHVyZ2UKMjAyNi0wOS0wOVQwOToyMzoyNFogICAgY29tbWFuZDogaGRwYXJtIC0teWVzLWkta25vdy13aGF0LWktYW0tZG9pbmcgLS1zYW5pdGl6ZS1jcnlwdG8tc2NyYW1ibGUgPHJlc29sdmVkIGJ5IHNlcmlhbCBpbiBKQk9EPgoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgICBTNjY0TkUwUjEyMzQ1NyBleHBvc2VkIGFzIC9kZXYvc2RqMQoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgICBjb21tYW5kOiBoZHBhcm0gLS15ZXMtaS1rbm93LXdoYXQtaS1hbS1kb2luZyAtLXNhbml0aXplLWNyeXB0by1zY3JhbWJsZSAvZGV2L3NkajEKMjAyNi0wOS0wOVQwOToyMzoyNFogICAgL2Rldi9zZGoxOiBzYW5pdGlzZSBjb21wbGV0ZWQgd2l0aG91dCBlcnJvcgoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgICByZXN1bHQ6IHN1Y2Nlc3MgKDBzKQoyMDI2LTA5LTA5VDA5OjIzOjI0WiAgICByZWNyZWF0aW5nIHRoZSBhcnJheTogL2hvbWUvbHVpcy9OZXhnZW4tTUFBUy12YWxpZGF0aW9uL3Rlc3RzL3N0dWJzLXJhaWRjbGkvc3RvcmNsaTY0IC9jMCBhZGQgdmQgdHlwZT1yMSBkcml2ZXM9MjUyOjAsMjUyOjEKMjAyNi0wOS0wOVQwOToyMzoyNFogICAgYXJyYXkgcmVjcmVhdGVkLCBlbXB0eQo="
+}

@@ -1,0 +1,9 @@
+#!/bin/bash
+# Overwrite fallback -- a clear, never a purge.
+#   STUB_BLKDISCARD  fail | unsupported  (default success)
+SD="${STUB_STATE_DIR:-/tmp}"
+echo "$(date -u +%FT%TZ) blkdiscard $*" >> ${SD}/stub-destructive-calls
+case "${STUB_BLKDISCARD:-ok}" in
+    fail|unsupported) echo "blkdiscard: operation not supported" >&2; exit 1 ;;
+    *) exit 0 ;;
+esac

@@ -1,0 +1,191 @@
+{
+ "report_metadata": {
+  "script_version": "1.0.0",
+  "script_name": "hw-inventory",
+  "generated_at": "2026-09-07T13:18:53Z",
+  "duration_seconds": 23
+ },
+ "verdict": {
+  "overall": "PASS",
+  "issues": [
+   {
+    "issue": "No chassis power-on-hours sensor exposed over IPMI",
+    "severity": "info",
+    "details": "Per-drive power_on_hours is collected instead"
+   },
+   {
+    "issue": "PSU count disagrees between SMBIOS and the BMC",
+    "severity": "info",
+    "details": "SMBIOS records 2, the BMC sees 4 bay(s); serials exist only for the SMBIOS entries"
+   }
+  ]
+ },
+ "identity": {
+  "system_manufacturer": "ASUSTeK COMPUTER INC.",
+  "system_product": "ESC8000A-E12P",
+  "system_serial": "R9S0MD0000AA",
+  "system_version": "SKU4A",
+  "baseboard_product": "K14PG-D24 Series",
+  "baseboard_serial": "230520680900056",
+  "chassis_serial": "I023291430",
+  "chassis_asset_tag": null,
+  "baseboard_asset_tag": null
+ },
+ "bmc": {
+  "available": true,
+  "firmware_revision": "1.01",
+  "aux_firmware_revision": null,
+  "device_id": "32",
+  "manufacturer": "Unknown (0xA3F)",
+  "product_name": "Unknown (0x1193)",
+  "ipmi_version": "2.0",
+  "access": "in-band KCS (/dev/ipmi0), no credentials"
+ },
+ "fru": {
+  "available": true,
+  "board_mfg_date": "Mon Oct  2 06:11:00 2023",
+  "board_serial": "230520680900056",
+  "board_part_number": "60SB0B40-SB0D04",
+  "board_product": "K14PG-D24 Series",
+  "chassis_serial": "I023291430",
+  "chassis_part_number": "13SF02I0AM1221",
+  "product_serial": "R9S0MD0000AA",
+  "product_name": "ESC8000A-E12P",
+  "product_version": "SKU4A"
+ },
+ "power_on": {
+  "hours": null,
+  "source": null,
+  "sel_first_entry": "04/10/2024",
+  "sel_clock_now": "09/07/2026 13:18:47",
+  "sel_span_days": 880,
+  "note": "No chassis power-on-hours sensor is exposed by this BMC over IPMI (confirmed on the ASUS ASMB11: sdr elist full carries temperature, voltage, fan and PSU wattage only). Use the per-drive power_on_hours in .drives[] as the evidenced figure. sel_span_days is elapsed time since the first logged event, not powered hours.",
+  "drive_hours_max": 23890,
+  "drive_hours_min": 23890,
+  "drives_reporting_hours": 3,
+  "drive_hours_spread": 0
+ },
+ "psus": [
+  {
+   "location": "PSU1",
+   "name": "G1236-3000WNA",
+   "manufacturer": "GOSPOWER",
+   "serial_number": "G1236302NA000000006",
+   "model": "G1236-3000WNA",
+   "revision": "R02",
+   "max_power_watts": "3000 W",
+   "status": "Present, OK",
+   "present": true
+  },
+  {
+   "location": "PSU2",
+   "name": "G1236-3000WNA",
+   "manufacturer": "GOSPOWER",
+   "serial_number": "G1236302NA000000005",
+   "model": "G1236-3000WNA",
+   "revision": "R02",
+   "max_power_watts": "3000 W",
+   "status": "Present, OK",
+   "present": true
+  }
+ ],
+ "psu_sensors": {
+  "bays": 4,
+  "labels": [
+   "PSU1",
+   "PSU2",
+   "PSU3",
+   "PSU4"
+  ]
+ },
+ "drives": [
+  {
+   "device": "/dev/sda",
+   "reached_via": "direct",
+   "smartctl_d": null,
+   "model": "BROADCOM MR9560-16i",
+   "vendor": null,
+   "serial_number": "00000000000000000000000000000001",
+   "firmware": null,
+   "capacity_bytes": 479559942144,
+   "rotation_rate": 0,
+   "protocol": "SCSI",
+   "power_on_hours": null,
+   "power_cycles": null,
+   "percentage_used": null,
+   "smart_passed": null
+  },
+  {
+   "device": "/dev/nvme0n1",
+   "reached_via": "direct",
+   "smartctl_d": null,
+   "model": "SAMSUNG MZQL27T6HBLA-00A07",
+   "vendor": null,
+   "serial_number": "S6CKNE0R000002",
+   "firmware": "GDC5302Q",
+   "capacity_bytes": 7681501126656,
+   "rotation_rate": null,
+   "protocol": "NVMe",
+   "power_on_hours": 23890,
+   "power_cycles": 71,
+   "percentage_used": 1,
+   "smart_passed": true
+  },
+  {
+   "device": "/dev/sda",
+   "reached_via": "megaraid",
+   "smartctl_d": "megaraid,0",
+   "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+   "vendor": null,
+   "serial_number": "S664NN0W000003",
+   "firmware": "JXTC404Q",
+   "capacity_bytes": 480103981056,
+   "rotation_rate": 0,
+   "protocol": "ATA",
+   "power_on_hours": 23890,
+   "power_cycles": 69,
+   "percentage_used": null,
+   "smart_passed": true
+  },
+  {
+   "device": "/dev/sda",
+   "reached_via": "megaraid",
+   "smartctl_d": "megaraid,1",
+   "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+   "vendor": null,
+   "serial_number": "S664NE0T000004",
+   "firmware": "JXTC304Q",
+   "capacity_bytes": 480103981056,
+   "rotation_rate": 0,
+   "protocol": "ATA",
+   "power_on_hours": 23890,
+   "power_cycles": 65,
+   "percentage_used": null,
+   "smart_passed": true
+  }
+ ],
+ "add_in_cards": [
+  {
+   "class": "Ethernet controller",
+   "description": "Mellanox Technologies MT2910 Family [ConnectX-7]",
+   "part_number": "MCX755106AS-HEAT",
+   "serial_number": "MT2329XZ03KP",
+   "vpd_product_name": "NVIDIA ConnectX-7 Adapter Card, 200GbE / NDR200, Dual-port QSFP112, PCIe 5.0x16 with x16 PCIe extension option, Crypto Disabled, Secure Boot Enabled",
+   "pci_functions": [
+    "e5:00.0",
+    "e5:00.1"
+   ]
+  },
+  {
+   "class": "Ethernet controller",
+   "description": "Mellanox Technologies MT2910 Family [ConnectX-7]",
+   "part_number": "MCX755106AS-HEAT",
+   "serial_number": "MT2329XZ0RE2",
+   "vpd_product_name": "NVIDIA ConnectX-7 Adapter Card, 200GbE / NDR200, Dual-port QSFP112, PCIe 5.0x16 with x16 PCIe extension option, Crypto Disabled, Secure Boot Enabled",
+   "pci_functions": [
+    "09:00.0",
+    "09:00.1"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,126 @@
+#!/bin/bash
+# Block-device inventory for 95-nexgen-storage-sanitize.
+#
+# Models the real 183 node: one NVMe namespace, one MegaRAID volume whose
+# members lsblk cannot see, and optionally a direct-attached SATA SSD.
+#
+#   STUB_NVME_CTRLS      namespaces to present, one per controller (default 1)
+#   STUB_DIRECT_SATA     1 adds /dev/sdb as a directly attached SATA SSD
+#   STUB_MOUNTED_TARGET  device name to give a mountpoint (e.g. nvme0n1)
+#   STUB_NS_MISMATCH     1 keeps nvme0n2 OUT of lsblk while nvme list declares it
+#   STUB_NO_MOUNTPOINTS  1 rejects the MOUNTPOINTS column, as pre-2.37 util-linux does
+#   STUB_SWAP            1 puts a swap signature on the RAID volume, as a host
+#                        that swapped to its OS disks would have
+#   STUB_VIRTUAL_MEDIA   0 removes the BMC's emulated USB disk (default: present,
+#                        because it is present on the real machines)
+#   STUB_VM_ATTACHED     1 gives that emulated disk a non-zero size, modelling an
+#                        image mounted over Redfish
+#   STUB_NO_SERIAL       1 blanks the SATA drive's serial here AND in smartctl,
+#                        so no source has one -- a section 7 stop condition
+SD="${STUB_STATE_DIR:-/tmp}"
+CTRLS="${STUB_NVME_CTRLS:-1}"
+
+args="$*"
+[[ "$STUB_NO_MOUNTPOINTS" == "1" && "$args" == *MOUNTPOINTS* ]] && {
+    echo "lsblk: unknown column: MOUNTPOINTS" >&2; exit 1; }
+
+mnt_for() { [[ "$1" == "${STUB_MOUNTED_TARGET:-}" ]] && echo "/mnt/data" || echo ""; }
+
+# NAME,SERIAL -- how the probe finds which device a serial is exposed as.
+if [[ "$args" == *NAME,SERIAL* ]]; then
+    echo "sda 00e1b4e0f1a2b3c4"
+    echo "nvme0n1 S6CKNE0R000001"
+    if [[ -f ${SD}/stub-raid-jbod ]]; then
+        echo "sdj0 S664NE0R123456"
+        echo "sdj1 S664NE0R123457"
+    fi
+    exit 0
+fi
+
+# PKNAME / KNAME lookups, used to resolve a root filesystem back to its disk.
+if [[ "$args" == *PKNAME* || "$args" == *KNAME* ]]; then
+    for a in "$@"; do [[ "$a" == /dev/* ]] && dev="$a"; done
+    base=$(basename "${dev:-}")
+    case "$base" in
+        nvme0n1p*) echo "nvme0n1" ;;
+        nvme*n*)   echo "$base" ;;
+        sd[a-z][0-9]*) echo "${base%%[0-9]*}" ;;
+        sd[a-z])   echo "$base" ;;
+        *)         exit 1 ;;
+    esac
+    exit 0
+fi
+
+# FSTYPE of a single device -- the residual-signature check after an erase.
+# Narrowed to the -no form on purpose: FSTYPE is also one of the columns in the
+# full JSON inventory, and matching on the column name alone hijacked it.
+if [[ "$args" == *FSTYPE* && "$args" != *-J* && "$args" == *-no* ]]; then
+    [[ -f ${SD}/stub-destructive-calls ]] && exit 0   # erased: no signature left
+    echo "ext4"
+    exit 0
+fi
+
+emit_json() {
+    printf '{\n   "blockdevices": [\n'
+    first=1
+    for i in $(seq 0 $(( CTRLS - 1 ))); do
+        [[ $first -eq 0 ]] && printf ',\n'; first=0
+        m=$(mnt_for "nvme${i}n1")
+        printf '      {"name":"nvme%dn1","path":"/dev/nvme%dn1","type":"disk","size":7681501126656,' "$i" "$i"
+        printf '"model":"SAMSUNG MZQL27T6HBLA-00A07","serial":"S6CKNE0R00000%d","wwn":"eui.36345840000000%02d",' "$(( i + 1 ))" "$(( i + 1 ))"
+        printf '"tran":"nvme","rota":false,"hotplug":false,"mountpoints":[%s]}' \
+               "$( [[ -n "$m" ]] && printf '"%s"' "$m" || printf 'null' )"
+    done
+    # The MegaRAID volume. Its members are invisible here by design -- that is
+    # the whole reason smartctl -d megaraid,N exists.
+    [[ $first -eq 0 ]] && printf ',\n'; first=0
+    printf '      {"name":"sda","path":"/dev/sda","type":"disk","size":479559942144,'
+    printf '"model":"MR9560-16i","serial":"00e1b4e0f1a2b3c4","wwn":"0x600605b0",'
+    printf '"tran":"sas","rota":false,"hotplug":false,"fstype":null,"mountpoints":[null],'
+    printf '"children":[{"name":"sda1","fstype":"vfat","mountpoints":[null]},'
+    printf '{"name":"sda2","fstype":"%s","mountpoints":[null]}]}' \
+           "$( [[ "$STUB_SWAP" == "1" ]] && printf 'swap' || printf 'ext4' )"
+    # The ASMB11 emulates a USB disk and a USB CDROM whether or not anything is
+    # attached. Sizes are 0 unless an image is mounted, and the serials are
+    # sequential dummies.
+    if [[ "${STUB_VIRTUAL_MEDIA:-1}" == "1" ]]; then
+        vmsize=0; [[ "$STUB_VM_ATTACHED" == "1" ]] && vmsize=1073741824
+        printf ',\n      {"name":"sdz","path":"/dev/sdz","type":"disk","size":%s,' "$vmsize"
+        printf '"model":"Virtual HDisk0","serial":"AAAABBBBCCCC3","wwn":null,'
+        printf '"tran":"usb","rota":true,"hotplug":true,"mountpoints":[null]}'
+    fi
+    # Once the controller is in JBOD the members are real block devices with
+    # their own serials -- which is the whole point of the probe.
+    if [[ -f ${SD}/stub-raid-jbod ]]; then
+        for i in 0 1; do
+            printf ',\n      {"name":"sdj%d","path":"/dev/sdj%d","type":"disk","size":480103981056,' "$i" "$i"
+            printf '"model":"SAMSUNG MZ7L3480HCHQ-00A07","serial":"S664NE0R12345%d","wwn":null,' "$(( i + 6 ))"
+            printf '"tran":"sata","rota":false,"hotplug":false,"fstype":null,"mountpoints":[null]}'
+        done
+    fi
+    if [[ "$STUB_DIRECT_SATA" == "1" ]]; then
+        m=$(mnt_for sdb)
+        printf ',\n      {"name":"sdb","path":"/dev/sdb","type":"disk","size":480103981056,'
+        printf '"model":"SAMSUNG MZ7L3480HCHQ-00A07","serial":%s,"wwn":"0x5002538e",' \
+               "$( [[ "$STUB_NO_SERIAL" == "1" ]] && printf 'null' || printf '"S664NE0R900001"' )"
+        printf '"tran":"sata","rota":false,"hotplug":false,"mountpoints":[%s]}' \
+               "$( [[ -n "$m" ]] && printf '"%s"' "$m" || printf 'null' )"
+    fi
+    printf '\n   ]\n}\n'
+}
+
+if [[ "$args" == *-J* ]]; then emit_json; exit 0; fi
+
+# Plain text, kept as raw evidence in the report.
+printf 'NAME        PATH                TYPE  SIZE MODEL                      SERIAL          WWN                  TRAN  ROTA HOTPLUG MOUNTPOINTS\n'
+for i in $(seq 0 $(( CTRLS - 1 ))); do
+    printf 'nvme%dn1     /dev/nvme%dn1        disk  7.0T SAMSUNG MZQL27T6HBLA-00A07 S6CKNE0R00000%d eui.3634584000000001 nvme     0       0 %s\n' \
+           "$i" "$i" "$(( i + 1 ))" "$(mnt_for "nvme${i}n1")"
+done
+printf 'sda         /dev/sda            disk  447G MR9560-16i                 00e1b4e0f1a2b3c4 0x600605b0           sas      0       0\n'
+[[ "${STUB_VIRTUAL_MEDIA:-1}" == "1" ]] && \
+printf 'sdz         /dev/sdz            disk    0B Virtual HDisk0             AAAABBBBCCCC3                        usb       1       1\n'
+[[ "$STUB_DIRECT_SATA" == "1" ]] && \
+printf 'sdb         /dev/sdb            disk  447G SAMSUNG MZ7L3480HCHQ-00A07 %-15s 0x5002538e           sata     0       0 %s\n' \
+        "$( [[ "$STUB_NO_SERIAL" == "1" ]] && printf '' || printf 'S664NE0R900001' )" "$(mnt_for sdb)"
+exit 0

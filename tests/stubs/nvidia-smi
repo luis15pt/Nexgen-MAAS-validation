@@ -23,12 +23,18 @@ fi
 # bridges reports. Unset STUB_TOPO_FAIL to make topo unavailable entirely.
 if [[ "$args" == *"topo"* && "$args" == *-m* ]]; then
   [[ -n "$STUB_TOPO_FAIL" ]] && exit 1
+  # STUB_NVLINK=bridges models what an H100 PCIe host with 4 x 2-way bridges
+  # actually reports: NV12 between adjacent pairs only, PCIe classes elsewhere.
+  # STUB_NVLINK=1 keeps the fully-meshed NV18 shape of an SXM baseboard.
   peer="SYS"; [[ -n "$STUB_NVLINK" ]] && peer="NV18"
   printf '\t'; for ((i=0;i<N;i++)); do printf 'GPU%d\t' "$i"; done; printf 'CPU Affinity\n'
   for ((i=0;i<N;i++)); do
     printf 'GPU%d\t' "$i"
     for ((j=0;j<N;j++)); do
-      if (( i == j )); then printf ' X \t'; else printf '%s\t' "$peer"; fi
+      if (( i == j )); then printf ' X \t'
+      elif [[ "$STUB_NVLINK" == "bridges" ]]; then
+        if (( (i/2) == (j/2) )); then printf 'NV12\t'; else printf 'NODE\t'; fi
+      else printf '%s\t' "$peer"; fi
     done
     printf '0-63\n'
   done

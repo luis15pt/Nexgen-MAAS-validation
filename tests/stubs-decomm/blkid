@@ -1,0 +1,7 @@
+#!/bin/bash
+# Residual filesystem signatures. Once anything has been erased in this run the
+# probe comes back empty, which is what a sanitised namespace looks like.
+SD="${STUB_STATE_DIR:-/tmp}"
+[[ -f ${SD}/stub-destructive-calls ]] && exit 2
+echo "ext4"
+exit 0

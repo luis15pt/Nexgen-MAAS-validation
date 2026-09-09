@@ -1,0 +1,32 @@
+#!/bin/bash
+# Chassis sensors for the burn-in sampler. STUB_SLOW_FAN=<n> drops GPU_FAN<n>
+# to a fraction of its peers, which is the "one fan is slow, it is a service
+# issue not three bad GPUs" case the sampler exists to catch.
+# STUB_INLET sets inlet air temperature (Schedule 2 allows 10-35 C).
+# A BMC that is present but not answering -- the realistic failure, and the
+# one that must not take a 1-hour load run down with it.
+[[ -n "$STUB_IPMI_FAIL" ]] && exit 1
+if [[ "$1" == "sdr" ]]; then
+  inlet="${STUB_INLET:-27}"
+  # Real EXAMPLE-NODE-02 readings: the GPU bank runs ~9880 and the system bank
+  # ~8300. They are different fans on different duty curves, so a whole-chassis
+  # spread is ~21% on a perfectly healthy machine -- which is exactly why the
+  # metric groups by bank.
+  for i in 1 2 3 4 5; do
+    rpm=9880
+    [[ "$i" == "${STUB_SLOW_FAN:-}" ]] && rpm="${STUB_SLOW_RPM:-3200}"
+    [[ "$i" == "${STUB_DEAD_FAN:-}" ]] && rpm=0
+    printf 'GPU_FAN%d         | %02Xh | ok  | 29.0 | %d RPM\n' "$i" $((0x93+i)) "$rpm"
+  done
+  for i in 1 2 3 4 5 6; do
+    printf 'SYS_FAN%d         | %02Xh | ok  | 29.0 | %d RPM\n' "$i" $((0x99+i)) 8400
+  done
+  printf 'Inlet Temp       | 4Bh | ok  | 55.0 | %s degrees C\n' "$inlet"
+  printf 'CPU1 Temperature | 01h | ok  |  3.0 | 53 degrees C\n'
+  printf 'TR2 Temperature  | 06h | ok  | 49.0 | 47 degrees C\n'
+  for i in 1 2 3 4; do
+    printf 'PSU%d Power In    | %02Xh | ok  | 10.0 | 620 Watts\n' "$i" $((0xDF+i))
+  done
+  exit 0
+fi
+exit 1

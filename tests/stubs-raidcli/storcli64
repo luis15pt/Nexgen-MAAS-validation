@@ -1,0 +1,172 @@
+#!/bin/bash
+# Broadcom storcli, which is NOT in the Ubuntu archive and is never fetched by
+# the script. This stub exists only to test the path taken when an operator has
+# staged one, so it lives in its own directory that is prepended on purpose.
+#
+# `show all` replays the real shape an MR9560-16i returns: the slot repeated in a
+# header per section, with the fields we care about as "Key = Value" beneath it.
+#
+#   STUB_RAIDCLI_SLOT   1 (default) resolves serials to a slot; 0 resolves none
+#   STUB_RAIDCLI_SED    Yes (default) / No -- SED Capable per drive
+#   STUB_RAIDCLI_SAN    sanitize support string; "" for a drive reporting none
+#   STUB_RAIDCLI_VD     virtual-disk id (default 239, as on the real machine)
+#   STUB_RAIDCLI_ERASE  fail to make an erase or sanitize fail
+#   STUB_RAIDCLI_TICKS  sanitize progress polls before 100% (default 1)
+#   STUB_RAIDCLI_NOPCT  1 reports no percentage, only the Sntze drive state,
+#                       which is the case the parser must not read as success
+SD="${STUB_STATE_DIR:-/tmp}"
+[[ "$1" == "-v" ]] && {
+    echo "      StorCli SAS Customization Utility Ver 007.3703.0000.0000 Jan 16, 2026"
+    exit 0
+}
+
+# State that survives within a run: -vd-deleted marks the volume gone, and
+# -san<slot> counts sanitize polls. Assigned up here because the per-slot branch
+# below needs it.
+S=${SD}/stub-raid
+
+SED="${STUB_RAIDCLI_SED:-Yes}"
+SAN="${STUB_RAIDCLI_SAN-CryptoErase, BlockErase}"
+
+if [[ "$*" == *"/eall/sall show all"* ]]; then
+    # Two members, matching the serials the smartctl stub reports through the
+    # megaraid passthrough, so a survey record can be tied to a media record.
+    i=0
+    for sn in S664NE0R123456 S664NE0R123457; do
+        [[ "${STUB_RAIDCLI_SLOT:-1}" == "1" ]] || sn="SOMETHINGELSE$i"
+        cat <<X
+Drive /c0/e252/s$i :
+================
+EID:Slt DID State DG       Size Intf Med SED PI SeSz Model                      Sp Type
+252:$i     $((9+i))  Onln   0 446.625 GB SATA SSD $SED  N  512B SAMSUNG MZ7L3480HCHQ-00A07 U  -
+
+Drive /c0/e252/s$i State :
+SN = $sn
+SED Capable = $SED
+SED Enabled = ${STUB_RAIDCLI_SEDEN:-No}
+Secured = ${STUB_RAIDCLI_SECURED:-No}
+Cryptographic Erase Capable = $SED
+Firmware Revision = JXTC404Q
+Sanitize Support = $SAN
+X
+        i=$(( i + 1 ))
+    done
+    exit 0
+fi
+
+# A per-slot `show` -- the drive-state read the sanitize poller uses. Matched
+# plainly: a quoted segment inside a [[ =~ ]] pattern is too easy to get wrong.
+if [[ "$*" == /c0/e*/s*" show" ]]; then
+    slot=$(printf '%s' "$*" | grep -oE '/c0/e[0-9]+/s[0-9]+' | head -1 | tr / _)
+    f="$S-san$slot"
+    st="Onln"; [[ -f "$S-vd-deleted" ]] && st="UGood"
+    if [[ -f "$f" ]] && (( $(cat "$f") <= ${STUB_RAIDCLI_TICKS:-1} )); then st="Sntze"; fi
+    echo "EID:Slt DID State DG       Size Intf Med SED PI SeSz Model                      Sp Type"
+    echo "252:0     1 $st   - 446.625 GB SATA SSD Yes N  512B SAMSUNG MZ7L3480HCHQ-00A07 U  -"
+    exit 0
+fi
+
+if [[ "$*" == *"/eall/sall show"* ]]; then
+    echo "EID:Slt DID State DG       Size Intf Med SED PI SeSz Model                      Sp Type"
+    echo "252:0     9  Onln   0 446.625 GB SATA SSD $SED  N  512B SAMSUNG MZ7L3480HCHQ-00A07 U  -"
+    echo "252:1    10  Onln   0 446.625 GB SATA SSD $SED  N  512B SAMSUNG MZ7L3480HCHQ-00A07 U  -"
+    exit 0
+fi
+
+if [[ "$*" == *"del force"* ]]; then
+    echo "$(date -u +%FT%TZ) storcli64 $*" >> ${SD}/stub-destructive-calls
+    touch "$S-vd-deleted"
+    echo "Status = Success"; echo "Description = Delete VD Succeeded"
+    exit 0
+fi
+
+if [[ "$*" == *"set good force"* ]]; then
+    rm -f "$S-jbod"; echo "Status = Success"; exit 0
+fi
+
+# JBOD is what exposes the members to the host. STUB_RAIDCLI_JBOD_HIDES=1
+# models a controller that accepts the command but never presents the drives,
+# which is one of the two ways this route can be closed.
+if [[ "$*" == *"set jbod=on"* ]]; then
+    [[ "$STUB_RAIDCLI_JBOD_HIDES" == "1" ]] || touch "$S-jbod"
+    echo "Status = Success"; exit 0
+fi
+if [[ "$*" == *"set jbod=off"* ]]; then
+    rm -f "$S-jbod"; echo "Status = Success"; exit 0
+fi
+if [[ "$*" == *" set jbod"* ]]; then
+    [[ "$STUB_RAIDCLI_JBOD_HIDES" == "1" ]] || touch "$S-jbod"
+    echo "Status = Success"; exit 0
+fi
+
+if [[ "$*" == *"add vd"* ]]; then
+    echo "$(date -u +%FT%TZ) storcli64 $*" >> ${SD}/stub-destructive-calls
+    rm -f "$S-vd-deleted"
+    echo "Status = Success"; echo "Description = Add VD Succeeded"
+    exit 0
+fi
+
+if [[ "$*" == *"show sanitize"* ]]; then
+    if [[ "${STUB_RAIDCLI_CTLSAN:-yes}" != "yes" ]]; then
+        echo "Status = Failure"
+        echo "Description = Sanitize is not supported on this controller."
+        exit 1
+    fi
+    slot=$(printf '%s' "$*" | grep -oE '/c0/e[0-9]+/s[0-9]+' | head -1 | tr / _)
+    f="$S-san$slot"
+    [[ -f "$f" ]] || { echo "Sanitize is not in progress on this drive."; exit 0; }
+    n=$(cat "$f"); echo $(( n + 1 )) > "$f"
+    if (( n < ${STUB_RAIDCLI_TICKS:-1} )); then
+        [[ "$STUB_RAIDCLI_NOPCT" == "1" ]] && { echo "Sanitize in progress"; exit 0; }
+        echo "Sanitize Progress = 45 %"; exit 0
+    fi
+    [[ "$STUB_RAIDCLI_NOPCT" == "1" ]] && { echo "Sanitize is not in progress on this drive."; exit 0; }
+    echo "Sanitize Progress = 100 %"
+    exit 0
+fi
+
+if [[ "$*" == *"start sanitize"* ]]; then
+    echo "$(date -u +%FT%TZ) storcli64 $*" >> ${SD}/stub-destructive-calls
+    [[ "${STUB_RAIDCLI_ERASE:-ok}" == "fail" ]] && { echo "Status = Failure"; exit 1; }
+    slot=$(printf '%s' "$*" | grep -oE '/c0/e[0-9]+/s[0-9]+' | head -1 | tr / _)
+    echo 0 > "$S-san$slot"
+    echo "Status = Success"
+    exit 0
+fi
+
+if [[ "$*" == *"/vall show"* ]]; then
+    [[ -f "$S-vd-deleted" ]] && { echo "Status = Failure"; echo "Description = No VDs have been configured."; exit 1; }
+    # VD 239, not 0 -- an id observed on these nodes, because storcli's DG/VD
+    # column carries the target id and a volume configured through the UEFI
+    # utility does not start numbering at zero. Anything that hardcodes v0
+    # addresses the wrong volume, so the stub refuses to make that mistake look
+    # like it works.
+    echo "DG/VD TYPE  State Access Consist Cache Cac sCC       Size Name"
+    echo "0/${STUB_RAIDCLI_VD:-239}   RAID1 Optl  RW     Yes     RWTD  -   ON  446.625 GB RAID"
+    exit 0
+fi
+
+if [[ "$*" == *"show all"* ]]; then
+    echo "Product Name = MR9560-16i"
+    # STUB_RAIDCLI_CTLSAN=no models the real MR9560-16i, which reports
+    # "Sanitize is not supported on this controller" however the drives
+    # advertise themselves. omit removes the field entirely, as some firmware
+    # does, so the direct query is what answers.
+    case "${STUB_RAIDCLI_CTLSAN:-yes}" in
+        no)    echo "Support Sanitize = No" ;;
+        omit)  : ;;
+        *)     echo "Support Sanitize = Yes" ;;
+    esac
+    echo "Support JBOD = Yes"
+    echo "Support SecurityonJBOD = Yes"
+    echo "Allow Ctrl Encryption = ${STUB_RAIDCLI_CTLENC:-No}"
+    exit 0
+fi
+
+if [[ "$*" == *"start sanitize"* || "$*" == *"secureerase"* || "$*" == *"start erase"* ]]; then
+    echo "$(date -u +%FT%TZ) storcli64 $*" >> ${SD}/stub-destructive-calls
+    [[ "${STUB_RAIDCLI_ERASE:-ok}" == "fail" ]] && { echo "Status = Failure"; exit 1; }
+    echo "Status = Success"
+    exit 0
+fi
+exit 1

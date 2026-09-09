@@ -19,7 +19,8 @@ import sys
 from pathlib import Path
 
 TARGET = (3, 8)
-FILES = ["reporting/device_certificate.py"]
+FILES = ["reporting/device_certificate.py",
+         "reporting/sanitisation_certificate.py"]
 
 # name -> (version, note). Methods here are looked up as attributes, so a
 # syntax check cannot see them; they fail only when the line executes.

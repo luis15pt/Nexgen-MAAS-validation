@@ -24,8 +24,14 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # by editing this file prior to upload. Defaults marked CHANGEME must be
 # replaced for the script to be useful.
 ###############################################################################
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 WORK_DIR="/tmp/cabling-verify-$$"
+
+# Installed up front rather than assumed. This script sorts ahead of 90, which
+# is the only other script that installs jq, and the MAAS ephemeral image does
+# not ship it -- so relying on a later script left this one failing preflight
+# on every machine, every run.
+REQUIRED_PKGS="${REQUIRED_PKGS:-jq curl}"
 
 NETBOX_URL="${NETBOX_URL:-https://netbox.example.com}"
 NETBOX_TOKEN="${NETBOX_TOKEN:-CHANGEME}"
@@ -67,12 +73,23 @@ urlenc() { jq -rn --arg s "$1" '$s|@uri'; }
 emit_fatal() {
     local msg="$1"
     err "$msg"
-    jq -n --arg v "$SCRIPT_VERSION" --arg m "$msg" \
-        --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-        '{
-            report_metadata:{script_version:$v, script_name:"network-cabling-verify", generated_at:$ts},
-            verdict:{overall:"FAIL", issues:[{"issue":$m, "severity":"critical"}]}
-        }'
+    local ts
+    ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+    # Deliberately not routed through jq. The commonest fatal case is jq itself
+    # being absent, and a failure handler built on the missing tool dies with
+    # "command not found" and emits nothing at all -- leaving MAAS with a
+    # failure and no verdict to explain it. Hand-rolled JSON is uglier and
+    # always works; the message is escaped so a quote in it cannot break the
+    # document.
+    local esc="${msg//\\/\\\\}"
+    esc="${esc//\"/\\\"}"
+    esc="${esc//$'\n'/ }"
+    esc="${esc//$'\t'/ }"
+
+    printf '{"report_metadata":{"script_version":"%s","script_name":"network-cabling-verify","generated_at":"%s"},' \
+        "$SCRIPT_VERSION" "$ts"
+    printf '"verdict":{"overall":"FAIL","issues":[{"issue":"%s","severity":"critical"}]}}\n' "$esc"
     exit 1
 }
 
@@ -136,6 +153,13 @@ switches_match() {
 ###############################################################################
 preflight() {
     log "=== Preflight checks ==="
+
+    log "Installing required tools: $REQUIRED_PKGS"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq >&2 2>/dev/null || warn "apt-get update failed -- trying the install anyway"
+    # shellcheck disable=SC2086
+    apt-get install -y -qq $REQUIRED_PKGS >&2 2>/dev/null \
+        || warn "apt-get install returned non-zero -- checking each tool individually"
 
     local missing=""
     command -v jq        &>/dev/null || missing+=" jq"

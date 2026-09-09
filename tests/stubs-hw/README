@@ -1,0 +1,16 @@
+Stubs for 89-nexgen-hw-inventory only.
+
+Kept apart from ../stubs because 89 needs an lspci that emits PCI VPD and a
+dmidecode that answers -t 39, and both names are already stubbed next door for
+the GPU scripts. run-all.sh prepends this directory for 89's run alone, so
+nothing here can perturb the other scripts' tests.
+
+ipmitool  mc info always answers; STUB_POH_SENSOR=yes adds a power-on-hours
+          sensor to `sdr elist full`, which most BMCs do not expose.
+dmidecode -t 39 returns two populated PSU bays and one empty one, with NO
+          trailing blank line after the last block -- that is how real
+          dmidecode ends, and it is what caught the dropped-last-PSU bug.
+smartctl  answers for a MegaRAID volume, an NVMe, and megaraid,0 / megaraid,1
+          members; every other device id fails, as an empty slot does.
+lspci     -vv carries VPD with [PN]/[SN] on a ConnectX-7 and a MegaRAID HBA,
+          and one device with no VPD at all.

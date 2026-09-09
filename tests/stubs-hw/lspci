@@ -1,0 +1,41 @@
+#!/bin/bash
+# -vv replays the real VPD shape: a dual-port ConnectX-7 answering on both
+# functions with ONE board serial, plus a MegaRAID and an X710 that publish
+# no VPD at all. Any other invocation keeps the GPU listing the other stubs use.
+if [[ "$*" != *"-vv"* ]]; then
+  N="${STUB_GPU_COUNT:-8}"
+  for ((i=0;i<N;i++)); do printf '0000:%02x:00.0 0302: 10de:2331 (rev a1)\n' $((0x1B+i)); done
+  exit 0
+fi
+cat <<'X'
+09:00.0 Ethernet controller: Mellanox Technologies MT2910 Family [ConnectX-7]
+	Subsystem: Mellanox Technologies MT2910 Family [ConnectX-7]
+	Capabilities: [48] Vital Product Data
+		Product Name: NVIDIA ConnectX-7 Adapter Card, 200GbE / NDR200, Dual-port QSFP112, PCIe 5.0x16
+		Read-only fields:
+			[PN] Part number: MCX755106AS-HEAT
+			[EC] Engineering changes: A7
+			[SN] Serial number: MT0000XZ0000
+			[RV] Reserved: checksum good, 1 byte(s) reserved
+		End
+	Kernel driver in use: mlx5_core
+09:00.1 Ethernet controller: Mellanox Technologies MT2910 Family [ConnectX-7]
+	Subsystem: Mellanox Technologies MT2910 Family [ConnectX-7]
+	Capabilities: [48] Vital Product Data
+		Product Name: NVIDIA ConnectX-7 Adapter Card, 200GbE / NDR200, Dual-port QSFP112, PCIe 5.0x16
+		Read-only fields:
+			[PN] Part number: MCX755106AS-HEAT
+			[EC] Engineering changes: A7
+			[SN] Serial number: MT0000XZ0000
+			[RV] Reserved: checksum good, 1 byte(s) reserved
+		End
+	Kernel driver in use: mlx5_core
+81:00.0 Ethernet controller: Intel Corporation Ethernet Controller X710 for 10GBASE-T (rev 02)
+	Subsystem: ASUSTeK Computer Inc. Ethernet Controller X710 for 10GBASE-T
+	Capabilities: [a0] Express (v2) Endpoint, MSI 00
+	Kernel driver in use: i40e
+c1:00.0 RAID bus controller: Broadcom / LSI MegaRAID 12GSAS/PCIe Secure SAS39xx
+	Subsystem: Broadcom / LSI MegaRAID 9560-16i
+	Capabilities: [148 v1] Power Budgeting <?>
+	Kernel driver in use: megaraid_sas
+X

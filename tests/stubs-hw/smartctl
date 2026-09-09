@@ -1,0 +1,39 @@
+#!/bin/bash
+# Replays real EXAMPLE-NODE-02 output. Note the two SATA SSDs behind the
+# MegaRAID report ATA-style power_on_time, while the NVMe reports its hours in
+# the health log -- and neither returns a usable smart_status through the
+# controller ("ATA return descriptor not supported by controller firmware"),
+# which makes smartctl exit non-zero. The script must still read them.
+args="$*"
+ata_member() { # $1 serial
+cat <<X
+{"model_name":"SAMSUNG MZ7L3480HCHQ-00A07","serial_number":"$1",
+ "firmware_version":"JXTC304Q","user_capacity":{"bytes":480103981056},
+ "rotation_rate":0,"device":{"protocol":"ATA"},
+ "power_on_time":{"hours":18317},"power_cycle_count":61}
+X
+exit 4   # bit 2: a SMART command failed -- the status read, not the identity
+}
+case "$args" in
+  *"megaraid,0"*) ata_member "S664NE0T000002" ;;
+  *"megaraid,1"*) ata_member "S664NE0T000001" ;;
+  *"megaraid,"*)  echo '{}'; exit 2 ;;
+  *nvme0n1*)
+cat <<'X'
+{"model_name":"SAMSUNG MZQL27T6HBLA-00A07","serial_number":"S6CKNE0R000001",
+ "firmware_version":"GDC5302Q","user_capacity":{"bytes":7681501126656},
+ "device":{"protocol":"NVMe"},
+ "nvme_smart_health_information_log":{"power_on_hours":18318,"power_cycles":57,
+   "percentage_used":0},
+ "smart_status":{"passed":true}}
+X
+    exit 0 ;;
+  */dev/sda*)
+cat <<'X'
+{"model_name":"MR9560-16i","serial_number":"00000000000000000000000000000002",
+ "firmware_version":"5.20","user_capacity":{"bytes":479559942144},
+ "device":{"protocol":"SCSI"},"smart_status":{"passed":true}}
+X
+    exit 0 ;;
+esac
+echo '{}'; exit 2

@@ -125,11 +125,17 @@ def _burn_throttle(**kw):
     return b
 
 
-CASES.append(("#6 hw thermal slowdown", "REJECT", 6,
+# Thermal throttling is REVIEW, not REJECT. A card that reduces clocks under
+# sustained load has not been shown to be faulty -- the DCGM diagnostic passes
+# and gpu-burn returns OK -- and throttling is not a Schedule 4 para 4 criterion.
+# It is recorded as a measured observation and disclosed under limb 1(g).
+# A power brake is asserted by power delivery rather than temperature, so it is
+# a different fault and stays REJECT.
+CASES.append(("#6 hw thermal slowdown", "REVIEW", 6,
               lambda: (INV["gpus"][0], STRESS, _burn_throttle(hw_thermal_slowdown=5)), None, None))
 CASES.append(("#6 hw power brake slowdown", "REJECT", 6,
               lambda: (INV["gpus"][0], STRESS, _burn_throttle(hw_power_brake_slowdown=1)), None, None))
-CASES.append(("#6 sw thermal slowdown", "REJECT", 6,
+CASES.append(("#6 sw thermal slowdown", "REVIEW", 6,
               lambda: (INV["gpus"][0], STRESS, _burn_throttle(sw_thermal_slowdown=2)), None, None))
 CASES.append(("#6 INVERSE: sw_power_cap only", "ACCEPT", 6,
               lambda: (INV["gpus"][0], STRESS, _burn_throttle(sw_power_cap=180)), None, None))
@@ -308,24 +314,28 @@ def main():
     def _crit_of(criteria, cid):
         return next(c for c in criteria if c["id"] == cid)
 
+    # DCGM 4.6.1 disables the nvbandwidth plugin for PCI device 0x2331 (H100
+    # PCIe) in its SKU table, so it skips on that part whether or not NVLink
+    # bridges are fitted. Keyed on device ID, with an allow-list: an
+    # unrecognised SKU keeps the warning rather than waiving evidence.
     stress_cases = [
-        # skipped tests,        nvlink_present, expected #5 status
-        (("nvbandwidth",),      False, "PASS",
-         "nvbandwidth skip excused when no NVLink is fitted"),
-        (("nvbandwidth",),      True,  "WARN",
-         "nvbandwidth skip NOT excused when NVLink is present"),
-        (("nvbandwidth",),      None,  "WARN",
-         "nvbandwidth skip NOT excused when NVLink is unknown"),
-        (("memory_bandwidth",), False, "WARN",
+        # skipped tests,        pci_device_id, expected #5 status
+        (("nvbandwidth",),      "0x2331", "PASS",
+         "H100 PCIe: nvbandwidth skip is by design"),
+        (("nvbandwidth",),      "0x2330", "WARN",
+         "H100 SXM5, where DCGM qualifies it: a skip is unexplained"),
+        (("nvbandwidth",),      None,     "WARN",
+         "unknown SKU: the skip is not excused"),
+        (("memory_bandwidth",), "0x2331", "WARN",
          "an unrelated skip is never excused"),
-        (("nvbandwidth", "memory_bandwidth"), False, "WARN",
+        (("nvbandwidth", "memory_bandwidth"), "0x2331", "WARN",
          "excusing nvbandwidth still reports the other skip"),
     ]
-    for skipped, nvlink, want, label in stress_cases:
+    for skipped, dev_id, want, label in stress_cases:
         rows = [{"test": t, "status": "Skip"} for t in skipped]
         rows += [{"test": "diagnostic", "status": "Pass"}, {"test": "pcie", "status": "Pass"}]
         got = _crit_of(dc._check_stress(0, _stress_skipping(*skipped), rows,
-                                       {"nvlink_present": nvlink}), "stress_present")["status"]
+                                       {"pci_device_id": dev_id}), "stress_present")["status"]
         ok = got == want
         if not ok:
             rc = 1

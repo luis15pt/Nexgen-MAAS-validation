@@ -1,0 +1,64 @@
+#!/bin/bash
+# Drive identity for 95-nexgen-storage-sanitize.
+#
+# The MegaRAID members answer with exit 4 while returning a perfectly good
+# identity: the controller cannot pass the SMART status read through. Treating
+# that exit code as failure would discard the only record of the drives being
+# sold, so the stub reproduces it deliberately.
+#
+#   STUB_MEGARAID_MEMBERS  members present behind the volume (default 2)
+#   STUB_NO_SERIAL         1 blanks the direct SATA drive's serial number
+[[ "$1" == "--version" ]] && { echo "smartctl 7.4 2023-08-01 r5530"; exit 0; }
+
+DFLAG=""; DEV=""
+prev=""
+for a in "$@"; do
+    [[ "$prev" == "-d" ]] && DFLAG="$a"
+    [[ "$a" == /dev/* ]] && DEV="$a"
+    prev="$a"
+done
+
+if [[ "$DFLAG" == megaraid,* ]]; then
+    did="${DFLAG#megaraid,}"
+    [[ "$did" -lt "${STUB_MEGARAID_MEMBERS:-2}" ]] || exit 1
+    printf '{"model_name":"SAMSUNG MZ7L3480HCHQ-00A07","scsi_vendor":"ATA",'
+    printf '"serial_number":"S664NE0R12345%d","firmware_version":"JXTC104Q",' "$(( did + 6 ))"
+    printf '"user_capacity":{"bytes":480103981056},"device":{"protocol":"ATA"},'
+    # IDENTIFY DEVICE word 128 traverses the megaraid passthrough, which is how
+    # the ATA Security feature set is knowable even though SANITIZE cannot be
+    # issued through the controller. STUB_NO_ATA_SECURITY=1 models a controller
+    # that does not pass it through, so the capability is unproven, not absent.
+    if [[ "$STUB_NO_ATA_SECURITY" != "1" ]]; then
+        printf '"ata_security":{"state":33,"string":"Disabled, NOT FROZEN [SEC1]",'
+        printf '"enabled":false,"frozen":false,"supported":true},'
+    fi
+    printf '"power_on_time":{"hours":18317},"power_cycle_count":61}\n'
+    # ATA return descriptor not supported by controller firmware.
+    exit 4
+fi
+
+case "$DEV" in
+    *sdj[0-9])
+        # A member exposed by JBOD: its own identity, no megaraid indirection.
+        i="${DEV##*sdj}"
+        printf '{"model_name":"SAMSUNG MZ7L3480HCHQ-00A07","scsi_vendor":"ATA",'
+        printf '"serial_number":"S664NE0R12345%d","firmware_version":"JXTC404Q",' "$(( i + 6 ))"
+        printf '"user_capacity":{"bytes":480103981056},"device":{"protocol":"ATA"},'
+        printf '"ata_security":{"state":33,"string":"Disabled, NOT FROZEN [SEC1]",'
+        printf '"enabled":false,"frozen":false,"supported":true},'
+        printf '"smart_status":{"passed":true}}\n'
+        exit 0 ;;
+    *sdb)
+        ser='"serial_number":"S664NE0R900001",'
+        [[ "$STUB_NO_SERIAL" == "1" ]] && ser=''
+        printf '{"model_name":"SAMSUNG MZ7L3480HCHQ-00A07","model_family":"Samsung based SSDs",'
+        printf '%s"firmware_version":"JXTC104Q","user_capacity":{"bytes":480103981056},' "$ser"
+        printf '"device":{"protocol":"ATA"},"rotation_rate":0,"smart_status":{"passed":true}}\n'
+        exit 0 ;;
+    *nvme0n1)
+        printf '{"model_name":"SAMSUNG MZQL27T6HBLA-00A07","serial_number":"S6CKNE0R000001",'
+        printf '"firmware_version":"GDC5302Q","user_capacity":{"bytes":7681501126656},'
+        printf '"device":{"protocol":"NVMe"},"smart_status":{"passed":true}}\n'
+        exit 0 ;;
+esac
+exit 1

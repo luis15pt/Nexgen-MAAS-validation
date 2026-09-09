@@ -1,0 +1,57 @@
+#!/bin/bash
+if [[ "$1" == "-t" && "$2" == "39" ]]; then
+printf '# dmidecode 3.3\n\n'
+N="${STUB_DMI_PSUS:-4}"
+for n in $(seq 1 "$N"); do
+  case $n in
+    1) ser=G1236302NA000000001 ;; 2) ser=G1236302NA000000002 ;;
+    3) ser=G1236302NA000000003 ;; 4) ser=G1236302NA000000004 ;;
+  esac
+  printf 'Handle 0x001%d, DMI type 39, 22 bytes\nSystem Power Supply\n' "$n"
+  printf '\tPower Unit Group: 1\n\tLocation: PSU%d\n\tName: G1236-3000WNA\n' "$n"
+  printf '\tManufacturer: GOSPOWER\n\tSerial Number: %s\n' "$ser"
+  printf '\tModel Part Number: G1236-3000WNA\n\tRevision: R02\n'
+  printf '\tMax Power Capacity: 3000 W\n\tStatus: Present, OK\n\tType: Switching\n'
+  [[ $n -lt $N ]] && printf '\n'
+done
+exit 0
+fi
+if [[ "$1" == "-t" && ( "$2" == "4" || "$2" == "processor" ) ]]; then
+  # Mirrors these ASUS boards: the BIOS leaves Serial Number as "Unknown".
+  # STUB_CPU_SERIAL=1 models a board that does populate it.
+  for n in 1 2; do
+    printf 'Processor Information
+	Socket Designation: CPU%d
+' "$n"
+    printf '	Manufacturer: Advanced Micro Devices, Inc.
+'
+    printf '	Version: AMD EPYC 9554 64-Core Processor
+'
+    if [[ -n "$STUB_CPU_SERIAL" ]]; then printf '	Serial Number: 9554-XYZ-%03d
+' "$n"
+    else printf '	Serial Number: Unknown
+'; fi
+    printf '	Asset Tag: To Be Filled By O.E.M.
+	Part Number: Not Specified
+'
+    printf '	Status: Populated, Enabled
+	Core Count: 64
+	Thread Count: 128
+'
+    [[ $n -lt 2 ]] && printf '
+'
+  done
+  exit 0
+fi
+case "$2" in
+  system-manufacturer)     echo "ASUSTeK COMPUTER INC." ;;
+  system-product-name)     echo "ESC8000A-E12P" ;;
+  system-serial-number)    echo "R9S0MD0000AB" ;;
+  system-version)          echo "SKU4A" ;;
+  baseboard-product-name)  echo "K14PG-D24 Series" ;;
+  baseboard-serial-number) echo "230520500000001" ;;
+  baseboard-asset-tag)     echo "To be filled by O.E.M." ;;
+  chassis-serial-number)   echo "I000000001" ;;
+  chassis-asset-tag)       echo "To be filled by O.E.M." ;;
+  *) exit 1 ;;
+esac

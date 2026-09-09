@@ -1,0 +1,4 @@
+#!/bin/bash
+# The tests run offline. Package installation is not what they are testing, and
+# a real apt-get here would take minutes and reach the network.
+exit 0

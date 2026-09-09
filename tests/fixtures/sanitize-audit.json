@@ -1,0 +1,454 @@
+{
+  "report_metadata": {
+    "script_version": "1.0.0",
+    "script_name": "storage-sanitize",
+    "generated_at": "2026-09-09T09:23:08Z",
+    "duration_seconds": 3,
+    "mode": "audit",
+    "runbook": "Remove Host for Sale - Secure Decommissioning Procedure, sections 6 to 10",
+    "standard": "NIST SP 800-88r1. Levels: Clear sanitises all user-addressable locations against simple non-invasive recovery; Purge renders recovery infeasible using state-of-the-art laboratory techniques. On flash media an overwrite reaches only user-addressable blocks, so it is a Clear -- over-provisioned capacity, retired blocks and unmapped FTL copies are outside it. Purge on flash is a firmware operation: ATA or NVMe SANITIZE, or a cryptographic erase.",
+    "required_level": "purge",
+    "accept_clear": false,
+    "data_hash_sha256": "5092d837f42fcc06a1c9a896f829cc298dc993e2fb9f23f5b51f6f7a94ff0f51"
+  },
+  "verdict": {
+    "overall": "FAIL",
+    "issues": [
+      {
+        "issue": "Media that cannot be purged from this environment",
+        "severity": "critical",
+        "details": "/dev/sda megaraid,0 S664NE0R123456; /dev/sda megaraid,1 S664NE0R123457 -- no purge-capable command can be addressed to these devices from here. That is usually a reachability problem rather than an unpurgeable drive: the remediation register lists the routes to a Purge and the controller survey says what is blocking them. The host is not cleared for release until every device reaches Purge."
+      },
+      {
+        "issue": "Audit mode -- no device was modified",
+        "severity": "info",
+        "details": "SANITIZE_CONFIRM does not read \"SANITIZE ALL MEDIA\", so this run inventoried the media and planned a method per device without issuing a destructive command. Edit the constant in the script and re-upload to sanitise."
+      }
+    ]
+  },
+  "environment": {
+    "root_source": "overlayroot",
+    "root_fstype": "overlay",
+    "root_backing_disk": null,
+    "is_ephemeral": true,
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "hostname": "EXAMPLE-NODE-01.example.lan",
+    "system_serial": "R9S0MD0000AB",
+    "nvme_cli_version": "nvme version 2.4",
+    "nvme_sanitize_log_json": true,
+    "smartctl_version": "smartctl 7.4 2023-08-01 r5530",
+    "raid_cli": null,
+    "maas_indicators": "cloud-init etc-cloud",
+    "attestation": "Running from an ephemeral root (overlay); no sanitised device holds the running system."
+  },
+  "inventory": {
+    "counts": {
+      "media_records": 5,
+      "physical_media": 3,
+      "nvme_controllers": 1,
+      "raid_members": 2,
+      "other_media": 0,
+      "purge_planned": 1,
+      "purged": 0,
+      "no_method": 2
+    },
+    "lsblk_b64": "TkFNRSAgICAgICAgUEFUSCAgICAgICAgICAgICAgICBUWVBFICBTSVpFIE1PREVMICAgICAgICAgICAgICAgICAgICAgIFNFUklBTCAgICAgICAgICBXV04gICAgICAgICAgICAgICAgICBUUkFOICBST1RBIEhPVFBMVUcgTU9VTlRQT0lOVFMKbnZtZTBuMSAgICAgL2Rldi9udm1lMG4xICAgICAgICBkaXNrICA3LjBUIFNBTVNVTkcgTVpRTDI3VDZIQkxBLTAwQTA3IFM2Q0tORTBSMDAwMDAxIGV1aS4zNjM0NTg0MDAwMDAwMDAxIG52bWUgICAgIDAgICAgICAgMCAKc2RhICAgICAgICAgL2Rldi9zZGEgICAgICAgICAgICBkaXNrICA0NDdHIE1SOTU2MC0xNmkgICAgICAgICAgICAgICAgIDAwZTFiNGUwZjFhMmIzYzQgMHg2MDA2MDViMCAgICAgICAgICAgc2FzICAgICAgMCAgICAgICAwCnNkeiAgICAgICAgIC9kZXYvc2R6ICAgICAgICAgICAgZGlzayAgICAwQiBWaXJ0dWFsIEhEaXNrMCAgICAgICAgICAgICBBQUFBQkJCQkNDQ0MzICAgICAgICAgICAgICAgICAgICAgICAgdXNiICAgICAgIDEgICAgICAgMQo=",
+    "nvme_list_b64": "Tm9kZSAgICAgICAgICAgICAgICAgIFNOICAgICAgICAgICAgICAgICAgIE1vZGVsICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgTmFtZXNwYWNlIFVzYWdlICAgICAgICAgICAgICAgICAgICAgIEZvcm1hdCAgICAgICAgICAgRlcgUmV2Ci9kZXYvbnZtZTBuMSAgICAgICAgICBTNkNLTkUwUjAwMDAwMSAgICAgICBTQU1TVU5HIE1aUUwyN1Q2SEJMQS0wMEEwNyAgICAgICAgICAgICAgIDEgICAgICAgICAgIDcuNjggIFRCIC8gICA3LjY4ICBUQiAgICA1MTIgICBCICsgIDAgQiAgIEdEQzUzMDJRCg==",
+    "nvme_id_ctrl_b64": "PT09PT0gL2Rldi9udm1lMCA9PT09PQpOVk1FIElkZW50aWZ5IENvbnRyb2xsZXI6CnNuICAgICAgOiBTNkNLTkUwUjAwMDAwMQptbiAgICAgIDogU0FNU1VORyBNWlFMMjdUNkhCTEEtMDBBMDcKZnIgICAgICA6IEdEQzUzMDJRCmZuYSAgICAgOiAwCnNhbmljYXAgOiAzCiAgWzA6MF0gOiAxCUNyeXB0byBFcmFzZSBTYW5pdGl6ZSBPcGVyYXRpb24gU3VwcG9ydGVkCiAgWzE6MV0gOiAxCUJsb2NrIEVyYXNlIFNhbml0aXplIE9wZXJhdGlvbiBTdXBwb3J0ZWQK"
+  },
+  "media": [
+    {
+      "device": "/dev/nvme0",
+      "controller": "/dev/nvme0",
+      "reached_via": "nvme-controller",
+      "device_type": "nvme",
+      "transport": "nvme",
+      "manufacturer": null,
+      "model": "SAMSUNG MZQL27T6HBLA-00A07",
+      "serial_number": "S6CKNE0R000001",
+      "wwn": null,
+      "firmware": "GDC5302Q",
+      "capacity_bytes": 7681501126656,
+      "mountpoints": [],
+      "capabilities": {
+        "sanicap_raw": 3,
+        "fna_raw": 0,
+        "nvme_sanitize_crypto": true,
+        "nvme_sanitize_block": true,
+        "nvme_sanitize_overwrite": false,
+        "nvme_format_crypto": false
+      },
+      "physical_media": true,
+      "method": "nvme-sanitize-crypto",
+      "method_level": "purge",
+      "method_reason": "Controller reports SANICAP crypto erase. Preferred method.",
+      "command": "nvme sanitize /dev/nvme0 --sanact=4",
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "status_code": null,
+      "result": "not attempted",
+      "verification": null,
+      "nist_level": "purge",
+      "sanact": 4
+    },
+    {
+      "device": "/dev/sda",
+      "controller": null,
+      "reached_via": "direct",
+      "device_type": "raid-volume",
+      "transport": "sas",
+      "manufacturer": null,
+      "model": "MR9560-16i",
+      "serial_number": "00e1b4e0f1a2b3c4",
+      "wwn": "0x600605b0",
+      "firmware": null,
+      "capacity_bytes": 479559942144,
+      "mountpoints": [],
+      "capabilities": {
+        "note": "virtual disk presented by a RAID controller",
+        "filesystem_signatures": [
+          "ext4",
+          "vfat"
+        ]
+      },
+      "physical_media": false,
+      "method": "not-applicable",
+      "method_level": "n/a",
+      "method_reason": "Virtual disk presented by a RAID controller. The physical drives inside it are inventoried and sanitised in their own right.",
+      "command": null,
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "status_code": null,
+      "result": "not attempted",
+      "verification": null,
+      "nist_level": null,
+      "sanact": null
+    },
+    {
+      "device": "/dev/sdz",
+      "controller": null,
+      "reached_via": "direct",
+      "device_type": "bmc-virtual-media",
+      "transport": "usb",
+      "manufacturer": null,
+      "model": "Virtual HDisk0",
+      "serial_number": "AAAABBBBCCCC3",
+      "wwn": null,
+      "firmware": null,
+      "capacity_bytes": 0,
+      "mountpoints": [],
+      "capabilities": {
+        "note": "emulated by the BMC; not media present in the chassis",
+        "media_attached": false
+      },
+      "physical_media": false,
+      "method": "not-applicable",
+      "method_level": "n/a",
+      "method_reason": "Virtual disk presented by a RAID controller. The physical drives inside it are inventoried and sanitised in their own right.",
+      "command": null,
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "status_code": null,
+      "result": "not attempted",
+      "verification": null,
+      "nist_level": null,
+      "sanact": null
+    },
+    {
+      "device": "/dev/sda",
+      "controller": "/dev/sda",
+      "reached_via": "megaraid,0",
+      "device_type": "raid-member",
+      "transport": null,
+      "manufacturer": "ATA",
+      "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+      "serial_number": "S664NE0R123456",
+      "wwn": null,
+      "firmware": "JXTC104Q",
+      "capacity_bytes": 480103981056,
+      "mountpoints": [],
+      "capabilities": {
+        "sg_node": null,
+        "scsi_sanitize": false,
+        "ata_security": {
+          "state": 33,
+          "string": "Disabled, NOT FROZEN [SEC1]",
+          "enabled": false,
+          "frozen": false,
+          "supported": true
+        },
+        "ata_security_supported": true,
+        "raid_cli": null
+      },
+      "physical_media": true,
+      "method": "none",
+      "method_level": "none",
+      "method_reason": "No purge command can be addressed to this member from here: SANITIZE does not pass through the RAID controller and no vendor CLI is staged. The drive itself is not shown to be unpurgeable -- see the remediation register and the controller survey.",
+      "command": null,
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "status_code": null,
+      "result": "not attempted",
+      "verification": null,
+      "nist_level": "none",
+      "sanact": null
+    },
+    {
+      "device": "/dev/sda",
+      "controller": "/dev/sda",
+      "reached_via": "megaraid,1",
+      "device_type": "raid-member",
+      "transport": null,
+      "manufacturer": "ATA",
+      "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+      "serial_number": "S664NE0R123457",
+      "wwn": null,
+      "firmware": "JXTC104Q",
+      "capacity_bytes": 480103981056,
+      "mountpoints": [],
+      "capabilities": {
+        "sg_node": null,
+        "scsi_sanitize": false,
+        "ata_security": {
+          "state": 33,
+          "string": "Disabled, NOT FROZEN [SEC1]",
+          "enabled": false,
+          "frozen": false,
+          "supported": true
+        },
+        "ata_security_supported": true,
+        "raid_cli": null
+      },
+      "physical_media": true,
+      "method": "none",
+      "method_level": "none",
+      "method_reason": "No purge command can be addressed to this member from here: SANITIZE does not pass through the RAID controller and no vendor CLI is staged. The drive itself is not shown to be unpurgeable -- see the remediation register and the controller survey.",
+      "command": null,
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "status_code": null,
+      "result": "not attempted",
+      "verification": null,
+      "nist_level": "none",
+      "sanact": null
+    }
+  ],
+  "raid_reconfiguration": {
+    "performed": false
+  },
+  "jbod_probe": {
+    "attempted": false
+  },
+  "remediation": [
+    {
+      "device": "/dev/sda",
+      "reached_via": "megaraid,0",
+      "device_type": "raid-member",
+      "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+      "serial_number": "S664NE0R123456",
+      "firmware": "JXTC104Q",
+      "method": "none",
+      "nist_level_reached": "none",
+      "result": "not attempted",
+      "blocker": "The drive sits inside a RAID volume. Its identity is readable through the controller but SANITIZE is not passed through, and no vendor CLI was staged in the maintenance image, so no purge command can be addressed to it from here.",
+      "ata_security_supported": true,
+      "routes": [
+        {
+          "order": 1,
+          "action": "Have the controller issue the sanitize command to the drive",
+          "reaches": "purge",
+          "requires": "storcli64 staged in the maintenance image, and firmware that supports drive sanitize. It is a Broadcom download, not a package -- apt install will not find it, and megacli is not a substitute on a tri-mode 95xx controller",
+          "survey_first": "storcli64 /c0/eall/sall show all   # read Sanitize support and SED capability per slot",
+          "command": "storcli64 /c0/eX/sY start sanitize blockErase ause   # then: show sanitize, to poll to 100%",
+          "sequence": [
+            "storcli64 /c0/vall show all            # record the array geometry -- deleting the VD loses it",
+            "storcli64 /c0/vX del force              # not a wipe: removes the mapping, leaves the data",
+            "storcli64 /c0/eall/sall show           # both drives must now read UGood",
+            "storcli64 /c0/eX/sY start sanitize blockErase ause    # per drive; cryptoerase if the firmware takes it",
+            "storcli64 /c0/eX/sY show sanitize      # poll each to 100%",
+            "storcli64 /c0 add vd type=r1 drives=252:0,252:1 name=RAID   # give the buyer the mirror back, empty",
+            "re-run this script to evidence the result"
+          ],
+          "prerequisite": "The drive has to leave the virtual disk first: storcli64 /c0/vX del force, then confirm the drive reads UGood. A controller erase is documented as UG-only and unsupported on JBOD drives, so this is not the same preparation as the JBOD route below. Deleting the virtual disk is not itself a wipe -- it removes the mapping and leaves the data in place.",
+          "note": "The array is deleted and recreated, not kept: a controller sanitise needs the drive Unconfigured Good, so there is no way to purge the members with the volume in place. The configuration is not data -- it is recorded first and rebuilt afterwards, so the buyer receives the same RAID 1 with nothing on it. The controller issues SANITIZE to the drive itself, so nothing depends on ATA commands surviving a translation layer, and `show sanitize` reports completion as a percentage -- machine-readable evidence. Pass `ause` (Allow Unrestricted Sanitize Exit) or a failed sanitize leaves the drive Unconfigured Bad. `cryptoerase` is the stronger sub-option but Broadcom documents it as not allowed on FDE and ISE drives, which most SATA SSDs are -- read Sanitize Support in the survey and prefer blockErase unless cryptoerase is confirmed."
+        },
+        {
+          "order": 2,
+          "action": "Cryptographic erase through the controller, for self-encrypting drives",
+          "reaches": "purge",
+          "requires": "storcli64 (a Broadcom download, not in any Ubuntu repository), and drives reported as SED Capable",
+          "survey_first": "storcli64 /c0/eall/sall show all   # confirm SED Capable = Yes before relying on this",
+          "command": "storcli64 /c0/eX/sY secureerase force",
+          "prerequisite": "SED Capable must read Yes in the survey, and the drive has to be out of the virtual disk.",
+          "note": "Broadcom documents this command as SED-only. Do not reach for `start erase simple|normal|thorough` instead: that is controller-driven pattern writing, so on flash it leaves over-provisioned and remapped NAND untouched and is a Clear, not a Purge."
+        },
+        {
+          "order": 3,
+          "action": "Set the drives to JBOD so the host can address them, then issue ATA SANITIZE",
+          "reaches": "purge",
+          "requires": "storcli64 to drop the virtual disk and set JBOD -- or the MegaRAID configuration utility in the BIOS, which can do the same at the console; and SANITIZE has to survive the SCSI-ATA translation the controller applies, which is firmware-dependent",
+          "survey_first": "storcli64 /c0 show all   # confirm JBOD support; then hdparm -I /dev/sdX once exposed",
+          "command": "hdparm --yes-i-know-what-i-am-doing --sanitize-crypto-scramble /dev/sdX   # then --sanitize-status until it reports success",
+          "note": "Note the two states are not interchangeable: a controller-issued erase wants the drive Unconfigured Good, while the host can only address it in JBOD. Deleting the virtual disk is a prerequisite for both and is not itself a wipe -- it removes the mapping and leaves the data in place."
+        },
+        {
+          "order": 4,
+          "action": "Move the drive to a direct SATA port and erase it there",
+          "reaches": "purge",
+          "requires": "no vendor tooling and no firmware assumptions -- a cable move, and this script re-run",
+          "survey_first": "this script, which will then see the drive as direct-attached and read its ATA SANITIZE support with hdparm -I",
+          "command": "hdparm --yes-i-know-what-i-am-doing --sanitize-crypto-scramble /dev/sdX",
+          "note": "The route with the fewest unknowns, and the only one needing no Broadcom download: re-running this script then evidences the erase itself. Erasing from the BIOS configuration utility instead leaves no machine-readable status to record, and section 10 is explicit that a screenshot is not evidence. The drive is kept, not destroyed."
+        },
+        {
+          "order": 5,
+          "action": "NIST Clear by full-device overwrite of the volume",
+          "reaches": "clear",
+          "requires": "ALLOW_OVERWRITE_FALLBACK=true in this script",
+          "survey_first": null,
+          "command": "blkdiscard -z /dev/sda",
+          "caveat": "A Clear, not a Purge. On flash an overwrite reaches only user-addressable blocks, so over-provisioned capacity, retired blocks and unmapped FTL copies are outside it. NIST SP 800-88r1 indicates Purge for media leaving organisational control, so this does not on its own clear the host for sale."
+        }
+      ]
+    },
+    {
+      "device": "/dev/sda",
+      "reached_via": "megaraid,1",
+      "device_type": "raid-member",
+      "model": "SAMSUNG MZ7L3480HCHQ-00A07",
+      "serial_number": "S664NE0R123457",
+      "firmware": "JXTC104Q",
+      "method": "none",
+      "nist_level_reached": "none",
+      "result": "not attempted",
+      "blocker": "The drive sits inside a RAID volume. Its identity is readable through the controller but SANITIZE is not passed through, and no vendor CLI was staged in the maintenance image, so no purge command can be addressed to it from here.",
+      "ata_security_supported": true,
+      "routes": [
+        {
+          "order": 1,
+          "action": "Have the controller issue the sanitize command to the drive",
+          "reaches": "purge",
+          "requires": "storcli64 staged in the maintenance image, and firmware that supports drive sanitize. It is a Broadcom download, not a package -- apt install will not find it, and megacli is not a substitute on a tri-mode 95xx controller",
+          "survey_first": "storcli64 /c0/eall/sall show all   # read Sanitize support and SED capability per slot",
+          "command": "storcli64 /c0/eX/sY start sanitize blockErase ause   # then: show sanitize, to poll to 100%",
+          "sequence": [
+            "storcli64 /c0/vall show all            # record the array geometry -- deleting the VD loses it",
+            "storcli64 /c0/vX del force              # not a wipe: removes the mapping, leaves the data",
+            "storcli64 /c0/eall/sall show           # both drives must now read UGood",
+            "storcli64 /c0/eX/sY start sanitize blockErase ause    # per drive; cryptoerase if the firmware takes it",
+            "storcli64 /c0/eX/sY show sanitize      # poll each to 100%",
+            "storcli64 /c0 add vd type=r1 drives=252:0,252:1 name=RAID   # give the buyer the mirror back, empty",
+            "re-run this script to evidence the result"
+          ],
+          "prerequisite": "The drive has to leave the virtual disk first: storcli64 /c0/vX del force, then confirm the drive reads UGood. A controller erase is documented as UG-only and unsupported on JBOD drives, so this is not the same preparation as the JBOD route below. Deleting the virtual disk is not itself a wipe -- it removes the mapping and leaves the data in place.",
+          "note": "The array is deleted and recreated, not kept: a controller sanitise needs the drive Unconfigured Good, so there is no way to purge the members with the volume in place. The configuration is not data -- it is recorded first and rebuilt afterwards, so the buyer receives the same RAID 1 with nothing on it. The controller issues SANITIZE to the drive itself, so nothing depends on ATA commands surviving a translation layer, and `show sanitize` reports completion as a percentage -- machine-readable evidence. Pass `ause` (Allow Unrestricted Sanitize Exit) or a failed sanitize leaves the drive Unconfigured Bad. `cryptoerase` is the stronger sub-option but Broadcom documents it as not allowed on FDE and ISE drives, which most SATA SSDs are -- read Sanitize Support in the survey and prefer blockErase unless cryptoerase is confirmed."
+        },
+        {
+          "order": 2,
+          "action": "Cryptographic erase through the controller, for self-encrypting drives",
+          "reaches": "purge",
+          "requires": "storcli64 (a Broadcom download, not in any Ubuntu repository), and drives reported as SED Capable",
+          "survey_first": "storcli64 /c0/eall/sall show all   # confirm SED Capable = Yes before relying on this",
+          "command": "storcli64 /c0/eX/sY secureerase force",
+          "prerequisite": "SED Capable must read Yes in the survey, and the drive has to be out of the virtual disk.",
+          "note": "Broadcom documents this command as SED-only. Do not reach for `start erase simple|normal|thorough` instead: that is controller-driven pattern writing, so on flash it leaves over-provisioned and remapped NAND untouched and is a Clear, not a Purge."
+        },
+        {
+          "order": 3,
+          "action": "Set the drives to JBOD so the host can address them, then issue ATA SANITIZE",
+          "reaches": "purge",
+          "requires": "storcli64 to drop the virtual disk and set JBOD -- or the MegaRAID configuration utility in the BIOS, which can do the same at the console; and SANITIZE has to survive the SCSI-ATA translation the controller applies, which is firmware-dependent",
+          "survey_first": "storcli64 /c0 show all   # confirm JBOD support; then hdparm -I /dev/sdX once exposed",
+          "command": "hdparm --yes-i-know-what-i-am-doing --sanitize-crypto-scramble /dev/sdX   # then --sanitize-status until it reports success",
+          "note": "Note the two states are not interchangeable: a controller-issued erase wants the drive Unconfigured Good, while the host can only address it in JBOD. Deleting the virtual disk is a prerequisite for both and is not itself a wipe -- it removes the mapping and leaves the data in place."
+        },
+        {
+          "order": 4,
+          "action": "Move the drive to a direct SATA port and erase it there",
+          "reaches": "purge",
+          "requires": "no vendor tooling and no firmware assumptions -- a cable move, and this script re-run",
+          "survey_first": "this script, which will then see the drive as direct-attached and read its ATA SANITIZE support with hdparm -I",
+          "command": "hdparm --yes-i-know-what-i-am-doing --sanitize-crypto-scramble /dev/sdX",
+          "note": "The route with the fewest unknowns, and the only one needing no Broadcom download: re-running this script then evidences the erase itself. Erasing from the BIOS configuration utility instead leaves no machine-readable status to record, and section 10 is explicit that a screenshot is not evidence. The drive is kept, not destroyed."
+        },
+        {
+          "order": 5,
+          "action": "NIST Clear by full-device overwrite of the volume",
+          "reaches": "clear",
+          "requires": "ALLOW_OVERWRITE_FALLBACK=true in this script",
+          "survey_first": null,
+          "command": "blkdiscard -z /dev/sda",
+          "caveat": "A Clear, not a Purge. On flash an overwrite reaches only user-addressable blocks, so over-provisioned capacity, retired blocks and unmapped FTL copies are outside it. NIST SP 800-88r1 indicates Purge for media leaving organisational control, so this does not on its own clear the host for sale."
+        }
+      ]
+    }
+  ],
+  "controller_survey": {
+    "raid_cli": null,
+    "raid_cli_provenance": {
+      "attempted": false,
+      "reason": "INSTALL_STORCLI is not true"
+    },
+    "raid_controllers_pci": null,
+    "commands_run": [],
+    "drives": [],
+    "virtual_disks": [],
+    "controller_sanitize_support": "unknown",
+    "controller_jbod_support": "unknown",
+    "controller_encryption_allowed": "unknown",
+    "raw_survey_b64": null,
+    "virtual_disk_config_b64": null,
+    "drive_list": "252:0,252:1",
+    "config_capture_note": "The full virtual-disk configuration is captured here before anything is deleted, because deleting the volume destroys its geometry and the array is expected back afterwards. The array configuration is not data: the drives are purged and the same RAID 1 is then recreated empty.",
+    "purge_verb": null,
+    "members_seen": 2,
+    "member_ata_security": [
+      {
+        "serial_number": "S664NE0R123456",
+        "ata_security_supported": true,
+        "ata_security": {
+          "state": 33,
+          "string": "Disabled, NOT FROZEN [SEC1]",
+          "enabled": false,
+          "frozen": false,
+          "supported": true
+        }
+      },
+      {
+        "serial_number": "S664NE0R123457",
+        "ata_security_supported": true,
+        "ata_security": {
+          "state": 33,
+          "string": "Disabled, NOT FROZEN [SEC1]",
+          "enabled": false,
+          "frozen": false,
+          "supported": true
+        }
+      }
+    ],
+    "note": "Drive identity traverses the controller passthrough because it comes from IDENTIFY DEVICE; the SANITIZE command does not. Where ata_security_supported is true, the drive implements the ATA Security feature set and an erase issued with the drive presented directly would reach NIST Purge. Where it is null, smartctl could not read that word through this controller and the capability is unproven rather than absent.",
+    "to_complete_the_picture": [
+      "storcli64 /c0 show all                 # controller model, firmware, JBOD support",
+      "storcli64 /c0/eall/sall show all       # per slot: SED capability, sanitize support, media type",
+      "Both are read-only. storcli is not in the Ubuntu archive, so staging it in the maintenance image is what makes this answerable in band."
+    ]
+  },
+  "attestation": {
+    "hostname": "EXAMPLE-NODE-01.example.lan",
+    "system_serial": "R9S0MD0000AB",
+    "jira_ticket": null,
+    "engineer": null,
+    "reviewer": null,
+    "confirmation_phrase": "SANITIZE ALL MEDIA",
+    "out_of_scope": [
+      "Non-disk persistent configuration -- BMC, BIOS/UEFI, TPM and RAID controller settings -- is not covered by this script. Sanitising the drives does not sanitise the server.",
+      "An independent reviewer must confirm this evidence. This script cannot be its own second engineer, so reviewer is null."
+    ]
+  },
+  "audit_log_b64": "MjAyNi0wOS0wOVQwOToyMzowNlogIGVudmlyb25tZW50OiByb290PW92ZXJsYXlyb290IChvdmVybGF5KSBlcGhlbWVyYWw9dHJ1ZQoyMDI2LTA5LTA5VDA5OjIzOjA3WiAgaW52ZW50b3J5OiAzIHBoeXNpY2FsIGRldmljZShzKTsgMSBOVk1lIGNvbnRyb2xsZXIocyksIDEgbmFtZXNwYWNlKHMpIGRlY2xhcmVkLCAxIGluIHRoZSBrZXJuZWwKMjAyNi0wOS0wOVQwOToyMzowN1ogIHBsYW46IC9kZXYvbnZtZTAgbnZtZS1jb250cm9sbGVyIC0+IG52bWUtc2FuaXRpemUtY3J5cHRvIChwdXJnZSkgLS0gQ29udHJvbGxlciByZXBvcnRzIFNBTklDQVAgY3J5cHRvIGVyYXNlLiBQcmVmZXJyZWQgbWV0aG9kLgoyMDI2LTA5LTA5VDA5OjIzOjA3WiAgcGxhbjogL2Rldi9zZGEgZGlyZWN0IC0+IG5vdC1hcHBsaWNhYmxlIChuL2EpIC0tIFZpcnR1YWwgZGlzayBwcmVzZW50ZWQgYnkgYSBSQUlEIGNvbnRyb2xsZXIuIFRoZSBwaHlzaWNhbCBkcml2ZXMgaW5zaWRlIGl0IGFyZSBpbnZlbnRvcmllZCBhbmQgc2FuaXRpc2VkIGluIHRoZWlyIG93biByaWdodC4KMjAyNi0wOS0wOVQwOToyMzowN1ogIHBsYW46IC9kZXYvc2R6IGRpcmVjdCAtPiBub3QtYXBwbGljYWJsZSAobi9hKSAtLSBWaXJ0dWFsIGRpc2sgcHJlc2VudGVkIGJ5IGEgUkFJRCBjb250cm9sbGVyLiBUaGUgcGh5c2ljYWwgZHJpdmVzIGluc2lkZSBpdCBhcmUgaW52ZW50b3JpZWQgYW5kIHNhbml0aXNlZCBpbiB0aGVpciBvd24gcmlnaHQuCjIwMjYtMDktMDlUMDk6MjM6MDdaICBwbGFuOiAvZGV2L3NkYSBtZWdhcmFpZCwwIC0+IG5vbmUgKG5vbmUpIC0tIE5vIHB1cmdlIGNvbW1hbmQgY2FuIGJlIGFkZHJlc3NlZCB0byB0aGlzIG1lbWJlciBmcm9tIGhlcmU6IFNBTklUSVpFIGRvZXMgbm90IHBhc3MgdGhyb3VnaCB0aGUgUkFJRCBjb250cm9sbGVyIGFuZCBubyB2ZW5kb3IgQ0xJIGlzIHN0YWdlZC4gVGhlIGRyaXZlIGl0c2VsZiBpcyBub3Qgc2hvd24gdG8gYmUgdW5wdXJnZWFibGUgLS0gc2VlIHRoZSByZW1lZGlhdGlvbiByZWdpc3RlciBhbmQgdGhlIGNvbnRyb2xsZXIgc3VydmV5LgoyMDI2LTA5LTA5VDA5OjIzOjA4WiAgcGxhbjogL2Rldi9zZGEgbWVnYXJhaWQsMSAtPiBub25lIChub25lKSAtLSBObyBwdXJnZSBjb21tYW5kIGNhbiBiZSBhZGRyZXNzZWQgdG8gdGhpcyBtZW1iZXIgZnJvbSBoZXJlOiBTQU5JVElaRSBkb2VzIG5vdCBwYXNzIHRocm91Z2ggdGhlIFJBSUQgY29udHJvbGxlciBhbmQgbm8gdmVuZG9yIENMSSBpcyBzdGFnZWQuIFRoZSBkcml2ZSBpdHNlbGYgaXMgbm90IHNob3duIHRvIGJlIHVucHVyZ2VhYmxlIC0tIHNlZSB0aGUgcmVtZWRpYXRpb24gcmVnaXN0ZXIgYW5kIHRoZSBjb250cm9sbGVyIHN1cnZleS4KMjAyNi0wOS0wOVQwOToyMzowOFogIEFVRElUIE1PREU6IG5vIGRldmljZSB3YXMgbW9kaWZpZWQK"
+}

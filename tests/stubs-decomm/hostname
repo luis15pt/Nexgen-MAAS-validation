@@ -1,0 +1,5 @@
+#!/bin/bash
+# A fixture should not depend on whose workstation generated it. Without this
+# the generating machine's own hostname ends up in the evidence, and in the
+# repository.
+echo "EXAMPLE-NODE-01${1:+.example.lan}"

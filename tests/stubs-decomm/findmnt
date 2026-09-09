@@ -1,0 +1,13 @@
+#!/bin/bash
+# Root filesystem source and type.
+#   STUB_ROOT_FSTYPE  default overlay -- a MAAS ephemeral boot
+#   STUB_ROOT_SOURCE  default overlayroot
+# Setting STUB_ROOT_FSTYPE=ext4 models the case section 6 forbids: erasing from
+# an operating system installed on a drive being sanitised.
+fs="${STUB_ROOT_FSTYPE:-overlay}"
+case "$fs" in
+    ext4|xfs|btrfs) src="${STUB_ROOT_SOURCE:-/dev/nvme0n1p2}" ;;
+    *)              src="${STUB_ROOT_SOURCE:-overlayroot}" ;;
+esac
+echo "$src $fs"
+exit 0

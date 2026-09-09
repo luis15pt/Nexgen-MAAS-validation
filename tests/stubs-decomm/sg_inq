@@ -1,0 +1,13 @@
+#!/bin/bash
+# Unit serial numbers per /dev/sg node. This is how a drive hidden behind a RAID
+# controller is matched to a SCSI generic node it can be sanitised through.
+#   STUB_SG_PASSTHROUGH  1 exposes the two RAID members on sg2 and sg3
+for a in "$@"; do [[ "$a" == /dev/* ]] && DEV="$a"; done
+case "$(basename "${DEV:-}")" in
+    sg0) echo "  Unit serial number: 00e1b4e0f1a2b3c4" ;;
+    sg1) echo "  Unit serial number: S6CKNE0R000001" ;;
+    sg2) [[ "$STUB_SG_PASSTHROUGH" == "1" ]] && echo "  Unit serial number: S664NE0R123456" || exit 2 ;;
+    sg3) [[ "$STUB_SG_PASSTHROUGH" == "1" ]] && echo "  Unit serial number: S664NE0R123457" || exit 2 ;;
+    *)   exit 2 ;;
+esac
+exit 0

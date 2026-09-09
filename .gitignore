@@ -8,3 +8,9 @@ __pycache__/
 # Generated reports — keep the folder, ignore the contents
 reports/*
 !reports/.gitkeep
+
+# Vendor and customer documents -- not ours to publish, and this repository is
+# served to GitHub Pages in full on every push to main.
+*.xlsx
+*.xlsx:Zone.Identifier
+*.Zone.Identifier

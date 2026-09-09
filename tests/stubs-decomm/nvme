@@ -1,0 +1,149 @@
+#!/bin/bash
+# Fixture-driven nvme-cli for 95-nexgen-storage-sanitize. No NVMe required.
+#
+# Models the SAMSUNG MZQL27T6HBLA-00A07 in the ESC8000A-E12P nodes.
+#
+#   STUB_NVME_CTRLS      controllers to synthesise (default 1)
+#   STUB_SANICAP         crypto | block | overwrite | none | <raw number>
+#                        (default crypto -- crypto and block both supported)
+#   STUB_FNA             raw FNA value; 4 sets the Format-NVM crypto bit
+#   STUB_SANITIZE_JSON   0 disables `-o json` -- as nvme-cli 1.16 on the real
+#                        ephemeral image does -- exercising the text fallback
+#   STUB_SANITIZE_RESULT success | fail | timeout   (default success)
+#   STUB_SANITIZE_TICKS  in-progress polls before the terminal state (default 0)
+#   STUB_SANITIZE_LIES   1 makes the TEXT log claim success while SSTAT says
+#                        failure -- the vendor-wording trap the runbook warns of
+#   STUB_NVME_NO_ID      1 makes id-ctrl return nothing for nvme0
+#   STUB_NS_MISMATCH     1 declares a namespace in `nvme list` that the kernel
+#                        does not present
+#
+# Every destructive invocation is appended to ${SD}/stub-destructive-calls so a
+# test can assert that audit mode issued none.
+SD="${STUB_STATE_DIR:-/tmp}"
+CTRLS="${STUB_NVME_CTRLS:-1}"
+SUB="$1"; shift
+
+JSON=0; DEV=""
+for a in "$@"; do
+    case "$a" in
+        json|--output-format=json) JSON=1 ;;
+        /dev/*) [[ -z "$DEV" ]] && DEV="$a" ;;
+    esac
+done
+[[ "$*" == *"-o json"* ]] && JSON=1
+
+sanicap_value() {
+    case "${STUB_SANICAP:-crypto}" in
+        crypto)    echo 3 ;;   # bit0 crypto erase + bit1 block erase
+        block)     echo 2 ;;   # block erase only
+        overwrite) echo 4 ;;   # overwrite only -- not a method this script uses
+        none)      echo 0 ;;
+        *)         echo "${STUB_SANICAP}" ;;
+    esac
+}
+
+ctrl_index() { local b; b=$(basename "${1:-nvme0}"); echo "${b//[^0-9]/}"; }
+# Synthetic, and built rather than literal -- which is how a real serial slipped
+# past a scrub of literal strings once.
+serial_for()  { printf 'S6CKNE0R00000%s' "$(( $(ctrl_index "$1") + 1 ))"; }
+
+case "$SUB" in
+version)
+    echo "nvme version 2.4"
+    exit 0 ;;
+
+list)
+    if [[ "$JSON" == "1" ]]; then
+        printf '{"Devices":['
+        n=0
+        for i in $(seq 0 $(( CTRLS - 1 ))); do
+            [[ $n -gt 0 ]] && printf ','
+            printf '{"DevicePath":"/dev/nvme%dn1","ModelNumber":"SAMSUNG MZQL27T6HBLA-00A07","SerialNumber":"%s","Firmware":"GDC5302Q","PhysicalSize":7681501126656}' \
+                   "$i" "$(serial_for nvme$i)"
+            n=$(( n + 1 ))
+        done
+        # A namespace nvme-cli knows about and the kernel does not: exactly the
+        # disagreement section 7 calls a stop condition.
+        [[ "$STUB_NS_MISMATCH" == "1" ]] && printf ',{"DevicePath":"/dev/nvme0n2","ModelNumber":"SAMSUNG MZQL27T6HBLA-00A07","SerialNumber":"%s","Firmware":"GDC5302Q","PhysicalSize":7681501126656}' "$(serial_for nvme0)"
+        printf ']}\n'
+    else
+        echo "Node                  SN                   Model                                    Namespace Usage                      Format           FW Rev"
+        for i in $(seq 0 $(( CTRLS - 1 ))); do
+            printf '/dev/nvme%dn1          %-20s SAMSUNG MZQL27T6HBLA-00A07               1           7.68  TB /   7.68  TB    512   B +  0 B   GDC5302Q\n' \
+                   "$i" "$(serial_for nvme$i)"
+        done
+    fi
+    exit 0 ;;
+
+id-ctrl)
+    [[ "$STUB_NVME_NO_ID" == "1" && "$DEV" == "/dev/nvme0" ]] && exit 1
+    sc=$(sanicap_value); fna="${STUB_FNA:-0}"
+    if [[ "$JSON" == "1" ]]; then
+        printf '{"sn":"%s","mn":"SAMSUNG MZQL27T6HBLA-00A07","fr":"GDC5302Q","nn":1,"sanicap":%s,"fna":%s,"tnvmcap":7681501126656}\n' \
+               "$(serial_for "$DEV")" "$sc" "$fna"
+    else
+        printf 'NVME Identify Controller:\nsn      : %s\nmn      : SAMSUNG MZQL27T6HBLA-00A07\nfr      : GDC5302Q\nfna     : %s\nsanicap : %s\n' \
+               "$(serial_for "$DEV")" "$fna" "$sc"
+        # The human-readable capability lines. Kept as evidence by the script,
+        # and deliberately never adjudicated on.
+        (( sc & 1 )) && echo "  [0:0] : 1	Crypto Erase Sanitize Operation Supported"
+        (( sc & 2 )) && echo "  [1:1] : 1	Block Erase Sanitize Operation Supported"
+        (( sc & 4 )) && echo "  [2:2] : 1	Overwrite Sanitize Operation Supported"
+    fi
+    exit 0 ;;
+
+sanitize)
+    echo "$(date -u +%FT%TZ) nvme sanitize $*" >> ${SD}/stub-destructive-calls
+    st="${SD}/stub-sanitize-$(basename "${DEV:-nvme0}")"
+    echo 0 > "$st"
+    exit 0 ;;
+
+format)
+    echo "$(date -u +%FT%TZ) nvme format $*" >> ${SD}/stub-destructive-calls
+    echo "Success formatting namespace:1"
+    exit 0 ;;
+
+sanitize-log)
+    st="${SD}/stub-sanitize-$(basename "${DEV:-nvme0}")"
+    # No sanitise has been issued: never sanitised.
+    if [[ ! -f "$st" ]]; then
+        if [[ "$JSON" == "1" && "${STUB_SANITIZE_JSON:-1}" == "1" ]]; then
+            echo '{"sprog":0,"sstat":0,"scdw10":0}'
+        else
+            printf 'Sanitize Progress                      (SPROG) :  0\nSanitize Status                        (SSTAT) :  0x0\n'
+        fi
+        exit 0
+    fi
+
+    polls=$(cat "$st" 2>/dev/null || echo 0)
+    echo $(( polls + 1 )) > "$st"
+    ticks="${STUB_SANITIZE_TICKS:-0}"
+
+    sstat="0x101"; sprog=65535
+    if (( polls < ticks )); then
+        sstat="0x102"; sprog=$(( 65535 * (polls + 1) / (ticks + 1) ))
+    else
+        case "${STUB_SANITIZE_RESULT:-success}" in
+            fail)    sstat="0x103" ;;
+            timeout) sstat="0x102"; sprog=32768 ;;
+            *)       sstat="0x101" ;;
+        esac
+    fi
+
+    if [[ "$JSON" == "1" && "${STUB_SANITIZE_JSON:-1}" == "1" ]]; then
+        printf '{"sprog":%s,"sstat":%s,"scdw10":0}\n' "$sprog" "$(( sstat ))"
+    else
+        printf 'Sanitize Progress                      (SPROG) :  %s\n' "$sprog"
+        printf 'Sanitize Status                        (SSTAT) :  %s\n' "$sstat"
+        # A vendor whose prose disagrees with its own status field. The whole
+        # point of adjudicating on SSTAT is that this must not read as a pass.
+        [[ "$STUB_SANITIZE_LIES" == "1" ]] && \
+            echo "The most recent sanitize operation completed successfully"
+    fi
+    exit 0 ;;
+
+list-subsys)
+    echo "nvme-subsys0 - NQN=nqn.1994-11.com.samsung:nvme:PM9A3"
+    exit 0 ;;
+esac
+exit 1

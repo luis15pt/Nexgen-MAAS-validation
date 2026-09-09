@@ -1,0 +1,8 @@
+#!/bin/bash
+# unzip is in the ephemeral image (the script installs it) but not on the test
+# host, so this stands in via python's zipfile. Same contract: -oq <archive>
+# extracts into the working directory.
+arch=""
+for a in "$@"; do [[ "$a" == *.zip ]] && arch="$a"; done
+[[ -f "$arch" ]] || exit 9
+exec python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(".")' "$arch"

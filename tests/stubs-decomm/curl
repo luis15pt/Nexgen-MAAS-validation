@@ -1,0 +1,13 @@
+#!/bin/bash
+# Fetches nothing. Serves a local fixture so the storcli install path is
+# testable without the network.
+#   STUB_CURL=fail      the download fails
+#   STUB_CURL_ZIP=path  zip to serve (default tests/fixtures/storcli-fake.zip)
+out=""; prev=""
+for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+if [[ "${STUB_CURL:-ok}" == "fail" ]]; then echo -n "000"; exit 22; fi
+src="${STUB_CURL_ZIP:-tests/fixtures/storcli-fake.zip}"
+[[ -f "$src" ]] || { echo -n "404"; exit 22; }
+cp "$src" "$out" 2>/dev/null || { echo -n "000"; exit 22; }
+echo -n "200"
+exit 0

@@ -1,0 +1,67 @@
+#!/bin/bash
+# Replays real EXAMPLE-NODE-02 output (ASUS ESC8000A-E12P, ASMB11 BMC).
+if [[ "$1" == "mc" && "$2" == "info" ]]; then
+cat <<'X'
+Device ID                 : 32
+Device Revision           : 1
+Firmware Revision         : 1.01
+IPMI Version              : 2.0
+Manufacturer ID           : 2623
+Manufacturer Name         : Unknown (0xA3F)
+Product ID                : 4499 (0x1193)
+Product Name              : Unknown (0x1193)
+Device Available          : yes
+Provides Device SDRs      : yes
+Aux Firmware Rev Info     :
+    0x4b
+    0x00
+X
+exit 0
+fi
+if [[ "$1" == "fru" ]]; then
+cat <<'X'
+FRU Device Description : Builtin FRU Device (ID 0)
+ Chassis Type          : Rack Mount Chassis
+ Chassis Part Number   : 13SF02I0AM1221
+ Chassis Serial        : I000000001
+ Board Mfg Date        : Mon Oct  2 10:19:00 2023
+ Board Mfg             : ASUSTeK COMPUTER INC.
+ Board Product         : K14PG-D24 Series
+ Board Serial          : 230520500000001
+ Board Part Number     : 60SB0B40-SB0D04
+ Product Manufacturer  : ASUSTeK COMPUTER INC.
+ Product Name          : ESC8000A-E12P
+ Product Version       : SKU4A
+ Product Serial        : R9S0MD0000AB
+X
+exit 0
+fi
+if [[ "$1" == "sel" && "$2" == "time" ]]; then
+  echo "09/07/2026 10:42:29"; exit 0
+fi
+if [[ "$1" == "sel" && "$2" == "elist" ]]; then
+  echo "   1 | 06/20/2024 | 01:36:16 | Power Unit PowerUnit | Power off/down | Deasserted"
+  exit 0
+fi
+if [[ "$1" == "sdr" ]]; then
+  # The real ASMB11 exposes NO power-on-hours sensor -- only these classes.
+  # STUB_POH_SENSOR=yes models a BMC that does, for the other branch.
+  [[ "$STUB_POH_SENSOR" == "yes" ]] && echo "Power On Hours   | 04h | ok  |  7.1 | 18420 hours"
+  # Full fan bank, so the idle baseline in 89 is representative of the real
+  # chassis. STUB_SLOW_FAN drops one, the same knob tests/stubs/ipmitool uses.
+  printf 'CPU1 Temperature | 01h | ok  |  3.0 | 53 degrees C\n'
+  printf 'Inlet Temp       | 4Bh | ok  | 55.0 | %s degrees C\n' "${STUB_INLET:-27}"
+  printf '+12V             | 74h | ok  |  7.0 | 12.35 Volts\n'
+  for i in 1 2 3 4 5; do
+    rpm=4100; [[ "$i" == "${STUB_SLOW_FAN:-}" ]] && rpm="${STUB_SLOW_RPM:-1400}"
+    printf 'GPU_FAN%d         | %02Xh | ok  | 29.0 | %d RPM\n' "$i" $((0x93+i)) "$rpm"
+  done
+  for i in 1 2 3 4 5 6; do
+    printf 'SYS_FAN%d         | %02Xh | ok  | 29.0 | 4300 RPM\n' "$i" $((0x99+i))
+  done
+  for i in 1 2 3 4; do
+    printf 'PSU%d Power In    | %02Xh | ok  | 10.0 | 210 Watts\n' "$i" $((0xDF+i))
+  done
+  exit 0
+fi
+exit 1

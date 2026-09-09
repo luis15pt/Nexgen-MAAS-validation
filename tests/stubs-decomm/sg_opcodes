@@ -1,0 +1,8 @@
+#!/bin/bash
+# Which commands the device actually implements. SANITIZE is opcode 0x48.
+#   STUB_SCSI_SANITIZE  0 to model a device that does not implement it
+for a in "$@"; do [[ "$a" == /dev/* ]] && DEV="$a"; done
+echo "  Opcode,sa  Name"
+echo "  0x12       Inquiry"
+[[ "${STUB_SCSI_SANITIZE:-1}" == "1" ]] && echo "  0x48       Sanitize"
+exit 0

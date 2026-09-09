@@ -1,0 +1,7 @@
+storcli64 only, in its own directory.
+
+The script probes for storcli/perccli with `command -v` and uses one if it is
+staged. A stub in stubs-decomm would therefore always be found, and the common
+case -- no vendor binary present, which is what the Ubuntu archive gives you --
+could never be tested. Prepend this directory only for the cases that want a
+RAID CLI to exist.

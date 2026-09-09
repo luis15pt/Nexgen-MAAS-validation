@@ -1,0 +1,3 @@
+#!/bin/bash
+[[ "$1" == "--getsize64" ]] && { echo 7681501126656; exit 0; }
+exit 1
