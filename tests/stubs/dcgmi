@@ -2,7 +2,11 @@
 # Test stub. `diag` replays a fixture named by $DCGM_FIXTURE.
 case "$1" in
   --version|-v|version) echo "dcgmi version 4.2.3" ;;
-  discovery)            echo "${STUB_GPU_COUNT:-8} GPUs found" ;;
+  # Real dcgmi pluralises: "1 GPU found (Active)." vs "8 GPUs found." -- a
+  # stub that always said "GPUs" hid a parser that missed single-GPU hosts.
+  discovery)            n="${STUB_GPU_COUNT:-8}"
+                        if [[ "$n" == 1 ]]; then echo "1 GPU found (Active)."
+                        else echo "$n GPUs found."; fi ;;
   diag)
       # targeted_stress is the burn-in load path, not the 98 diagnostic: mark
       # every GPU as loaded and honour its own fixture/exit overrides.

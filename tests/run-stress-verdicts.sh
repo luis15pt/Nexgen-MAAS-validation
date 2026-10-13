@@ -32,4 +32,16 @@ check unparseable     FAIL     # no test evidence
 check all-pass        WARN 1   # exit code and results disagree
 check all-pass        FAIL 124 # timeout kill: run incomplete
 
+# dcgmi says "1 GPU found" on a single-GPU host. Matching only "GPUs found"
+# counted it as 0 and failed the run as a DCGM/driver incompatibility.
+out=$(STUB_GPU_COUNT=1 DCGM_FIXTURE="tests/fixtures/dcgm/all-pass.json" \
+      bash "$SCRIPT" 2>&1)
+if grep -q "DCGM sees 1 GPU(s)" <<<"$out"; then
+    echo "  ok    single-GPU host: discovery counts 1 GPU"
+else
+    echo "  FAIL  single-GPU host: discovery miscounted"
+    grep -E "DCGM (sees|discovery)" <<<"$out" | sed 's/^/          /'
+    rc=1
+fi
+
 exit $rc

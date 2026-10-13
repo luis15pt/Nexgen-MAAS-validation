@@ -857,7 +857,7 @@ load_and_verify() {
         local attempt
         for attempt in 1 2 3 4 5; do
             sleep 3
-            dcgm_gpus=$(dcgmi discovery -l 2>/dev/null | grep -oP '^\d+ GPUs found' | grep -oP '^\d+' || echo "0")
+            dcgm_gpus=$(dcgmi discovery -l 2>/dev/null | grep -oP '^\d+ GPUs? found' | grep -oP '^\d+' || echo "0")
             dcgm_gpus=$((dcgm_gpus + 0))
             log "DCGM discovery attempt $attempt: $dcgm_gpus GPU(s)"
             if [[ "$dcgm_gpus" -gt 0 ]]; then

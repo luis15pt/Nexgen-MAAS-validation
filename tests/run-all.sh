@@ -1263,6 +1263,18 @@ for word in ("serviceable", "airflow", "seating", "recommend"):
 else:
     print("  ok    and does not speculate on the cause")
 
+# "No fault was found" is only true if #5 actually passed. A single-GPU host
+# whose DCGM run never happened printed "the DCGM diagnostic passed" on a
+# REJECT certificate, because the sentence was a constant.
+c6n = [c for c in dc.evaluate_gpu_acceptance(inv["gpus"][0], None, b)["criteria"]
+       if c["reject"] == 6][0]
+if (c6n["status"] == "WARN" and "no fault was found" not in c6n["detail"]
+        and "DCGM diagnostic passed" not in c6n["detail"]
+        and "see #5" in c6n["detail"] and "_thermal_cap_note" not in c6n):
+    print("  ok    #6 does not claim DCGM passed when no diagnostic ran")
+else:
+    print("  FAIL  #6 claims a result #5 does not show: %s" % c6n["detail"]); rc = 1
+
 # A power brake is asserted by power delivery, not temperature, so no amount of
 # airflow work addresses it. It is a different fault and stays FAIL.
 bb = copy.deepcopy(burn0)

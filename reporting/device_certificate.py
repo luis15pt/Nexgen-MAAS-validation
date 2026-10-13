@@ -1012,17 +1012,16 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None):
             # that the card reduced clocks under sustained load; the cause is
             # not, and speculating on it ("restricted airflow", "poor seating")
             # in a document whose accuracy is warranted would be asserting more
-            # than was measured. The functional result stands separately: DCGM
-            # passed every test and gpu-burn returned OK with no computation
-            # errors, so no fault was found in the GPU itself.
-            out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
-                             "WARN",
-                             "; ".join(f"{k} in {v} sample(s)" for k, v in hot.items())
-                             + f" -- clocks reduced under sustained load. Not a "
-                               f"Sch 4 para 4 criterion, and no fault was found "
-                               f"in the GPU: the DCGM diagnostic passed and "
-                               f"gpu-burn returned OK with no computation errors "
-                               f"({cap_note})"))
+            # than was measured. The functional result is stated alongside it,
+            # but only as far as #5 and #4 evidence it -- this function sees
+            # neither, so evaluate_gpu_acceptance finishes the sentence.
+            crit = _crit("throttle", 6, "No thermal or power-brake throttling",
+                         "WARN",
+                         "; ".join(f"{k} in {v} sample(s)" for k, v in hot.items())
+                         + " -- clocks reduced under sustained load. Not a "
+                           "Sch 4 para 4 criterion")
+            crit["_thermal_cap_note"] = cap_note
+            out.append(crit)
         else:
             # State the negative outright. "sw_power_cap active, which is
             # expected" is true but answers a question nobody asked; what the
@@ -1333,6 +1332,33 @@ def build_acceptance_context(inventory=None, all_scripts=None) -> dict:
     return ctx
 
 
+def _finish_thermal_note(criteria):
+    """Append the functional result to a thermal-throttle WARN, from evidence.
+
+    The note used to state "the DCGM diagnostic passed" unconditionally, and a
+    single-GPU host where DCGM never ran (a "1 GPU found" discovery miscount)
+    printed it on a REJECT certificate. "No fault was found" is only said when
+    #5 and #4 both actually passed; otherwise the note says which did not.
+    """
+    by_id = {c["id"]: c for c in criteria}
+    for c in criteria:
+        cap_note = c.pop("_thermal_cap_note", None)
+        if cap_note is None:
+            continue
+        diag_ok = (by_id.get("stress_present") or {}).get("status") == "PASS"
+        burn_ok = ((by_id.get("compute_correct") or {}).get("status") == "PASS"
+                   and (by_id.get("compute_errors") or {}).get("status") != "FAIL")
+        diag = ("the DCGM diagnostic passed" if diag_ok else
+                "the DCGM diagnostic did not complete cleanly (see #5)")
+        arith = ("gpu-burn returned OK with no computation errors" if burn_ok else
+                 "gpu-burn gave no clean verdict for this GPU (see #4)")
+        if diag_ok and burn_ok:
+            c["detail"] += f", and no fault was found in the GPU: {diag} and {arith}"
+        else:
+            c["detail"] += f"; a fault-free result is not established: {diag}; {arith}"
+        c["detail"] += f" ({cap_note})"
+
+
 def evaluate_gpu_acceptance(gpu, stress, burn, config=None, context=None):
     """Evaluate one GPU against the acceptance criteria."""
     idx = int_or_none(gpu.get("gpu_index")) or 0
@@ -1350,6 +1376,7 @@ def evaluate_gpu_acceptance(gpu, stress, burn, config=None, context=None):
     criteria += _check_stress(idx, stress, _stress_results_for_gpu(stress, idx), context)
     criteria += _check_burn(idx, burn, tel, delta, context)
     criteria += _check_cumulative(idx, stress, burn)
+    _finish_thermal_note(criteria)
 
     if any(c["status"] == "FAIL" for c in criteria):
         verdict = "REJECT"
