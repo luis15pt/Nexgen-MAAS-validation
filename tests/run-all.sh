@@ -1723,6 +1723,33 @@ check("FAILED" in failed and "remediation" in failed.lower(),
 check("block erase" in block,
       "the fallback method is named, not folded into 'sanitised'")
 
+# A signature with a zeroed first MiB came from the kernel's cached partition
+# list, not the device. It stays on the page, labelled, beside the read-back
+# that explains it; without the zeroed read-back it is shown bare.
+ZERO = sc.ZERO_MIB_SHA256
+def nvme_row(resid, first, last):
+    return {"report_metadata": {"mode": "sanitize"}, "verdict": {"overall": "PASS"},
+            "media": [{"physical_media": True, "device": "/dev/nvme0",
+                       "device_type": "nvme", "method": "nvme-sanitize-crypto",
+                       "method_level": "purge", "result": "success",
+                       "verification": {"serial_matches": True,
+                                        "residual_filesystem_signature": resid,
+                                        "read_back": {"first_mib_sha256": first,
+                                                      "last_mib_sha256": last}}}]}
+cached = sc.generate_certificate(nvme_row("LVM2_member", ZERO, ZERO))
+check("LVM2_member" in cached and "cached, not on disk" in cached
+      and "first and last MiB read back as zeros" in cached
+      and "kernel's record of partitions" in cached,
+      "a signature over a zeroed first MiB is kept, labelled cached, with the read-back shown")
+live = sc.generate_certificate(nvme_row("LVM2_member", "ab" * 32, ZERO))
+check("signature: LVM2_member" in live and "cached, not on disk" not in live
+      and "read back as zeros" not in live,
+      "a signature without a zeroed read-back is shown bare, never explained away")
+clean = sc.generate_certificate(nvme_row(None, ZERO, ZERO))
+check("no filesystem signature" in clean and "cached, not on disk" not in clean
+      and "kernel's record of partitions" not in clean,
+      "a clean device gets the read-back line and no cached-signature note")
+
 # Section 14 is a human's job and the document does not pretend otherwise.
 # There is no sign-off block: a checklist for someone to tick is a
 # release-approval artefact, and this document's job is to show what was

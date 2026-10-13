@@ -68,6 +68,24 @@ METHOD_LABELS = {
     "not-applicable":        "Not applicable",
 }
 
+# sha256 of one MiB of zero bytes: the read-back hash of a region that holds
+# nothing. Script 95 hashes the first and last MiB of each probed device.
+ZERO_MIB_SHA256 = "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58"
+
+# Script 95 takes the signature from `blkid -p` (reads the device) and, when
+# that finds nothing, from `lsblk` (reads udev's record of the partitions the
+# kernel still holds from before the erase). A partition table and every
+# whole-device volume label sit in the first MiB, so with that MiB zero
+# `blkid -p` has nothing to find and any signature reported came from the
+# cached view.
+CACHED_SIGNATURE_NOTE = (
+    "Where a signature is marked <i>cached, not on disk</i>, it was reported from "
+    "the kernel's record of partitions that existed before the erase, not read "
+    "from the device. The first MiB of the device, which holds the partition "
+    "table and volume headers, read back as zeros after the erase, so the "
+    "partitions it names no longer exist on the media."
+)
+
 DEVICE_TYPE_LABELS = {
     "nvme":              "NVMe SSD",
     "bmc-virtual-media": "BMC virtual media (emulated, not in the chassis)",
@@ -219,6 +237,7 @@ def render_evidence_table(data: dict) -> str:
             "<th>Completed (UTC)</th><th>Result</th><th>Verification</th></tr>")
 
     rows = []
+    cached_seen = False
     for m in media:
         path = m.get("device") or ""
         via = m.get("reached_via") or ""
@@ -251,10 +270,20 @@ def render_evidence_table(data: dict) -> str:
             vbits.append("serial re-read matches")
         elif verif.get("serial_matches") is False:
             vbits.append('<span class="bad">serial re-read DIFFERS</span>')
+        read_back = verif.get("read_back") or {}
+        zeroed = (read_back.get("first_mib_sha256") == ZERO_MIB_SHA256
+                  and read_back.get("last_mib_sha256") == ZERO_MIB_SHA256)
         if verif.get("residual_filesystem_signature"):
-            vbits.append("signature: %s" % escape(str(verif["residual_filesystem_signature"])))
+            sig = escape(str(verif["residual_filesystem_signature"]))
+            if zeroed:
+                cached_seen = True
+                vbits.append("signature: %s <i>cached, not on disk</i>" % sig)
+            else:
+                vbits.append("signature: %s" % sig)
         elif verif:
             vbits.append("no filesystem signature")
+        if zeroed:
+            vbits.append("first and last MiB read back as zeros")
         vhtml = "<br>".join(vbits) if vbits else '<span class="dim">--</span>'
 
         rows.append(
@@ -271,6 +300,8 @@ def render_evidence_table(data: dict) -> str:
                vhtml))
 
     out = ['<div class="scroll"><table class="ev">%s%s</table></div>' % (head, "".join(rows))]
+    if cached_seen:
+        out.append('<p class="note">%s</p>' % CACHED_SIGNATURE_NOTE)
 
     reasons = [(m.get("device"), m.get("reached_via"), m.get("method_reason"))
                for m in media if m.get("method_reason")]
