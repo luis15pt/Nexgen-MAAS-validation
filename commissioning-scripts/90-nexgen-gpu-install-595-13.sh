@@ -359,6 +359,56 @@ detect_gpus() {
 ###############################################################################
 # INSTALL PACKAGES
 ###############################################################################
+###############################################################################
+# HELPER: Choose the driver package to install. Prints it on stdout.
+#
+# Keeps the pin unless the pinned package is genuinely absent from the index.
+# The old check piped `apt-cache policy` into `grep -q` under pipefail, so a
+# non-zero apt-cache exit failed it even with the Candidate line printed; with
+# stderr discarded and the dump cut to `head -5`, nothing showed why. Any newer
+# -server-open branch then won, so every 595 run silently installed 615.
+###############################################################################
+resolve_driver_pkg() {
+    local pinned="$1" policy rc candidate newest
+    # Inside `if` so a non-zero exit is captured, not reported by the ERR trap.
+    if policy=$(apt-cache policy "$pinned" 2>&1); then rc=0; else rc=$?; fi
+    candidate=$(awk '$1 == "Candidate:" {print $2; exit}' <<<"$policy")
+
+    if [[ -n "$candidate" && "$candidate" != "(none)" ]]; then
+        if [[ $rc -ne 0 ]]; then
+            warn "apt-cache policy exited $rc but lists candidate $candidate -- keeping the pin. Full output:"
+            printf '%s\n' "$policy" >&2
+        fi
+        log "Driver candidate: $pinned $candidate"
+        echo "$pinned"
+        return 0
+    fi
+
+    warn "$pinned has no installable candidate (apt-cache policy exit $rc). Full output:"
+    printf '%s\n' "$policy" >&2
+
+    # Listed in the index under its own name: a candidate problem, not a
+    # missing branch. Keep the pin and let apt-get install say what is wrong,
+    # rather than swap the driver version under the acceptance run.
+    if [[ -n "$(apt-cache search --names-only "^${pinned}\$" 2>/dev/null)" ]]; then
+        warn "apt-cache search lists $pinned -- keeping the pin"
+        echo "$pinned"
+        return 0
+    fi
+
+    # Genuinely absent (e.g. the branch is not yet published): degrade to the
+    # newest -server-open branch. awk reads all input, so no early pipe close.
+    newest=$(apt-cache search --names-only '^nvidia-driver-[0-9]+-server-open$' 2>/dev/null \
+        | grep -oP 'nvidia-driver-\K[0-9]+' | sort -rn | awk 'NR == 1')
+    if [[ -n "$newest" ]]; then
+        warn "Falling back to nvidia-driver-${newest}-server-open -- $pinned is not in the package index"
+        echo "nvidia-driver-${newest}-server-open"
+    else
+        warn "No nvidia-driver-*-server-open in the package index -- attempting $pinned anyway"
+        echo "$pinned"
+    fi
+}
+
 install_packages() {
     log "=== Installing packages ==="
     export DEBIAN_FRONTEND=noninteractive
@@ -396,27 +446,7 @@ install_packages() {
     log "Pinned driver: $driver_pkg"
     log "Pinned CUDA:   $cuda_pkg"
 
-    # Fallback if the pinned driver branch has no installable candidate
-    # (e.g. 595 not yet published -- degrade to the newest -server-open branch).
-    if ! apt-cache policy "$driver_pkg" 2>/dev/null | grep -qE 'Candidate:\s*[0-9]'; then
-        warn "$driver_pkg has no installable candidate -- searching for newest nvidia-driver-*-server-open..."
-        # Dump the raw policy output: a false negative here (e.g. cache not
-        # yet refreshed, epoch-prefixed versions) otherwise masks itself.
-        apt-cache policy "$driver_pkg" 2>&1 | head -5 >&2 || true
-        local newest
-        newest=$(apt-cache search --names-only '^nvidia-driver-[0-9]+-server-open$' 2>/dev/null \
-            | grep -oP 'nvidia-driver-\K[0-9]+' | sort -rn | head -1)
-        if [[ -n "$newest" && "nvidia-driver-${newest}-server-open" != "$driver_pkg" ]]; then
-            driver_pkg="nvidia-driver-${newest}-server-open"
-            warn "Falling back to $driver_pkg"
-        elif [[ -n "$newest" ]]; then
-            # Search found the pinned package itself => the policy check was
-            # a false negative, not a missing package. Proceed with the pin.
-            warn "apt-cache search DOES list $driver_pkg -- candidate check false negative; keeping the pin"
-        else
-            warn "No nvidia-driver-*-server-open candidate found -- attempting $driver_pkg anyway"
-        fi
-    fi
+    driver_pkg=$(resolve_driver_pkg "$driver_pkg")
 
     log "Installing $driver_pkg and $cuda_pkg..."
     apt-get install -y -qq "$driver_pkg" "$cuda_pkg" 2>&1 | tail -10 >&2 || {

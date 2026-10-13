@@ -1643,6 +1643,47 @@ check("Chassis &amp; Components" in html2,
 sys.exit(rc)
 PYEOF
 
+hdr "Driver pin is kept unless the package is genuinely absent"
+# Two live runs printed "Candidate: 595.91.07" and still installed 615: the
+# check failed on apt-cache's exit status under pipefail, and any newer branch
+# then won. The decision is lifted out of script 90 and driven by a fake
+# apt-cache, since the rest of the script installs packages for real.
+AC=$(mktemp -d)
+cat > "$AC/apt-cache" <<'STUB'
+#!/bin/bash
+case "$1" in
+  policy) printf '%b' "$STUB_POLICY"; exit "${STUB_POLICY_RC:-0}" ;;
+  search) pat="${@: -1}"
+          for p in $STUB_INDEX; do grep -qE "$pat" <<<"$p" && echo "$p - NVIDIA driver metapackage"; done ;;
+esac
+STUB
+chmod +x "$AC/apt-cache"
+pick() { # env assignments... -> package chosen for the 595 pin
+    env PATH="$AC:$PATH" "$@" bash -c '
+        set -o pipefail
+        log() { :; }; warn() { :; }
+        eval "$(sed -n "/^resolve_driver_pkg() {/,/^}/p" commissioning-scripts/90-nexgen-gpu-install-595-13.sh)"
+        resolve_driver_pkg nvidia-driver-595-server-open' 2>/dev/null
+}
+CAND='nvidia-driver-595-server-open:\n  Installed: (none)\n  Candidate: 595.91.07-0ubuntu0.22.04.1\n'
+NONE='nvidia-driver-595-server-open:\n  Installed: (none)\n  Candidate: (none)\n'
+IDX='nvidia-driver-570-server-open nvidia-driver-595-server-open nvidia-driver-615-server-open'
+for spec in \
+    "candidate, apt-cache exit 100 (the live failure)|595|STUB_POLICY=$CAND|STUB_POLICY_RC=100|STUB_INDEX=$IDX" \
+    "candidate, clean exit|595|STUB_POLICY=$CAND|STUB_POLICY_RC=0|STUB_INDEX=$IDX" \
+    "no candidate but listed, newer branch exists|595|STUB_POLICY=$NONE|STUB_POLICY_RC=0|STUB_INDEX=$IDX" \
+    "pinned branch not published|615|STUB_POLICY=|STUB_POLICY_RC=0|STUB_INDEX=nvidia-driver-570-server-open nvidia-driver-615-server-open" \
+    "empty index|595|STUB_POLICY=|STUB_POLICY_RC=0|STUB_INDEX="; do
+    IFS='|' read -r lbl want e1 e2 e3 <<<"$spec"
+    got=$(pick "$e1" "$e2" "$e3")
+    if [[ "$got" == "nvidia-driver-${want}-server-open" ]]; then
+        printf '  ok    %-46s -> %s\n' "$lbl" "$got"
+    else
+        printf '  FAIL  %-46s -> got %s, want %s\n' "$lbl" "${got:-<nothing>}" "$want"; rc=1
+    fi
+done
+rm -rf "$AC"
+
 hdr "Residual signature is read from the media, not udev's record of it"
 # verify_device only probes a namespace that exists as a block device, which a
 # test machine does not have, so the probe is exercised as the function itself.
