@@ -371,6 +371,57 @@ def main():
             rc = 1
         print(f"{'ok  ' if ok else 'FAIL'} burn_script_ran, {label:36} {str(want):5} {str(got):5}")
 
+    # --- Per-GPU attribution of host-wide evidence ----------------------
+    # From a real host: dcgmi 4.x reported "software" as eight untagged
+    # results with only the eighth failing, and the burn-in Xid list held
+    # codes the kernel logged against one PCI address. Both were counted
+    # against all eight GPUs.
+    print("-" * 64)
+    print("Per-GPU attribution:")
+    sw8 = {"dcgm_diagnostics": {"test_results": [{"test": "software", "results":
+           [{"gpu_id": None, "status": "Pass"}] * 7 + [{"gpu_id": None, "status": "Fail"}]}]}}
+    sw1 = {"dcgm_diagnostics": {"test_results": [{"test": "software", "results":
+           [{"gpu_id": None, "status": "Fail"}]}]}}
+    pos_cases = [
+        (sw8, 0, ["Pass"], "untagged per-GPU results read by position (GPU0)"),
+        (sw8, 7, ["Fail"], "untagged per-GPU results read by position (GPU7)"),
+        (sw1, 3, ["Fail"], "a single untagged result applies to every GPU"),
+    ]
+    for stress, idx, want, label in pos_cases:
+        got = [r["status"] for r in dc._stress_results_for_gpu(stress, idx)]
+        ok = got == want
+        if not ok:
+            rc = 1
+        print(f"{'ok  ' if ok else 'FAIL'} {label:52} {want} {got}")
+
+    import base64
+    buses = [g["pci_bus_id"] for g in INV["gpus"]]
+
+    def _burn_dmesg(text, crit=(48,)):
+        b = _burn_xid(crit=list(crit))
+        b["burn_in"]["xid"]["dmesg_window_b64"] = base64.b64encode(text.encode()).decode()
+        return b
+
+    line = "[ 995.03] NVRM: Xid (PCI:0000:{}): 48, An uncorrectable double bit error\n"
+    xid_cases = [
+        # dmesg,               GPU bus,   known buses, want
+        (line.format("22:00"), buses[0], buses, "PASS", "Xid on another GPU's address is not this GPU's"),
+        (line.format("1b:00"), buses[0], buses, "FAIL", "Xid on this GPU's own address fails it"),
+        (line.format("ff:00"), buses[0], buses, "FAIL", "Xid on an address that is no GPU stays host-wide"),
+        ("",                   buses[0], buses, "FAIL", "Xid with no kernel line stays host-wide"),
+        (line.format("22:00"), None,     buses, "FAIL", "GPU with unknown address keeps every Xid"),
+        (line.format("22:00"), buses[0], None,  "FAIL", "no bus list in context keeps every Xid"),
+        (line.format("22:00") + line.format("1b:00"), buses[0], buses, "FAIL",
+         "Xid logged on two GPUs fails both"),
+    ]
+    for text, bus, known, want, label in xid_cases:
+        got = _crit_of(dc._check_burn(0, _burn_dmesg(text), None, None,
+                                      {"gpu_pci_buses": known}, bus), "xid")["status"]
+        ok = got == want
+        if not ok:
+            rc = 1
+        print(f"{'ok  ' if ok else 'FAIL'} {label:52} {want:5} {got:5}")
+
     # Test-age reporting is separate: we know the test date, not the ship date.
     age = dc.acceptance_test_age_days(INV, STRESS, BURN)
     print("-" * 64)

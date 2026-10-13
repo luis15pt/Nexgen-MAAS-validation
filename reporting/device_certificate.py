@@ -925,7 +925,7 @@ def _check_cumulative(gpu_index, stress, burn):
                   "No new faults across the whole test sequence", "PASS", note)]
 
 
-def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None):
+def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None, pci_bus=None):
     out = []
     if not burn:
         # A script MAAS records as Passed but which emitted no parseable report
@@ -1099,14 +1099,18 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None):
                          "FAIL", f"{int(gb_errors)} computation error(s) counted"))
 
     xid = b.get("xid") or {}
-    crit_list = xid.get("critical") or []
-    other = xid.get("other") or []
+    crit_list, other, elsewhere = _xid_attribution(
+        xid, pci_bus, (context or {}).get("gpu_pci_buses"))
     if crit_list:
         out.append(_crit("xid", 4, "No disqualifying Xid events", "FAIL",
                          "Xid " + ", ".join(str(x) for x in crit_list)))
     elif other:
         out.append(_crit("xid", 4, "No disqualifying Xid events", "WARN",
                          "non-disqualifying Xid " + ", ".join(str(x) for x in other)))
+    elif elsewhere:
+        out.append(_crit("xid", 4, "No disqualifying Xid events", "PASS",
+                         "none on this GPU; Xid " + ", ".join(str(x) for x in elsewhere)
+                         + " in the window were logged against another GPU's PCI address"))
     else:
         out.append(_crit("xid", 4, "No disqualifying Xid events", "PASS",
                          "none in the burn-in window"))
@@ -1126,12 +1130,63 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None):
     return out
 
 
+_XID_LINE = re.compile(r"NVRM: Xid \(PCI:([0-9A-Fa-f]{4,8}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2})"
+                       r"(?:\.[0-9A-Fa-f])?\):\s*(\d+)")
+
+
+def _pci_key(bus):
+    """Normalise "00000000:E9:00.0" and "0000:e9:00" to "0000:e9:00"."""
+    m = re.match(r"\s*([0-9A-Fa-f]{4,8}):([0-9A-Fa-f]{2}):([0-9A-Fa-f]{2})", str(bus or ""))
+    if not m:
+        return None
+    return f"{m.group(1)[-4:]}:{m.group(2)}:{m.group(3)}".lower()
+
+
+def _xid_attribution(xid, pci_bus, gpu_buses=None):
+    """Split the host-wide Xid lists into what belongs to this GPU.
+
+    The burn-in script classifies Xid codes for the whole host, but the kernel
+    names the PCI address on every Xid line. A code is withheld from this GPU
+    only when every line raising it names a *different* GPU of this host. A
+    code with no line in the window, a line on an address that is not a known
+    GPU, or a GPU whose own address is unknown keeps the host-wide behaviour:
+    the code counts against every GPU. Returns (critical, other, elsewhere).
+    """
+    crit = list(xid.get("critical") or [])
+    other = list(xid.get("other") or [])
+    mine = _pci_key(pci_bus)
+    known = {k for k in (_pci_key(x) for x in (gpu_buses or [])) if k}
+    if not mine or mine not in known:
+        return crit, other, []
+    seen = {}
+    for bus, code in _XID_LINE.findall(decode_b64_text(xid.get("dmesg_window_b64"))):
+        seen.setdefault(int(code), set()).add(_pci_key(bus))
+
+    def belongs_elsewhere(code):
+        buses = seen.get(int_or_none(code))
+        return bool(buses) and mine not in buses and buses <= known
+
+    elsewhere = [x for x in crit + other if belongs_elsewhere(x)]
+    return ([x for x in crit if not belongs_elsewhere(x)],
+            [x for x in other if not belongs_elsewhere(x)], elsewhere)
+
+
 def _stress_results_for_gpu(stress, gpu_index):
+    """DCGM results that apply to one GPU.
+
+    A result tagged with a gpu_id applies to that GPU. dcgmi 4.x emits one
+    untagged result per GPU, in GPU order, so when a test has several results
+    and none carries an id they are read by position. A single untagged result
+    is a host-wide verdict and applies to every GPU.
+    """
     diag = (stress or {}).get("dcgm_diagnostics") or {}
     out = []
     for t in diag.get("test_results") or []:
-        for r in t.get("results") or []:
-            gid = r.get("gpu_id")
+        results = t.get("results") or []
+        positional = (len(results) > 1
+                      and all(r.get("gpu_id") is None for r in results))
+        for pos, r in enumerate(results):
+            gid = pos if positional else r.get("gpu_id")
             if gid is None or int_or_none(gid) == gpu_index:
                 out.append({"test": t.get("test"), "status": r.get("status"),
                             "info": r.get("info")})
@@ -1334,13 +1389,16 @@ def build_acceptance_context(inventory=None, all_scripts=None) -> dict:
     burn_script_ran   whether MAAS holds a result for the burn-in script, which
                       separates "never uploaded" from "ran and produced no
                       parseable report".
+    gpu_pci_buses     every GPU's bus ID, so an Xid the kernel logged against
+                      one GPU is not counted against the others.
     """
     sys_info = (inventory or {}).get("system") or {}
     gpus = (inventory or {}).get("gpus") or []
     dev_id = ((gpus[0].get("identity") or {}).get("pci_device_id")
               if gpus else None)
     ctx = {"nvlink_present": sys_info.get("nvlink_present"),
-           "pci_device_id": dev_id}
+           "pci_device_id": dev_id,
+           "gpu_pci_buses": [g.get("pci_bus_id") for g in gpus if g.get("pci_bus_id")]}
 
     if all_scripts is None:
         ctx["burn_script_ran"] = None
@@ -1394,7 +1452,7 @@ def evaluate_gpu_acceptance(gpu, stress, burn, config=None, context=None):
     criteria += _check_memory(gpu, cfg)
     criteria += _check_pcie(gpu, delta, csb_delta, bool(b))
     criteria += _check_stress(idx, stress, _stress_results_for_gpu(stress, idx), context)
-    criteria += _check_burn(idx, burn, tel, delta, context)
+    criteria += _check_burn(idx, burn, tel, delta, context, gpu.get("pci_bus_id"))
     criteria += _check_cumulative(idx, stress, burn)
     _finish_thermal_note(criteria)
 
