@@ -1303,6 +1303,50 @@ if c6["status"] == "PASS" and "no hardware thermal or power-brake slowdown" in c
 else:
     print("  FAIL  #6 clean wording: %s" % c6["detail"]); rc = 1
 
+# --no-thermal-warning grades a thermal-only slowdown PASS instead of WARN. The
+# measured sample counts must survive that regrade: the flag changes the
+# reading, not the evidence, and a report that dropped the counts would be
+# asserting something the telemetry does not say.
+dc.SUPPRESS_THERMAL_WARNING = True
+try:
+    sup = dc.evaluate_gpu_acceptance(inv["gpus"][0], stress, b)
+    c6s = [c for c in sup["criteria"] if c["reject"] == 6][0]
+    if c6s["status"] == "PASS":
+        print("  ok    --no-thermal-warning grades thermal-only slowdown PASS")
+    else:
+        print("  FAIL  suppressed #6 status: %s" % c6s["status"]); rc = 1
+    if "hw_thermal_slowdown in 41" in c6s["detail"]:
+        print("  ok    and still reports the measured sample counts")
+    else:
+        print("  FAIL  suppressed #6 dropped the counts: %s" % c6s["detail"]); rc = 1
+    # The flag must lift the throttle criterion and nothing else. Asserting
+    # ACCEPT outright would depend on whatever else this fixture happens to
+    # flag, so compare the sets: throttle drops out, nothing new appears.
+    off_bad = {c["id"] for c in ev["criteria"] if c["status"] != "PASS"}
+    on_bad = {c["id"] for c in sup["criteria"] if c["status"] != "PASS"}
+    if off_bad - on_bad == {"throttle"} and not on_bad - off_bad:
+        print("  ok    and throttle is the only criterion the flag lifts")
+    else:
+        print("  FAIL  suppressed non-PASS set %s against %s"
+              % (sorted(on_bad), sorted(off_bad))); rc = 1
+    # The flag is about temperature only. A power brake is asserted by power
+    # delivery and must fail whatever the flag says.
+    c6sb = [c for c in dc.evaluate_gpu_acceptance(inv["gpus"][0], stress, bb)["criteria"]
+            if c["reject"] == 6][0]
+    if c6sb["status"] == "FAIL":
+        print("  ok    and a power brake still FAILs under the flag")
+    else:
+        print("  FAIL  suppressed power brake: %s" % c6sb["status"]); rc = 1
+finally:
+    dc.SUPPRESS_THERMAL_WARNING = False
+
+# Default off: the honest grading stays the norm for everything else.
+if [c for c in dc.evaluate_gpu_acceptance(inv["gpus"][0], stress, b)["criteria"]
+    if c["reject"] == 6][0]["status"] == "WARN":
+    print("  ok    and the flag defaults off")
+else:
+    print("  FAIL  thermal grading did not revert to WARN"); rc = 1
+
 sys.exit(rc)
 PYEOF
 

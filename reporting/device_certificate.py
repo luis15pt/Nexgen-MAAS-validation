@@ -442,6 +442,15 @@ def _extract_json(text: str) -> dict | None:
 #     best generation BOTH ends support, and that width is full. A Gen4 host
 #     capping a Gen5 card is reported, not failed -- which is what the
 #     specification's own Gen4-host clause asks for.
+
+# Thermal-only slowdown is graded WARN by default (see _check_burn). Set by
+# --no-thermal-warning, this grades it PASS instead, leaving the measured
+# sample counts in the detail untouched -- the reading changes, the evidence
+# does not. Off by default: the honest grading stays the norm, and suppression
+# is an explicit, per-invocation decision recorded in the command that built
+# the report. hw_power_brake_slowdown is unaffected and still FAILs.
+SUPPRESS_THERMAL_WARNING = False
+
 ACCEPTANCE_MAX_AGE_DAYS = 30
 ACCEPTANCE_REPLAY_DELTA_LIMIT = 10
 XID_DISQUALIFYING = {48, 63, 64, 79, 92, 94, 95}
@@ -1007,6 +1016,17 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None):
                 detail += "; " + "; ".join(f"{k} in {v} sample(s)" for k, v in hot.items())
             out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
                              "FAIL", detail + f" ({cap_note})"))
+        elif hot and SUPPRESS_THERMAL_WARNING:
+            # Same measurement, graded PASS rather than WARN. The per-reason
+            # sample counts are still stated, so the detail reports what the
+            # telemetry recorded; what is withheld is the amber grading and the
+            # commentary around it. Nothing upstream changes -- the burn-in
+            # still samples every throttle reason, and the raw counts remain in
+            # the JSON embedded in this report.
+            out.append(_crit("throttle", 6, "No thermal or power-brake throttling",
+                             "PASS",
+                             "; ".join(f"{k} in {v} sample(s)" for k, v in hot.items())
+                             + f"; no hardware power-brake slowdown ({cap_note})"))
         elif hot:
             # Recorded as an observation, not a diagnosis. What is evidenced is
             # that the card reduced clocks under sustained load; the cause is
@@ -4651,12 +4671,19 @@ Examples:
     # Output
     p.add_argument("--output", "-o", metavar="FILE", help="Output HTML file (default: stdout)")
     p.add_argument("--quiet", "-q", action="store_true", help="Suppress progress messages")
+    p.add_argument(
+        "--no-thermal-warning", action="store_true",
+        help="Grade thermal-only slowdown on criterion #6 as PASS rather than "
+             "WARN. The measured sample counts are still reported; only the "
+             "grading changes. A power brake still fails.",
+    )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     args = p.parse_args()
 
-    global _quiet
+    global _quiet, SUPPRESS_THERMAL_WARNING
     _quiet = args.quiet
+    SUPPRESS_THERMAL_WARNING = args.no_thermal_warning
 
     if args.host:
         # === MAAS API MODE ===

@@ -174,6 +174,15 @@ specification, because a literal reading fails healthy hardware:
   Clause 10.1(i). `hw_power_brake_slowdown` stays a **FAIL** — the brake is
   asserted by power delivery rather than temperature, so it is a different fault
   and no airflow work addresses it.
+
+  `--no-thermal-warning` grades a thermal-only slowdown **PASS** instead, which
+  also takes the GPU to `ACCEPT` and removes the acceptance warning it would
+  otherwise raise against the report. The measured per-reason sample counts stay
+  in the detail, and nothing upstream changes: the burn-in still samples every
+  throttle reason and the raw counts remain in the JSON embedded in the report.
+  The flag is **off by default**, so the honest grading is what you get unless
+  the command that built the report explicitly asked otherwise, and it does not
+  touch `hw_power_brake_slowdown`, which still fails.
 - **PCIe.** Links downtrain to Gen1 at idle, so the idle value proves nothing,
   and comparing against a fixed Gen5 would fail every card in a Gen4 host. What
   is checked is that the link reached the best generation *both* ends support,
