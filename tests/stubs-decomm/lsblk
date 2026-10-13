@@ -55,6 +55,9 @@ fi
 # Narrowed to the -no form on purpose: FSTYPE is also one of the columns in the
 # full JSON inventory, and matching on the column name alone hijacked it.
 if [[ "$args" == *FSTYPE* && "$args" != *-J* && "$args" == *-no* ]]; then
+    # STUB_STALE_FSTYPE models udev's record outliving the erase: the kernel
+    # still holds the old partitions, so lsblk keeps naming their contents.
+    [[ -n "${STUB_STALE_FSTYPE:-}" ]] && { echo "$STUB_STALE_FSTYPE"; exit 0; }
     [[ -f ${SD}/stub-destructive-calls ]] && exit 0   # erased: no signature left
     echo "ext4"
     exit 0

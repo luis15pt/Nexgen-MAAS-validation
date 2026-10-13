@@ -1643,6 +1643,29 @@ check("Chassis &amp; Components" in html2,
 sys.exit(rc)
 PYEOF
 
+hdr "Residual signature is read from the media, not udev's record of it"
+# verify_device only probes a namespace that exists as a block device, which a
+# test machine does not have, so the probe is exercised as the function itself.
+# udev's record of the old partitions outlives the erase: lsblk kept naming
+# LVM2_member on namespaces whose first MiB read back as zeros.
+SIGSTATE=$(mktemp -d)
+residual() {
+    ( export PATH="$PWD/tests/stubs-decomm:$PATH" STUB_STATE_DIR="$SIGSTATE" "$@"
+      source <(sed -n '/^safe_run()/p; /^residual_signature()/,/^}/p' \
+                   commissioning-scripts/95-nexgen-storage-sanitize.sh)
+      residual_signature /dev/nvme0n1 )
+}
+sigcheck() {
+    if [[ "$1" == "$2" ]]; then echo "  ok    $3"; else echo "  FAIL  $3 (got '$1', want '$2')"; rc=1; fi
+}
+sigcheck "$(residual)" "ext4" "an unerased device reports its filesystem"
+touch "$SIGSTATE/stub-destructive-calls"
+sigcheck "$(residual STUB_STALE_FSTYPE=LVM2_member)" "" \
+    "after an erase, a stale lsblk FSTYPE is not reported as residual"
+sigcheck "$(residual STUB_RESIDUAL_PTTYPE=gpt)" "gpt" \
+    "a partition table still on the media is reported"
+rm -rf "$SIGSTATE"
+
 hdr "Certificate of Sanitisation carries the evidence, not a summary of it"
 python3 - <<'PYEOF' || rc=1
 import json, os, sys

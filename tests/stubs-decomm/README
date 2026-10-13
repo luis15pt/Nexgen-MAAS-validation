@@ -30,7 +30,12 @@ lsblk     one namespace per controller plus the MegaRAID volume;
           STUB_DIRECT_SATA=1 adds a directly attached SSD, STUB_MOUNTED_TARGET
           gives a device a mountpoint, STUB_NS_MISMATCH=1 hides a namespace
           that nvme list declares, STUB_NO_MOUNTPOINTS=1 models pre-2.37
-          util-linux which has no MOUNTPOINTS column.
+          util-linux which has no MOUNTPOINTS column. STUB_STALE_FSTYPE keeps
+          answering FSTYPE after an erase, as udev's record of the old
+          partitions does on a real host.
+blkid     -p probe of the media: empty once anything is erased.
+          STUB_RESIDUAL_PTTYPE returns a partition table that survived.
+blockdev  --getsize64 and --rereadpt only.
 findmnt   overlay root by default; STUB_ROOT_FSTYPE=ext4 models the case
           section 6 forbids outright.
 hdparm    -I reports the ATA SANITIZE feature set per STUB_ATA_CAPS;

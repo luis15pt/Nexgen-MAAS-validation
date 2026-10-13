@@ -1,7 +1,17 @@
 #!/bin/bash
 # Residual filesystem signatures. Once anything has been erased in this run the
 # probe comes back empty, which is what a sanitised namespace looks like.
+#
+#   STUB_RESIDUAL_PTTYPE  a partition table type (e.g. gpt) that survives the
+#                         erase: returned for -s PTTYPE even after erasing, so
+#                         a probe that only asks for TYPE would miss it
 SD="${STUB_STATE_DIR:-/tmp}"
+if [[ "$*" == *PTTYPE* ]]; then
+    [[ -n "${STUB_RESIDUAL_PTTYPE:-}" ]] && { echo "$STUB_RESIDUAL_PTTYPE"; exit 0; }
+    [[ -f ${SD}/stub-destructive-calls ]] && exit 2
+    echo "gpt"
+    exit 0
+fi
 [[ -f ${SD}/stub-destructive-calls ]] && exit 2
 echo "ext4"
 exit 0

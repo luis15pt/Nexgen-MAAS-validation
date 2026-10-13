@@ -1680,6 +1680,23 @@ block_hashes() {
         '{first_mib_sha256:$f, last_mib_sha256:$l}'
 }
 
+# What the media still identifies itself as after the erase, or nothing.
+# Read the media, never udev's record of it: lsblk FSTYPE answers from the
+# partitions the kernel held before the erase, so a crypto-erased namespace
+# whose first MiB reads back as zeros was being recorded with an LVM2_member
+# "residual" signature. Re-reading the partition table drops those stale
+# partitions; blkid -p then reports only what is on the device -- a
+# filesystem or volume label, or failing that a partition table that
+# survived the erase.
+residual_signature() {
+    local dev="$1" sig
+    safe_run blockdev --rereadpt "$dev" >/dev/null
+    udevadm settle --timeout=10 >/dev/null 2>&1
+    sig=$(safe_run blkid -p -o value -s TYPE "$dev")
+    [[ -z "$sig" ]] && sig=$(safe_run blkid -p -o value -s PTTYPE "$dev")
+    echo "$sig"
+}
+
 verify_device() {
     local dev="$1" dtype="$2" via="$3" expect_serial="$4"
     local reread="" resid="" probe="$dev"
@@ -1717,10 +1734,7 @@ verify_device() {
             ;;
     esac
 
-    if [[ -n "$probe" ]]; then
-        resid=$(safe_run blkid -p -o value -s TYPE "$probe")
-        [[ -z "$resid" ]] && resid=$(safe_run lsblk -no FSTYPE "$probe" | tr -d ' \n')
-    fi
+    [[ -n "$probe" ]] && resid=$(residual_signature "$probe")
 
     local hashes='{"first_mib_sha256":null,"last_mib_sha256":null}'
     [[ -n "$probe" ]] && hashes=$(block_hashes "$probe")
