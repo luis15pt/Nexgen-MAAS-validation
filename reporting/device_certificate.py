@@ -962,10 +962,17 @@ def _check_burn(gpu_index, burn, burn_tel, burn_delta, context=None, pci_bus=Non
                          "no load generator available -- nothing was tested"))
     elif loaded is not None:
         if loaded < required * 0.9:
+            # What was measured, not why. "The load generator did not cover
+            # it" was printed for a passive A100 that ran gpu-burn for the full
+            # window and throttled -- the generator covered it; the card did
+            # not draw. Both causes look the same in this number.
+            frac = _n((burn_tel or {}).get("loaded_power_frac"))
+            at = (f"at least {frac * 100:g}% of its power limit" if frac
+                  else "above the burn-in's loaded-power threshold")
             out.append(_crit("burn_present", 4, "Sustained load applied", "FAIL",
-                             f"this GPU drew load for only {int(loaded)}s of the "
-                             f"{int(required)}s required -- the load generator did "
-                             f"not cover it, so it was not tested"))
+                             f"this GPU drew {at} for only {int(loaded)}s; "
+                             f"{int(required * 0.9)}s of the {int(required)}s run "
+                             f"is required, so sustained load is not evidenced"))
         elif loaded < 1800:
             out.append(_crit("burn_present", 4, "Sustained load applied", "WARN",
                              f"{tool}, this GPU under load {int(loaded)}s, "
@@ -3658,6 +3665,22 @@ def generate_report(
                           and i.get("severity") == "info"
                           and any(m in i.get("issue", "").lower()
                                   for m in BURN_MODE_NOTE_MARKERS))]
+
+    # - Load coverage: burn-ins before this wording change asserted a cause
+    #   ("the load generator did not cover them") that a throttling card also
+    #   produces. Restated as the measurement for data MAAS already holds;
+    #   severity is untouched, and the numbers come from the issue itself. 50%
+    #   because those runs did not record the threshold, and script 99's
+    #   BURN_LOADED_POWER_FRAC default has been 0.5 since it was introduced.
+    for i in all_issues:
+        m = (re.match(r"(\d+) GPU\(s\) were not under load for the required "
+                      r"(\d+)s -- the load generator did not cover them",
+                      i.get("issue", ""))
+             if i.get("source") == "Burn-In" else None)
+        if m:
+            i["issue"] = ("%s GPU(s) drew at least 50%% of their power limit for "
+                          "less than the required %ss -- sustained load is not "
+                          "evidenced for them" % m.groups())
 
     _gpus0 = (inventory or {}).get("gpus") or []
     _dev_id = str(((_gpus0[0].get("identity") or {}).get("pci_device_id")

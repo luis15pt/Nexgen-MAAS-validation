@@ -664,6 +664,7 @@ aggregate_samples() {
                 samples:       ($s | length),
                 loaded_samples: $loaded,
                 loaded_seconds: ($loaded * $interval),
+                loaded_power_frac: $frac,
                 power_w:       ($s | stats(.power_w)),
                 power_limit_w: ($s | stats(.power_limit_w) | if . then .max else null end),
                 temp_gpu_c:    ($s | stats(.temp_gpu_c)),
@@ -1208,6 +1209,12 @@ main() {
     # covered some cards: a real run loaded 4 of 8 GPUs for the full window and
     # the other 4 for ~290s, and reported PASS. A card that was not loaded was
     # not tested, so this fails in either mode.
+    #
+    # The issue states what was measured -- time at or above the loaded-power
+    # threshold -- not why it fell short. A card that throttles under a working
+    # load generator falls short too: a passive A100 ran gpu-burn for the full
+    # 3636s and drew >=50% of its limit for 2360s, and "the load generator did
+    # not cover it" was false.
     local required_loaded under_loaded
     required_loaded=$(awk -v d="$BURN_DURATION" -v f="${BURN_COVERAGE_FRAC:-0.9}" \
         'BEGIN{printf "%d", d * f}')
@@ -1221,7 +1228,8 @@ main() {
               | "GPU \(.gpu_index): \(.loaded_seconds // 0)s"] | join(", ")')
         issues=$(printf '%s' "$issues" | jq \
             --argjson n "$under_loaded" --argjson r "$required_loaded" --arg d "$under_detail" \
-            '. + [{"issue":"\($n) GPU(s) were not under load for the required \($r)s -- the load generator did not cover them, so they were not tested","severity":"critical","details":$d}]')
+            --arg pct "$(awk -v f="${BURN_LOADED_POWER_FRAC:-0.5}" 'BEGIN{printf "%g", f * 100}')" \
+            '. + [{"issue":"\($n) GPU(s) drew at least \($pct)% of their power limit for less than the required \($r)s -- sustained load is not evidenced for them","severity":"critical","details":$d}]')
         err "Load coverage shortfall: $under_detail (need ${required_loaded}s each)"
     fi
 

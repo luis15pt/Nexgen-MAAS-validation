@@ -1275,6 +1275,33 @@ if (c6n["status"] == "WARN" and "no fault was found" not in c6n["detail"]
 else:
     print("  FAIL  #6 claims a result #5 does not show: %s" % c6n["detail"]); rc = 1
 
+# A load shortfall is stated as the measurement, not a cause. A passive A100
+# ran gpu-burn for the full window, throttled, and was told "the load
+# generator did not cover it".
+bs = copy.deepcopy(burn0)
+for t in bs["burn_in"]["telemetry"]:
+    t["loaded_seconds"] = 2360
+    t["loaded_power_frac"] = 0.5
+bs["burn_in"]["duration_requested_seconds"] = 3600
+c4 = [c for c in dc.evaluate_gpu_acceptance(inv["gpus"][0], stress, bs)["criteria"]
+      if c["id"] == "burn_present"][0]
+if (c4["status"] == "FAIL" and "did not cover" not in c4["detail"]
+        and "at least 50% of its power limit for only 2360s" in c4["detail"]):
+    print("  ok    #4 shortfall states the measurement, not a cause")
+else:
+    print("  FAIL  #4 shortfall wording: %s %s" % (c4["status"], c4["detail"])); rc = 1
+# Runs already in MAAS carry the old issue text; the report restates it.
+bs["verdict"] = {"overall": "FAIL", "issues": [{
+    "issue": "1 GPU(s) were not under load for the required 3240s -- the load "
+             "generator did not cover them, so they were not tested",
+    "severity": "critical", "details": "GPU 0: 2360s"}]}
+h = dc.generate_report(None, inv, stress, burnin=bs)
+if ("did not cover them" not in h and "1 GPU(s) drew at least 50% of their power "
+        "limit for less than the required 3240s" in h):
+    print("  ok    a stored legacy shortfall issue is restated without the cause")
+else:
+    print("  FAIL  legacy shortfall issue still asserts a cause"); rc = 1
+
 # A power brake is asserted by power delivery, not temperature, so no amount of
 # airflow work addresses it. It is a different fault and stays FAIL.
 bb = copy.deepcopy(burn0)
