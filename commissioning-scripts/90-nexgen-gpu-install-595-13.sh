@@ -27,8 +27,13 @@ DCGM_CUDA_MAJOR="${DCGM_CUDA_MAJOR:-13}"
 # Manager starts. Blackwell/NVL fabric training can take a while; a restart +
 # IMEX nudge is attempted at the halfway mark.
 FABRIC_READY_TIMEOUT="${FABRIC_READY_TIMEOUT:-300}"
+# The first nvidia-smi after modprobe is what boots GSP on every GPU, so it can
+# block for a minute or more on 8 Blackwell cards. NVSMI_CALL_TIMEOUT bounds a
+# single call; NVSMI_READY_TIMEOUT bounds the retry window for fast failures.
+NVSMI_CALL_TIMEOUT="${NVSMI_CALL_TIMEOUT:-240}"
+NVSMI_READY_TIMEOUT="${NVSMI_READY_TIMEOUT:-180}"
 WORK_DIR="/tmp/gpu-install-$$"
-SCRIPT_VERSION="2.1.6"
+SCRIPT_VERSION="2.1.7"
 
 ###############################################################################
 # LOGGING
@@ -339,10 +344,13 @@ setup_fabric_manager() {
 detect_gpus() {
     log "=== Detecting NVIDIA GPUs ==="
 
-    if lspci | grep -qi "nvidia"; then
+    # No `grep -q` here: it closes the pipe on the first match, lspci dies of
+    # SIGPIPE on a long device list, and pipefail then fails the whole test
+    # (this is why big HPE boxes logged "detected via sysfs").
+    if [[ -n "$(lspci 2>/dev/null | grep -i "nvidia")" ]]; then
         log "NVIDIA GPU(s) detected via lspci"
         return 0
-    elif lspci -n | grep -qi "10de:"; then
+    elif [[ -n "$(lspci -n 2>/dev/null | grep -i "10de:")" ]]; then
         log "NVIDIA GPU(s) detected via vendor ID 10de"
         update-pciids 2>/dev/null >&2 || true
         return 0
@@ -476,6 +484,87 @@ install_packages() {
 }
 
 ###############################################################################
+# HELPER: Log the kernel's view of every GPU memory BAR
+###############################################################################
+# The nvidia probe needs BAR0 (registers) AND BAR1 (framebuffer aperture). If
+# either is unassigned it rejects the device at modprobe time ("This PCI I/O
+# region assigned to your NVIDIA device is invalid"), modprobe still returns
+# 0, and nvidia-smi then fails instantly with "No devices were found". BAR1 is
+# the one the BIOS runs out of room for: 128 GB per card on a 96 GB RTX PRO
+# 6000, 128 GB on H100/H200. The setpci BAR0 check reads only the low 32 bits,
+# which on a 64-bit BAR legitimately shows just the flag bits (0x0000000c), so
+# the sysfs resource file is the view to trust. One line per GPU; returns 1 if
+# any GPU has BAR0 or BAR1 unassigned.
+log_gpu_bars() {
+    local pci_addr rc=0
+    for pci_addr in $(lspci -Dn | awk '/10de:/{print $1}'); do
+        local res="/sys/bus/pci/devices/${pci_addr}/resource"
+        [[ -r "$res" ]] || continue
+        local line="" idx missing=""
+        for idx in 0 1 3; do
+            local start end size
+            read -r start end _ <<< "$(awk -v n=$((idx + 1)) 'NR == n {print $1, $2}' "$res")"
+            if [[ -z "$start" || $((start)) -eq 0 ]]; then
+                size="unassigned"
+                [[ $idx -ne 3 ]] && missing+=" BAR${idx}"
+            else
+                size=$(numfmt --to=iec $(( end - start + 1 )) 2>/dev/null || echo "$(( (end - start + 1) / 1048576 ))M")
+            fi
+            line+=" BAR${idx}=${start:-0x0}(${size})"
+        done
+        if [[ -n "$missing" ]]; then
+            warn "  ${pci_addr}:${line} -- unassigned:${missing}"
+            rc=1
+        else
+            log "  ${pci_addr}:${line}"
+        fi
+    done
+    return $rc
+}
+
+###############################################################################
+# HELPER: dump everything needed to diagnose a driver that will not come up
+###############################################################################
+# Called when modprobe nvidia fails AND when modprobe succeeds but nvidia-smi
+# does not (the RTX PRO 6000 case that used to end in a bare "nvidia-smi
+# failed after module load" with nothing else to go on). Everything goes to
+# stderr so it lands in the MAAS commissioning output for script 90, which is
+# usually the only place it can be read: the node is in an ephemeral image.
+dump_gpu_load_diagnostics() {
+    local reason="$1"
+    err "--- GPU driver diagnostics: ${reason} ---"
+    log "--- kernel module vs userspace ---"
+    cat /proc/driver/nvidia/version >&2 2>/dev/null || warn "  /proc/driver/nvidia/version absent -- nvidia module not loaded"
+    log "  modinfo version: $(modinfo -F version nvidia 2>/dev/null || echo '?')"
+    log "  nvidia-utils:    $(dpkg-query -W -f='${Package} ${Version}\n' 'nvidia-utils-*' 2>/dev/null | tr '\n' ';' || echo '?')"
+    lsmod | grep -E '^(nvidia|nouveau)' >&2 || warn "  no nvidia/nouveau modules loaded"
+    log "--- device nodes ---"
+    ls -la /dev/nvidia* >&2 2>&1 || warn "  no /dev/nvidia* nodes"
+    log "--- per-GPU: bound driver, PCI id, class ---"
+    local pci_addr
+    for pci_addr in $(lspci -Dn | awk '/10de:/{print $1}'); do
+        local drv
+        drv=$(basename "$(readlink "/sys/bus/pci/devices/${pci_addr}/driver" 2>/dev/null)" 2>/dev/null)
+        log "  ${pci_addr}: driver=${drv:-none} id=$(cat "/sys/bus/pci/devices/${pci_addr}/device" 2>/dev/null) class=$(cat "/sys/bus/pci/devices/${pci_addr}/class" 2>/dev/null)"
+    done
+    log "--- per-GPU: kernel BARs ---"
+    log_gpu_bars || warn "  at least one GPU has an unassigned BAR0/BAR1 -- BIOS MMIO (Above 4G Decoding / MMIO High Base+Size) problem, no software fix"
+    log "--- /proc/driver/nvidia/gpus ---"
+    cat /proc/driver/nvidia/gpus/*/information >&2 2>/dev/null || log "  (no GPUs registered with the driver)"
+    log "--- dmesg: NVRM / nvidia / Xid / PCI resource lines (last 60) ---"
+    dmesg | grep -iE "NVRM|nvidia|nouveau|Xid|gsp|firmware|BAR [0-9]|can't assign|no space for|fallen off" | tail -60 >&2 || true
+    log "--- GSP firmware on disk ---"
+    find /lib/firmware/nvidia/ -name "gsp_*" -ls 2>/dev/null >&2 || warn "  no GSP firmware found"
+    log "--- DKMS status ---"
+    dkms status >&2 2>&1 || true
+    log "--- first GPU: lspci -vv (regions, link state, capabilities) ---"
+    lspci -vvs "$(lspci -Dn | awk '/10de:/{print $1; exit}')" >&2 2>&1 || true
+    log "--- Secure Boot ---"
+    mokutil --sb-state >&2 2>&1 || true
+    err "--- end GPU driver diagnostics ---"
+}
+
+###############################################################################
 # LOAD MODULES + VERIFY + START DCGM
 ###############################################################################
 load_and_verify() {
@@ -521,6 +610,13 @@ load_and_verify() {
             log "  BAR0 ${pci_addr}: hw=0x${bar0_hw} kern=${bar0_kern} OK"
         fi
     done
+
+    # BAR0 alone is not enough: the probe also needs BAR1 (the framebuffer
+    # aperture, 128 GB on RTX PRO 6000 / H100), which is the BAR a too-small
+    # BIOS MMIO window leaves unassigned. Nothing here is fixable in software,
+    # so this only reports -- the remove+rescan fixup below stays BAR0-only.
+    log "Kernel view of GPU BARs (BAR0=registers, BAR1=framebuffer, BAR3=RAMIN):"
+    log_gpu_bars || warn "At least one GPU has an unassigned BAR0/BAR1 -- the nvidia probe will reject it. Check Above 4G Decoding and MMIO High Base/Size in BIOS"
 
     local _nouveau_was_loaded=false
     if lsmod | grep -q nouveau; then
@@ -805,35 +901,51 @@ load_and_verify() {
 
     # ── Failure diagnostics ───────────────────────────────────────────
     if ! $nvidia_loaded; then
-        err "Failed to load nvidia kernel module"
-        log "--- dmesg GPU diagnostics ---"
-        dmesg | grep -iE "nvidia|nouveau|pci|firmware|gsp|drm|NVRM" | tail -50 >&2
-        log "--- BAR0 status (hardware vs kernel) ---"
-        for pci_addr in $(lspci -Dn | awk '/10de:/{print $1}'); do
-            local b0_hw b0_kern
-            b0_hw=$(setpci -s "$pci_addr" BASE_ADDRESS_0 2>/dev/null)
-            b0_kern=$(awk 'NR==1{print $1}' "/sys/bus/pci/devices/${pci_addr}/resource" 2>/dev/null)
-            log "  ${pci_addr} hw=0x${b0_hw:-?} kern=${b0_kern:-?}" >&2
-        done
-        log "--- GSP firmware check ---"
-        find /lib/firmware/nvidia/ -name "gsp_ga*" -ls 2>/dev/null >&2 || warn "No GSP firmware found"
-        log "--- module info ---"
-        modinfo nvidia 2>&1 | head -20 >&2 || warn "modinfo nvidia failed"
-        log "--- DKMS status ---"
-        dkms status >&2 2>&1 || true
-        log "--- PCIe diagnostics ---"
-        lspci -Dnn | grep -i "10de" >&2 2>&1 || warn "No NVIDIA devices in lspci"
-        lspci -vvs "$(lspci -Dn | grep '10de:' | head -1 | awk '{print $1}')" >&2 2>&1 || true
-        log "Secure Boot status:"
-        mokutil --sb-state >&2 2>&1 || true
-        log "--- end diagnostics ---"
+        err "Failed to load nvidia kernel module: ${modprobe_err}"
+        dump_gpu_load_diagnostics "modprobe nvidia failed"
         return 1
     fi
     modprobe nvidia-uvm >&2 2>&1 || warn "nvidia-uvm failed to load"
-    sleep 3
 
-    if ! nvidia-smi &>/dev/null; then
-        err "nvidia-smi failed after module load"
+    # ── Wait for nvidia-smi ───────────────────────────────────────────
+    # modprobe returning 0 only means the module is resident; the probe may
+    # have rejected every GPU, and GSP is not booted until the first open.
+    # So: give each call room to boot 8 GPUs, retry an instant failure a few
+    # times (udev may still be creating /dev nodes), and on failure keep the
+    # output and dump the kernel log rather than discard both. An instant
+    # non-zero exit is never a timing problem; its text names the cause:
+    #   "No devices were found"            probe rejected the GPUs (dmesg NVRM)
+    #   "couldn't communicate with ..."    no /dev nodes or module not loaded
+    #   "Driver/library version mismatch"  kernel module != nvidia-utils
+    #   "Unable to determine the device handle ... Unknown Error"
+    #                                      GSP boot / RmInitAdapter failed (dmesg)
+    local smi_out="" smi_rc=1 smi_attempt=1
+    local smi_deadline=$(( $(date +%s) + NVSMI_READY_TIMEOUT ))
+    while :; do
+        if [[ ! -e /dev/nvidiactl ]] && command -v nvidia-modprobe &>/dev/null; then
+            log "/dev/nvidiactl missing -- creating device nodes with nvidia-modprobe"
+            nvidia-modprobe -c 0 -u >&2 2>&1 || true
+        fi
+        if smi_out=$(timeout "$NVSMI_CALL_TIMEOUT" nvidia-smi 2>&1); then
+            smi_rc=0
+            break
+        else
+            smi_rc=$?
+        fi
+        if [[ $smi_rc -eq 124 ]]; then
+            warn "nvidia-smi attempt ${smi_attempt} timed out after ${NVSMI_CALL_TIMEOUT}s (GSP boot still in progress?)"
+        else
+            warn "nvidia-smi attempt ${smi_attempt} exit ${smi_rc}: $(printf '%s' "$smi_out" | head -3 | tr '\n' ' ')"
+        fi
+        [[ $(date +%s) -ge $smi_deadline ]] && break
+        smi_attempt=$((smi_attempt + 1))
+        sleep 5
+    done
+
+    if [[ $smi_rc -ne 0 ]]; then
+        err "nvidia-smi failed after module load (exit ${smi_rc} after ${smi_attempt} attempt(s)). Output:"
+        printf '%s\n' "$smi_out" >&2
+        dump_gpu_load_diagnostics "nvidia module loaded but nvidia-smi exit ${smi_rc}"
         return 1
     fi
 
@@ -999,18 +1111,33 @@ output_report() {
     local duration=$(( $(date +%s) - SCRIPT_START ))
 
     if [[ ! -f "$WORK_DIR/install_result.json" ]]; then
-        warn "install_result.json missing -- module load likely failed"
-        jq -n '{
-            nvidia_driver_version:"unknown",cuda_version:"unknown",
-            gpu_count:0,driver_package:"unknown",cuda_package:"unknown",
-            dcgm_available:false,dcgm_version:"not installed",dcgm_gpu_count:0
-        }' > "$WORK_DIR/install_result.json"
+        warn "install_result.json missing -- module load or nvidia-smi failed; reporting what did get installed"
+        # The packages went in even though the driver never came up, so say
+        # so: "dcgm_version: not installed" next to a DCGM 4.7 apt log misled
+        # the first RTX PRO 6000 read-through. The version comes from the
+        # module on disk, not a running driver.
+        local dcgm_pkg_ver="not installed"
+        if command -v dcgmi &>/dev/null; then
+            get_dcgm_version
+            dcgm_pkg_ver="$DCGM_VER"
+        fi
+        jq -n \
+            --arg driver_ver "$(modinfo -F version nvidia 2>/dev/null || echo unknown)" \
+            --arg driver_pkg "$(cat "$WORK_DIR/installed_driver.txt" 2>/dev/null || echo unknown)" \
+            --arg cuda_pkg "$(cat "$WORK_DIR/installed_cuda.txt" 2>/dev/null || echo unknown)" \
+            --arg dcgm_ver "$dcgm_pkg_ver" \
+            '{
+                nvidia_driver_version: $driver_ver, cuda_version: "unknown",
+                gpu_count: 0, driver_package: $driver_pkg, cuda_package: $cuda_pkg,
+                dcgm_available: false, dcgm_version: $dcgm_ver, dcgm_gpu_count: 0,
+                driver_functional: false
+            }' > "$WORK_DIR/install_result.json"
     fi
 
     local overall="PASS"
     local issues="[]"
 
-    if ! nvidia-smi &>/dev/null; then
+    if ! timeout "$NVSMI_CALL_TIMEOUT" nvidia-smi &>/dev/null; then
         overall="FAIL"
         issues=$(echo "$issues" | jq '. + [{"issue":"nvidia-smi not functional after install","severity":"critical"}]')
     fi
