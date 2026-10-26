@@ -28,7 +28,7 @@ Each can also be run on its own when iterating on one area:
 `tests/stubs/` holds fixture-driven fakes for `nvidia-smi`, `dcgmi`,
 `dcgmproftester13`, `gpu_burn`, `dmesg`, `systemctl` and `lspci`, so the
 commissioning scripts run end to end on a machine with no GPU. `tests/stubs-hw/`
-does the same for script `89`, and `tests/stubs-decomm/` for script `95` — an
+does the same for script `89`, and `tests/stubs-decomm/` for script `70` — an
 `nvme` that models `SANICAP` and the sanitise log, an `lsblk` that answers `-J`
 with a `TRAN` column, and a `findmnt` that can claim root is on a drive about to
 be erased. `tests/stubs-raidcli/` holds only `storcli64`, kept apart on purpose:

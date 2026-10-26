@@ -56,11 +56,18 @@ maas $PROFILE commissioning-scripts create \
   hardware_type=gpu \
   content@=commissioning-scripts/92-nexgen-gpu-inventory.sh
 
-maas $PROFILE commissioning-scripts create \
-  name=98-nexgen-gpu-stress-test \
-  script_type=commissioning \
-  hardware_type=gpu \
-  content@=commissioning-scripts/98-nexgen-gpu-stress-test.sh
+# The DCGM diagnostic is four scripts, one per level, each refusing to run if
+# a lower level failed. Upload the rungs you want; an absent rung is simply
+# not consulted. 96 (level 4) runs for hours -- raise the MAAS node timeout
+# past its 27600 s ceiling before uploading it.
+for rung in 93-nexgen-dcgm-level1 94-nexgen-dcgm-level2 \
+            95-nexgen-dcgm-level3 96-nexgen-dcgm-level4; do
+  maas $PROFILE commissioning-scripts create \
+    name=$rung \
+    script_type=commissioning \
+    hardware_type=gpu \
+    content@=commissioning-scripts/$rung.sh
+done
 
 # Optional -- omit this one to skip the sustained burn-in entirely
 maas $PROFILE commissioning-scripts create \
@@ -70,7 +77,7 @@ maas $PROFILE commissioning-scripts create \
   content@=commissioning-scripts/99-nexgen-gpu-burn-in.sh
 ```
 
-**Script `95` is uploaded separately, for a decommission only.** It is the one
+**Script `70` is uploaded separately, for a decommission only.** It is the one
 destructive script here, and it is not part of the commissioning set above:
 
 ```bash
@@ -78,10 +85,10 @@ destructive script here, and it is not part of the commissioning set above:
 # chassis you intend to erase. Without that edit the script runs in audit mode
 # and destroys nothing -- which is how you should run it the first time.
 maas $PROFILE commissioning-scripts create \
-  name=95-nexgen-storage-sanitize \
+  name=70-nexgen-storage-sanitize \
   script_type=commissioning \
   hardware_type=node \
-  content@=commissioning-scripts/95-nexgen-storage-sanitize.sh
+  content@=commissioning-scripts/70-nexgen-storage-sanitize.sh
 ```
 
 > **Raise the MAAS node timeout past the expected erase duration first.** Same trap

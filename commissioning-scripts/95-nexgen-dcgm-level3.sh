@@ -1,14 +1,19 @@
 #!/bin/bash
 # --- Start MAAS Metadata ---
-# name: 98-nexgen-gpu-stress-test
-# title: NexGen GPU Stress Test (DCGM Diagnostics)
-# description: Runs DCGM diagnostics at configurable levels (1-4).
-#   Requires 90-nexgen-gpu-install to have installed DCGM 4.x.
-#   Level 1: ~1 min quick check. Level 4: ~90 min full validation.
-#   Override level: DCGM_DIAG_LEVEL=4
+# name: 95-nexgen-dcgm-level3
+# title: NexGen GPU DCGM Level 3 (adds stress, power, SM diagnostic)
+# description: Runs the NVIDIA DCGM diagnostic at level 3 and adjudicates it.
+#   Level 3: adds targeted stress, targeted power, the SM diagnostic and
+#   memory bandwidth.  NVIDIA: under 35 min on an 8-GPU Hopper host.  Ceiling
+#   DCGM_DIAG_TIMEOUT=9600 (2h40).
+#   One rung of the DCGM ladder (93-96).  DCGM levels are cumulative, so
+#   each rung repeats the lower ones; every rung records its verdict in
+#   /run/nexgen-dcgm-ladder.jsonl and refuses to run if a lower rung FAILED.
+#   Upload only the rungs you want -- a rung that is absent is not consulted.
+#   Requires 90-nexgen-gpu-install and 92-nexgen-gpu-inventory first.
 # script_type: commissioning
 # hardware_type: gpu
-# timeout: 02:00:00
+# timeout: 03:00:00
 # destructive: false
 # may_reboot: false
 # --- End MAAS Metadata ---
@@ -19,17 +24,61 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 ###############################################################################
 # CONFIG
 ###############################################################################
-DCGM_DIAG_LEVEL="${DCGM_DIAG_LEVEL:-3}"
-# Hard ceiling on the diag run.  Without it a hung dcgmi is killed by MAAS at
-# the script timeout with NO JSON emitted, so the run yields no evidence
-# either way.  Level 4 can legitimately take ~90 min, hence the wide default.
-DCGM_DIAG_TIMEOUT="${DCGM_DIAG_TIMEOUT:-6000}"
+# Which level this file runs comes from its own name: 93-96 share one body
+# (tools/dcgm-ladder-sync.sh keeps them identical), so the body is written
+# once and the name decides.  An explicit DCGM_DIAG_LEVEL still wins -- that
+# is also how a named test list such as "pcie,memory" is requested.
+case "$(basename "${BASH_SOURCE[0]:-$0}")" in
+    93*) _LEVEL_FROM_NAME=1 ;;
+    94*) _LEVEL_FROM_NAME=2 ;;
+    95*) _LEVEL_FROM_NAME=3 ;;
+    96*) _LEVEL_FROM_NAME=4 ;;
+    *)    _LEVEL_FROM_NAME=3 ;;
+esac
+if [[ -n "${DCGM_DIAG_LEVEL:-}" ]]; then
+    DCGM_LEVEL_SOURCE="DCGM_DIAG_LEVEL env"
+else
+    DCGM_DIAG_LEVEL="$_LEVEL_FROM_NAME"
+    DCGM_LEVEL_SOURCE="script name"
+fi
+# Hard ceiling on the diag run, per level.  Without it a hung dcgmi runs until
+# MAAS gives up, with NO JSON emitted, so the run yields no evidence either
+# way.  NVIDIA quotes level 3 under 35 min and level 4 under 2.25 h on an
+# 8-GPU Hopper host; the defaults leave room for slower silicon (an RTX PRO
+# 6000 host was still inside level 3 at 100 min) and give level 4 the hours
+# it needs rather than killing it.  The MAAS metadata timeout is documentation
+# only in this deployment (tests/validate-maas-metadata.py explains why), so
+# this value is the real limit -- and the MAAS node timeout must exceed it.
+case "$DCGM_DIAG_LEVEL" in
+    1) _CEILING_DEFAULT=1200  ;;
+    2) _CEILING_DEFAULT=4800  ;;
+    4) _CEILING_DEFAULT=27600 ;;
+    *) _CEILING_DEFAULT=9600  ;;
+esac
+DCGM_DIAG_TIMEOUT="${DCGM_DIAG_TIMEOUT:-$_CEILING_DEFAULT}"
+# Passed straight to `dcgmi diag -p`, e.g. "pcie.is_allowed=false" or
+# "targeted_power.test_duration=120;memory.max_free_memory=..." -- the way to
+# exclude or shorten one plugin once a run has shown which one is the problem.
+DCGM_DIAG_PARAMS="${DCGM_DIAG_PARAMS:-}"
 # Chassis sensors sampled across the diagnostic, on their own slower cadence:
 # the BMC is read over the in-band KCS interface, which serialises requests,
 # and fan RPM and inlet air move on a timescale of minutes. 0 disables.
 CHASSIS_SAMPLE_INTERVAL="${CHASSIS_SAMPLE_INTERVAL:-30}"
+# GPU load is sampled on the same cadence: utilisation, power, SM clock and
+# temperature per GPU, plus which nvvs-family processes exist. When a run is
+# killed at the ceiling this is the only record of when the cards were last
+# busy, which separates "a test is slow on this silicon" from "nvvs hung after
+# the load phase finished". 0 disables.
+GPU_SAMPLE_INTERVAL="${GPU_SAMPLE_INTERVAL:-30}"
+# A one-line progress report is written every PROGRESS_INTERVAL seconds while
+# the diag runs: elapsed time, per-GPU utilisation and power, which nvvs
+# processes exist, and the last plugin line in nvvs' log.  It goes to stderr
+# (MAAS keeps it with the result) and, best effort, to /dev/console so it can
+# be watched live on the BMC remote console.  Must be a multiple of
+# GPU_SAMPLE_INTERVAL; 0 disables.
+PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-60}"
 WORK_DIR="/tmp/gpu-stress-$$"
-SCRIPT_VERSION="2.6.0"
+SCRIPT_VERSION="3.0.0"
 
 ###############################################################################
 # LOGGING
@@ -83,6 +132,7 @@ fail_json() {
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus},
             dcgm_diagnostics:{run_level:0, exit_code:-1, duration_seconds:0, test_results:[]}
         }'
+    ladder_record "FAIL" -1 0
     exit 1
 }
 
@@ -130,6 +180,32 @@ collect_failure_diagnostics() {
     fi
     _artifact "dmesg-xid" "${#xid_lines}" "$xid_count Xid line(s)"
 
+    # --- DCGM's own account of the run -------------------------------------
+    # The JSON only says the run was killed or failed; nvvs' log names the
+    # plugin it was in, and the load timeline says whether the cards were
+    # still busy when it ended.  Both are gone with the ephemeral image.
+    local nvvs_log nvvs_size
+    for nvvs_log in "${DCGM_DEBUG_LOG:-}" /var/log/nvidia-dcgm/nvvs.log; do
+        [[ -n "$nvvs_log" && -s "$nvvs_log" ]] || continue
+        nvvs_size=$(stat -c%s "$nvvs_log" 2>/dev/null || echo "0")
+        log "---------- $nvvs_log (${nvvs_size} bytes): plugin/test markers, then the last 150 lines ----------"
+        grep -niE 'plugin|running test|starting test|test (start|end|finish|complet)|timeout|timed out|killed|abort|fatal' \
+            "$nvvs_log" 2>/dev/null | tail -60 >&2 || true
+        log "..."
+        tail -n 150 "$nvvs_log" >&2 || true
+        log "---------- end $nvvs_log ----------"
+        _artifact "$(basename "$nvvs_log")" "$nvvs_size" "${hostname} ${stamp}"
+    done
+    if [[ -s "$WORK_DIR/diag_stderr.txt" ]]; then
+        log "---------- dcgmi diag stderr ----------"
+        head -c 20000 "$WORK_DIR/diag_stderr.txt" >&2 || true
+        echo >&2
+        log "---------- end dcgmi diag stderr ----------"
+    fi
+    print_gpu_load_timeline "$WORK_DIR/gpu.psv"
+    _artifact "gpu-load-timeline" "$(stat -c%s "$WORK_DIR/gpu.psv" 2>/dev/null || echo "0")" \
+        "${GPU_SAMPLE_INTERVAL}s samples; ${LOAD_NOTE:-no load samples}"
+
     # --- nvidia-bug-report.sh ---------------------------------------------
     if command -v nvidia-bug-report.sh &>/dev/null; then
         log "Running nvidia-bug-report.sh..."
@@ -150,10 +226,22 @@ collect_failure_diagnostics() {
             log "nvidia-bug-report.log.gz captured ($gz_size bytes)"
             # Emit the decompressed text to stderr so it is retained in the
             # commissioning result rather than left in an ephemeral /tmp file.
-            log "---------- begin nvidia-bug-report ----------"
-            zcat "$gz_file" 2>/dev/null | head -c 2000000 >&2 || \
-                warn "could not decompress $gz_file"
-            log "---------- end nvidia-bug-report ----------"
+            # head closes the pipe at the cap, zcat then dies of SIGPIPE (141)
+            # and pipefail reports the whole pipeline as failed -- so an
+            # `|| warn` on that line fired on every report over 2 MB, AFTER
+            # printing it.  Integrity is checked on its own, first.
+            if gzip -t "$gz_file" 2>/dev/null; then
+                local gz_decomp
+                gz_decomp=$(zcat "$gz_file" 2>/dev/null | wc -c || echo "0")
+                log "---------- begin nvidia-bug-report (${gz_decomp} bytes decompressed) ----------"
+                zcat "$gz_file" 2>/dev/null | head -c 2000000 >&2 || true
+                echo >&2
+                [[ "${gz_decomp:-0}" -gt 2000000 ]] && \
+                    log "(nvidia-bug-report truncated at 2000000 of ${gz_decomp} bytes)"
+                log "---------- end nvidia-bug-report ----------"
+            else
+                warn "could not decompress $gz_file -- gzip -t failed"
+            fi
             _artifact "nvidia-bug-report" "$gz_size" "${hostname} ${stamp}"
         else
             warn "nvidia-bug-report.sh ran but no .log.gz found"
@@ -268,6 +356,114 @@ stop_chassis_sampler() {
     wait "${CHASSIS_PID:-}" 2>/dev/null || true
 }
 
+###############################################################################
+# GPU LOAD SAMPLER -- what the cards were doing while nvvs ran
+###############################################################################
+# Rows: ts|gpu|index|util%|W|sm_mhz|temp_c  and  ts|proc|<name(count),...>
+# Last plugin/test line nvvs has logged, for the progress report.  DCGM 4.7.0
+# records each plugin and test result in nvvs.log; older versions log less,
+# and the line is best effort either way.
+nvvs_last_plugin_line() {
+    local f line=""
+    for f in "${DCGM_DEBUG_LOG:-}" /var/log/nvidia-dcgm/nvvs.log; do
+        [[ -n "$f" && -s "$f" ]] || continue
+        line=$(tail -n 400 "$f" 2>/dev/null | grep -iE 'plugin|running test|test (start|end|finish|complet|result)' | tail -1 | cut -c1-140 || true)
+        [[ -n "$line" ]] && break
+    done
+    printf '%s' "${line:-n/a}"
+}
+
+start_gpu_sampler() {
+    local out="$1"
+    [[ "${GPU_SAMPLE_INTERVAL:-0}" -gt 0 ]] || return 0
+    local every=0
+    if [[ "${PROGRESS_INTERVAL:-0}" -gt 0 ]]; then
+        every=$(( PROGRESS_INTERVAL / GPU_SAMPLE_INTERVAL ))
+        [[ "$every" -lt 1 ]] && every=1
+    fi
+    # stdout detached for the same reason as the chassis sampler.  stderr is
+    # kept for the progress lines; the sleep -- the only thing that outlives a
+    # kill -- gets its descriptors closed so it cannot hold the log open.
+    (
+        local ts procs smi n=0 t0 line
+        t0=$(date +%s)
+        while :; do
+            ts=$(date +%s)
+            smi=$(nvidia-smi --query-gpu=index,utilization.gpu,power.draw,clocks.sm,temperature.gpu \
+                --format=csv,noheader,nounits 2>/dev/null || true)
+            printf '%s\n' "$smi" \
+                | awk -v ts="$ts" -F', *' 'NF>=5 {printf "%s|gpu|%s|%s|%s|%s|%s\n", ts, $1, $2, $3, $4, $5}' \
+                >> "$out" || true
+            procs=$(ps -eo comm= 2>/dev/null \
+                | grep -E '^(nvvs|nvbandwidth|cuda_eud|eud|dcgmproftester|nv-hostengine)' \
+                | sort | uniq -c \
+                | awk '{printf "%s%s(%d)", (NR>1?",":""), $2, $1}' || true)
+            printf '%s|proc|%s\n' "$ts" "${procs:-none}" >> "$out" || true
+            n=$((n + 1))
+            if [[ "$every" -gt 0 && $(( n % every )) -eq 0 ]]; then
+                line=$(printf '%s\n' "$smi" | awk -F', *' '
+                    NF>=5 { u = u (u==""?"":" ") ($2+0); w = w (w==""?"":" ") int($3+0); c = c (c==""?"":" ") int($4+0) }
+                    END { printf "util%%=[%s] W=[%s] sm=[%s]", u, w, c }')
+                line="diag progress t+$(( ts - t0 ))s: ${line} procs=${procs:-none} nvvs: $(nvvs_last_plugin_line)"
+                log "$line"
+                [[ -w /dev/console ]] && \
+                    timeout 2 sh -c 'printf "[98-gpu-stress] %s\n" "$1" > /dev/console' _ "$line" >/dev/null 2>&1 || true
+            fi
+            sleep "$GPU_SAMPLE_INTERVAL" >/dev/null 2>&1
+        done
+    ) >/dev/null &
+    GPU_SAMPLER_PID=$!
+}
+
+stop_gpu_sampler() {
+    [[ -n "${GPU_SAMPLER_PID:-}" ]] && kill "$GPU_SAMPLER_PID" 2>/dev/null || true
+    wait "${GPU_SAMPLER_PID:-}" 2>/dev/null || true
+}
+
+# JSON summary: how many samples, how many had any GPU at >=50% utilisation,
+# the first and last such sample (epoch), and the peak summed board power.
+summarise_gpu_load() {
+    local raw="$1" out
+    [[ -s "$raw" ]] || { echo 'null'; return 0; }
+    out=$(awk -F'|' -v iv="${GPU_SAMPLE_INTERVAL:-0}" '
+        $2 == "gpu" {
+            t = $1; u = $4 + 0; p = $5 + 0
+            if (!(t in seen)) { seen[t] = 1; order[++k] = t }
+            if (u > mu[t]) mu[t] = u
+            sp[t] += p
+        }
+        END {
+            loaded = 0; first = ""; last = ""; peak = 0; lastts = ""
+            for (i = 1; i <= k; i++) {
+                t = order[i]; lastts = t
+                if (mu[t] >= 50) { loaded++; if (first == "") first = t; last = t }
+                if (sp[t] > peak) peak = sp[t]
+            }
+            printf "{\"samples\":%d,\"interval_s\":%d,\"samples_under_load\":%d,", k, iv, loaded
+            printf "\"first_load_ts\":%s,\"last_load_ts\":%s,\"last_sample_ts\":%s,\"peak_total_power_w\":%.0f}", \
+                (first == "" ? "null" : first), (last == "" ? "null" : last), (lastts == "" ? "null" : lastts), peak
+        }' "$raw" 2>/dev/null | jq -c . 2>/dev/null) || out=""
+    echo "${out:-null}"
+}
+
+# One line per sample so the log shows the shape of the run: when load began,
+# when it stopped, and whether nvvs was still alive afterwards.
+print_gpu_load_timeline() {
+    local raw="$1"
+    [[ -s "$raw" ]] || { log "no GPU load samples recorded"; return 0; }
+    log "---------- GPU load timeline (${GPU_SAMPLE_INTERVAL}s samples: util% / W / SM MHz per GPU; nvvs-family processes) ----------"
+    awk -F'|' '
+        function flush() { if (cur != "") printf "%s util%%=[%s] W=[%s] sm=[%s] procs=%s\n", cur, u, w, c, p }
+        $1 != cur  { flush(); cur = $1; u = ""; w = ""; c = ""; p = "none" }
+        $2 == "gpu"  { u = u (u == "" ? "" : " ") ($4 + 0); w = w (w == "" ? "" : " ") int($5 + 0); c = c (c == "" ? "" : " ") int($6 + 0) }
+        $2 == "proc" { p = $3 }
+        END { flush() }' "$raw" 2>/dev/null \
+    | while IFS=' ' read -r ts rest; do
+        printf '%s %s\n' "$(date -d "@$ts" '+%H:%M:%S' 2>/dev/null || echo "$ts")" "$rest" >&2
+    done || true
+    log "---------- end GPU load timeline ----------"
+}
+
 aggregate_chassis() {
     local raw="$1"
     [[ -s "$raw" ]] || { echo 'null'; return 0; }
@@ -311,7 +507,11 @@ aggregate_chassis() {
             fans: { banks: $banks,
                     fan_count: ($rpm | length),
                     stopped: [ $rpm[] | select(.max == 0) | .sensor ],
-                    all_spinning: (([ $rpm[] | select(.max == 0) ] | length) == 0),
+                    # null, not true, when the BMC exposes no RPM sensors (HPE iLO
+                    # reports fans as a percentage, which the sampler drops): a
+                    # check that measured nothing has not confirmed anything.
+                    all_spinning: (if ($rpm | length) == 0 then null
+                                   else (([ $rpm[] | select(.max == 0) ] | length) == 0) end),
                     worst_bank: ($banks | if length > 0 then (max_by(.spread_pct) | .bank) else null end),
                     worst_spread_pct: ($banks | map(.spread_pct) | max // 0) },
             inlet_c: ($sensors | map(select(.sensor | test("Inlet"; "i")))
@@ -385,7 +585,12 @@ preflight() {
 ###############################################################################
 run_diagnostics() {
     log "=== Running DCGM Level $DCGM_DIAG_LEVEL diagnostics ==="
-    log "This may take several minutes (Level 3 ~8-15 min, Level 4 ~30-90 min)..."
+    # NVIDIA's own figures (DCGM 4 docs, measured on Hopper): level 3 under
+    # 35 min and level 4 under 2.25 h on an 8-GPU host. Other silicon is not
+    # characterised there, so the only hard fact is the ceiling below -- and a
+    # run that reaches it evidences nothing, which is why the samplers record
+    # what the cards and nvvs were doing on the way.
+    log "NVIDIA quotes level 3 < 35 min and level 4 < 2.25 h on an 8-GPU Hopper host; hard ceiling here is ${DCGM_DIAG_TIMEOUT}s"
 
     local diag_start diag_end diag_exit
     diag_start=$(date +%s)
@@ -395,16 +600,60 @@ run_diagnostics() {
     # story; whether its fans were turning and the inlet was in spec is the
     # other half, and neither is recoverable once the run is over.
     start_chassis_sampler "$WORK_DIR/chassis.psv"
+    start_gpu_sampler "$WORK_DIR/gpu.psv"
 
-    timeout "$DCGM_DIAG_TIMEOUT" dcgmi diag -r "$DCGM_DIAG_LEVEL" -j \
+    # Options are probed from --help rather than assumed, because the diag CLI
+    # differs between DCGM 3.x and 4.x.  --debugLogFile keeps nvvs' own log,
+    # which names the plugin that was running when a run died -- the JSON
+    # only ever says "killed by a signal".  -t lets DCGM stop itself shortly
+    # before the outer ceiling, so it can still write JSON (and the test it
+    # was in) instead of being shot by SIGTERM with nothing to show.
+    local diag_help
+    local -a diag_opts=()
+    diag_help=$(dcgmi diag --help 2>&1 || true)
+    DCGM_DEBUG_LOG="$WORK_DIR/dcgm_diag_debug.log"
+    if [[ "$diag_help" == *--debugLogFile* ]]; then
+        diag_opts+=(--debugLogFile "$DCGM_DEBUG_LOG")
+    else
+        DCGM_DEBUG_LOG=""
+        warn "dcgmi diag has no --debugLogFile option -- nvvs log will only be available at /var/log/nvidia-dcgm/nvvs.log"
+    fi
+    if [[ "$diag_help" == *--timeout* && "$DCGM_DIAG_TIMEOUT" -gt 300 ]]; then
+        diag_opts+=(-t "$(( DCGM_DIAG_TIMEOUT - 120 ))")
+    fi
+    [[ -n "$DCGM_DIAG_PARAMS" ]] && diag_opts+=(-p "$DCGM_DIAG_PARAMS")
+    log "Running: dcgmi diag -r $DCGM_DIAG_LEVEL -j ${diag_opts[*]}"
+    [[ "${PROGRESS_INTERVAL:-0}" -gt 0 ]] && \
+        log "Progress is logged every ${PROGRESS_INTERVAL}s (and echoed to /dev/console for the BMC remote console)"
+
+    timeout "$DCGM_DIAG_TIMEOUT" dcgmi diag -r "$DCGM_DIAG_LEVEL" -j "${diag_opts[@]}" \
         > "$WORK_DIR/diag_raw.json" 2>"$WORK_DIR/diag_stderr.txt"
     diag_exit=$?
 
     stop_chassis_sampler
+    stop_gpu_sampler
     diag_end=$(date +%s)
 
     local diag_dur=$(( diag_end - diag_start ))
     log "DCGM diag exited $diag_exit in ${diag_dur}s"
+
+    # Where the load went.  Logged on every run, not only failures, because a
+    # pass that spent 90 of its 100 minutes idle is worth knowing about too.
+    LOAD_PROFILE=$(summarise_gpu_load "$WORK_DIR/gpu.psv")
+    LOAD_NOTE=""
+    if [[ "$LOAD_PROFILE" != "null" ]]; then
+        local l_samples l_loaded l_last l_first
+        l_samples=$(printf '%s' "$LOAD_PROFILE" | jq '.samples')
+        l_loaded=$(printf '%s' "$LOAD_PROFILE" | jq '.samples_under_load')
+        l_first=$(printf '%s' "$LOAD_PROFILE" | jq -r '.first_load_ts // empty')
+        l_last=$(printf '%s' "$LOAD_PROFILE" | jq -r '.last_load_ts // empty')
+        if [[ -n "$l_last" ]]; then
+            LOAD_NOTE="GPUs were at >=50% utilisation in ${l_loaded} of ${l_samples} samples, first at $(date -d "@$l_first" '+%H:%M:%S'), last at $(date -d "@$l_last" '+%H:%M:%S') -- $(( diag_end - l_last ))s before the diag ended"
+        else
+            LOAD_NOTE="no sample ever showed a GPU at >=50% utilisation across ${l_samples} samples -- the load phase never started"
+        fi
+        log "Load profile: $LOAD_NOTE"
+    fi
 
     # Parse results
     local overall="PASS"
@@ -622,8 +871,8 @@ run_diagnostics() {
     # `timeout` kills with 124 -- the run never completed, so it proves nothing.
     if [[ "$diag_exit" -eq 124 ]]; then
         overall="FAIL"
-        issues=$(echo "$issues" | jq --arg t "$DCGM_DIAG_TIMEOUT" \
-            '. + [{"issue":"DCGM diag exceeded its \($t)s timeout and was killed -- run incomplete","severity":"critical"}]')
+        issues=$(echo "$issues" | jq --arg t "$DCGM_DIAG_TIMEOUT" --arg d "${LOAD_NOTE:-no load samples}" \
+            '. + [{"issue":"DCGM diag exceeded its \($t)s timeout and was killed -- run incomplete","severity":"critical","details":$d}]')
     # A non-zero exit is never silently discarded, even when results parsed.
     elif [[ "$diag_exit" -ne 0 && "$overall" == "PASS" ]]; then
         overall="WARN"
@@ -665,6 +914,7 @@ run_diagnostics() {
     fi
 
     log "=== STRESS TEST COMPLETE -- Verdict: $overall (${diag_dur}s) ==="
+    ladder_record "$overall" "$diag_exit" "$diag_dur"
 
     # Final report
     jq -n \
@@ -676,15 +926,18 @@ run_diagnostics() {
         --arg dcgm "$DCGM_VER" --argjson gpus "${SMI_GPU_COUNT:-0}" \
         --arg level "$DCGM_DIAG_LEVEL" --argjson exit_code "$diag_exit" \
         --argjson diag_dur "$diag_dur" --argjson results "$test_results" \
+        --argjson load "${LOAD_PROFILE:-null}" \
+        --argjson ladder "$(ladder_previous_json)" --arg lvlsrc "$DCGM_LEVEL_SOURCE" \
         --argjson artifacts "${DIAG_ARTIFACTS:-[]}" \
         --argjson counters "${POST_COUNTERS:-null}" \
         --argjson chassis "$(aggregate_chassis "$WORK_DIR/chassis.psv")" \
         --argjson nvbw "$(nvbandwidth_state)" \
         '{
-            report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts, duration_seconds:$dur},
+            report_metadata:{script_version:$ver, script_name:$name, generated_at:$ts, duration_seconds:$dur, dcgm_level:$level},
             verdict:{overall:$verdict, issues:$issues},
             system:{nvidia_driver_version:$drv, cuda_version:$cuda, dcgm_version:$dcgm, gpu_count:$gpus},
-            dcgm_diagnostics:{run_level:$level, exit_code:$exit_code, duration_seconds:$diag_dur, test_results:$results},
+            dcgm_diagnostics:{run_level:$level, level_source:$lvlsrc, exit_code:$exit_code, duration_seconds:$diag_dur, load_profile:$load, test_results:$results},
+            ladder:{previous:$ladder},
             chassis:$chassis,
             nvbandwidth:$nvbw,
             diagnostic_artifacts:$artifacts,
@@ -886,6 +1139,67 @@ post_test_counter_check() {
 }
 
 ###############################################################################
+# DCGM LADDER -- levels 1..4 as separate scripts, each gated on the last
+###############################################################################
+# 93-96 share this body.  Each records its verdict in a tmpfs file, and the
+# next rung refuses to run if a lower one FAILED: a level-3 result on hardware
+# that already failed level 2 is noise, and the hours level 4 costs are better
+# spent on a card that has earned them.  A rung that was not uploaded leaves no
+# record and is simply not consulted, so the operator chooses which rungs run
+# by choosing which scripts to upload.  WARN does not gate.
+NEXGEN_DCGM_LADDER_FILE="${NEXGEN_DCGM_LADDER_FILE:-/run/nexgen-dcgm-ladder.jsonl}"
+DCGM_LADDER_IGNORE_PREVIOUS="${DCGM_LADDER_IGNORE_PREVIOUS:-0}"
+
+ladder_previous_json() {   # records from lower levels, as a JSON array
+    [[ -s "$NEXGEN_DCGM_LADDER_FILE" ]] || { echo '[]'; return 0; }
+    local mine="$DCGM_DIAG_LEVEL"
+    [[ "$mine" =~ ^[0-9]+$ ]] || mine=99
+    jq -sc --argjson mine "$mine" \
+        '[ .[] | select((.level | type) == "number" and .level < $mine) ]' \
+        "$NEXGEN_DCGM_LADDER_FILE" 2>/dev/null || echo '[]'
+}
+
+ladder_record() {   # verdict, exit code, diag seconds
+    local lvl="$DCGM_DIAG_LEVEL"
+    [[ "$lvl" =~ ^[0-9]+$ ]] || return 0
+    jq -nc --argjson level "$lvl" --arg verdict "$1" --argjson exit "${2:-0}" \
+        --argjson secs "${3:-0}" --arg script "$(basename "${BASH_SOURCE[0]:-$0}")" \
+        --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+        '{level:$level, verdict:$verdict, exit_code:$exit, diag_seconds:$secs, script:$script, ts:$ts}' \
+        >> "$NEXGEN_DCGM_LADDER_FILE" 2>/dev/null \
+        || warn "could not record the level $lvl verdict in $NEXGEN_DCGM_LADDER_FILE"
+}
+
+ladder_gate() {
+    [[ "$DCGM_DIAG_LEVEL" =~ ^[0-9]+$ ]] || return 0
+    local prev failed
+    prev=$(ladder_previous_json)
+    [[ "$prev" == "[]" ]] && return 0
+    log "Lower DCGM levels already run this boot: $(printf '%s' "$prev" | jq -r '[.[] | "L\(.level)=\(.verdict)"] | join(" ")')"
+    failed=$(printf '%s' "$prev" | jq -r '[.[] | select(.verdict == "FAIL") | .level] | max // empty')
+    [[ -n "$failed" ]] || return 0
+    if [[ "$DCGM_LADDER_IGNORE_PREVIOUS" == "1" ]]; then
+        warn "Level $failed FAILED earlier but DCGM_LADDER_IGNORE_PREVIOUS=1 -- running level $DCGM_DIAG_LEVEL anyway"
+        return 0
+    fi
+    local reason="DCGM level $failed FAILED earlier in this commissioning run, so level $DCGM_DIAG_LEVEL was not run (DCGM_LADDER_IGNORE_PREVIOUS=1 forces it)"
+    err "=============================================================="
+    err "  SKIPPED -- $reason"
+    err "=============================================================="
+    jq -n --arg v "$SCRIPT_VERSION" --arg name "gpu-stress-test" --arg r "$reason" \
+        --arg level "$DCGM_DIAG_LEVEL" --argjson prev "$prev" \
+        --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+        '{
+            report_metadata:{script_version:$v, script_name:$name, generated_at:$ts, duration_seconds:0, dcgm_level:$level},
+            verdict:{overall:"FAIL", issues:[{"issue":("Skipped -- " + $r),"severity":"critical"}]},
+            skipped:true, skip_reason:$r,
+            dcgm_diagnostics:{run_level:$level, exit_code:-1, duration_seconds:0, test_results:[]},
+            ladder:{previous:$prev}
+        }'
+    exit 1
+}
+
+###############################################################################
 # HALT GATE
 ###############################################################################
 # Script 91 halts the run when it has had to enable ECC.  Every ECC counter
@@ -925,10 +1239,11 @@ main() {
     SCRIPT_START=$(date +%s)
 
     halt_gate
+    ladder_gate
 
     log "=========================================="
-    log "NexGen GPU Stress Test v${SCRIPT_VERSION}"
-    log "DCGM Level $DCGM_DIAG_LEVEL"
+    log "NexGen GPU Stress Test v${SCRIPT_VERSION} -- $(basename "${BASH_SOURCE[0]:-$0}")"
+    log "DCGM Level $DCGM_DIAG_LEVEL (from $DCGM_LEVEL_SOURCE), ceiling ${DCGM_DIAG_TIMEOUT}s"
     log "=========================================="
 
     preflight

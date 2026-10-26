@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- Start MAAS Metadata ---
-# name: 95-nexgen-storage-sanitize
+# name: 70-nexgen-storage-sanitize
 # title: NexGen Storage Sanitisation & Evidence
 # description: Sanitises every storage device in a host that is leaving NexGen
 #   custody, and produces the serial-number-level evidence that it did.

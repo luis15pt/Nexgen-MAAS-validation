@@ -82,10 +82,10 @@ The generated report includes:
 ## Certificate of Sanitisation
 
 `reporting/sanitisation_certificate.py` (v1.0.0) is a **separate document**, from
-script `95`'s output alone:
+script `70`'s output alone:
 
 ```bash
-python3 reporting/sanitisation_certificate.py --sanitize 95-output.json \
+python3 reporting/sanitisation_certificate.py --sanitize 70-output.json \
   -o reports/EXAMPLE-NODE-01-sanitisation-certificate.html
 
 # or straight from MAAS

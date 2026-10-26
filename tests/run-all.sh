@@ -20,12 +20,18 @@ python3 tests/check-python-compat.py || rc=1
 hdr "MAAS metadata block is parseable by MAAS"
 python3 tests/validate-maas-metadata.py || rc=1
 
+hdr "DCGM ladder scripts (93-96) share one body"
+tools/dcgm-ladder-sync.sh check || rc=1
+
 hdr "Script stdout must be parseable JSON with nothing leaked ahead of it"
 export PATH="$PWD/tests/stubs:$PATH" STUB_GPU_COUNT=2
+# Ladder records go to a scratch file, never /run, and never between tests.
+export NEXGEN_DCGM_LADDER_FILE=/tmp/nexgen-dcgm-ladder-runall.$$.jsonl
+rm -f "$NEXGEN_DCGM_LADDER_FILE"
 rm -f /tmp/stub-*
 for spec in "91-nexgen-gpu-mig-ecc-config.sh:" \
             "92-nexgen-gpu-inventory.sh:" \
-            "98-nexgen-gpu-stress-test.sh:DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json" \
+            "95-nexgen-dcgm-level3.sh:DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json" \
             "99-nexgen-gpu-burn-in.sh:BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1"; do
     s="${spec%%:*}"; envs="${spec#*:}"
     rm -f /tmp/stub-*
@@ -86,7 +92,7 @@ hdr "A sampler must not hold the script's stdout open after it exits"
 # every writer closes. The run looks hung for a full sample interval after it
 # has finished. Caught when the suite went from minutes to 19 of them.
 for spec in "99:99-nexgen-gpu-burn-in.sh:BURN_DURATION=2 BURN_SAMPLE_INTERVAL=1 STUB_LOAD_SLEEP=1" \
-            "98:98-nexgen-gpu-stress-test.sh:DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json"; do
+            "98:95-nexgen-dcgm-level3.sh:DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json"; do
     lbl="${spec%%:*}"; rest="${spec#*:}"; script="${rest%%:*}"; envs="${rest#*:}"
     rm -f /tmp/stub-*
     t0=$(date +%s%N)
@@ -283,7 +289,7 @@ check(d2["verdict"]["overall"] == "WARN"
 sys.exit(rc)
 PYEOF
 
-hdr "Storage sanitisation (95) erases nothing it cannot evidence"
+hdr "Storage sanitisation (70) erases nothing it cannot evidence"
 # Its own stub dir, prepended ahead of stubs-hw: 95 needs an nvme that models
 # SANICAP and the sanitize log, an lsblk that answers -J with a TRAN column,
 # and a findmnt that can claim root is on a drive about to be erased. storcli
@@ -331,7 +337,7 @@ def run(raid_cli=False, **extra):
     if raid_cli:
         e["PATH"] = RAID + os.pathsep + e["PATH"]
     e.update({k: str(v) for k, v in extra.items()})
-    p = subprocess.run(["bash", "commissioning-scripts/95-nexgen-storage-sanitize.sh"],
+    p = subprocess.run(["bash", "commissioning-scripts/70-nexgen-storage-sanitize.sh"],
                        capture_output=True, text=True, env=e)
     return p, json.loads(p.stdout)
 
@@ -993,13 +999,13 @@ for spec in "clean:PASS:" "fault after baseline:FAIL:STUB_ECC_UCE_AFTER=6"; do
     lbl="${spec%%:*}"; rest="${spec#*:}"; want="${rest%%:*}"; envs="${rest#*:}"
     rm -f /tmp/stub-*
     got=$(env NEXGEN_BASELINE_FILE="$BL" $envs DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json \
-          bash commissioning-scripts/98-nexgen-gpu-stress-test.sh 2>/dev/null | jq -r '.verdict.overall')
+          bash commissioning-scripts/95-nexgen-dcgm-level3.sh 2>/dev/null | jq -r '.verdict.overall')
     if [[ "$got" == "$want" ]]; then printf '  ok    98 %-24s -> %s\n' "$lbl" "$got"
     else printf '  FAIL  98 %-24s -> got %s, want %s\n' "$lbl" "$got" "$want"; rc=1; fi
 done
 rm -f /tmp/stub-*
 got=$(env NEXGEN_BASELINE_FILE=/tmp/definitely-absent.json DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json \
-      bash commissioning-scripts/98-nexgen-gpu-stress-test.sh 2>/dev/null \
+      bash commissioning-scripts/95-nexgen-dcgm-level3.sh 2>/dev/null \
       | jq -r '.counters_since_baseline.baseline_available')
 if [[ "$got" == "false" ]]; then echo "  ok    a missing baseline is reported, not assumed clean"
 else echo "  FAIL  missing baseline reported as $got"; rc=1; fi
@@ -1015,7 +1021,7 @@ if [[ "$v" == "FAIL" && "$r" == "true" && -f "$NEXGEN_HALT_FILE" ]]; then
 else
     echo "  FAIL  run 1: verdict=$v revalidation=$r marker=$([[ -f $NEXGEN_HALT_FILE ]] && echo yes || echo no)"; rc=1
 fi
-for s2 in 92-nexgen-gpu-inventory 98-nexgen-gpu-stress-test 99-nexgen-gpu-burn-in; do
+for s2 in 92-nexgen-gpu-inventory 95-nexgen-dcgm-level3 99-nexgen-gpu-burn-in; do
     rm -f /tmp/stub-*
     t0=$(date +%s%N)
     o=$(DCGM_FIXTURE=tests/fixtures/dcgm/all-pass.json BURN_DURATION=1800 \
@@ -1720,7 +1726,7 @@ SIGSTATE=$(mktemp -d)
 residual() {
     ( export PATH="$PWD/tests/stubs-decomm:$PATH" STUB_STATE_DIR="$SIGSTATE" "$@"
       source <(sed -n '/^safe_run()/p; /^residual_signature()/,/^}/p' \
-                   commissioning-scripts/95-nexgen-storage-sanitize.sh)
+                   commissioning-scripts/70-nexgen-storage-sanitize.sh)
       residual_signature /dev/nvme0n1 )
 }
 sigcheck() {

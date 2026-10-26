@@ -22,20 +22,24 @@ execution order: `80` and `89` stand alone, `99` is optional, and every GPU
 script depends on `90` having run first. Cheap phases run first so a failure
 costs the least — cabling (`80`) and chassis inventory (`89`) before anything
 is installed, GPU inventory (`92`) before any load, then the DCGM diagnostic
-(`98`), then the 1-hour burn-in (`99`) last.
+(`93`–`96`, one script per level, each gated on the one below), then the
+1-hour burn-in (`99`) last.
 
 | | Script | Version | What it does |
 |---|---|---|---|
 | 80 | [`80-nexgen-network-cabling-verify.sh`](commissioning-scripts/80-nexgen-network-cabling-verify.sh) | `v1.1.0` | LLDP neighbours vs NetBox cabling — catches a cable in the neighbour port. [Docs](docs/scripts/80-network-cabling-verify.md) |
 | 89 | [`89-nexgen-hw-inventory.sh`](commissioning-scripts/89-nexgen-hw-inventory.sh) | `v1.5.0` | Chassis inventory — BMC, PSUs, drives, card serials. No BMC credentials needed. [Docs](docs/scripts/89-hw-inventory.md) |
-| 90 | [`90-nexgen-gpu-install-595-13.sh`](commissioning-scripts/90-nexgen-gpu-install-595-13.sh) | `v2.1.6` | Driver + CUDA 12.8 + DCGM 4.x + Fabric Manager. [Docs](docs/scripts/90-gpu-driver-install.md) |
+| 90 | [`90-nexgen-gpu-install-595-13.sh`](commissioning-scripts/90-nexgen-gpu-install-595-13.sh) | `v2.1.7` | Driver + CUDA 12.8 + DCGM 4.x + Fabric Manager. [Docs](docs/scripts/90-gpu-driver-install.md) |
 | 91 | [`91-nexgen-gpu-mig-ecc-config.sh`](commissioning-scripts/91-nexgen-gpu-mig-ecc-config.sh) | `v1.3.0` | Disable MIG, enable ECC. [Docs](docs/scripts/91-mig-ecc-config.md) |
-| 92 | [`92-nexgen-gpu-inventory.sh`](commissioning-scripts/92-nexgen-gpu-inventory.sh) | `v2.4.0` | GPU inventory and the pre-load delivery baseline. [Docs](docs/scripts/92-gpu-inventory.md) |
-| 98 | [`98-nexgen-gpu-stress-test.sh`](commissioning-scripts/98-nexgen-gpu-stress-test.sh) | `v2.6.0` | DCGM diagnostic, levels 1–4. [Docs](docs/scripts/98-gpu-stress-test.md) |
+| 92 | [`92-nexgen-gpu-inventory.sh`](commissioning-scripts/92-nexgen-gpu-inventory.sh) | `v2.4.1` | GPU inventory and the pre-load delivery baseline. [Docs](docs/scripts/92-gpu-inventory.md) |
+| 93 | [`93-nexgen-dcgm-level1.sh`](commissioning-scripts/93-nexgen-dcgm-level1.sh) | `v3.0.0` | DCGM level 1, software checks, seconds. [Docs](docs/scripts/93-96-dcgm-ladder.md) |
+| 94 | [`94-nexgen-dcgm-level2.sh`](commissioning-scripts/94-nexgen-dcgm-level2.sh) | `v3.0.0` | DCGM level 2, adds memory and PCIe. Skips if 93 failed. |
+| 95 | [`95-nexgen-dcgm-level3.sh`](commissioning-scripts/95-nexgen-dcgm-level3.sh) | `v3.0.0` | DCGM level 3, adds stress, power, SM diagnostic. Skips if a lower rung failed. |
+| 96 | [`96-nexgen-dcgm-level4.sh`](commissioning-scripts/96-nexgen-dcgm-level4.sh) | `v3.0.0` | DCGM level 4, adds memtest, pulse, EUD. Hours. Raise the MAAS node timeout first. |
 | 99 | [`99-nexgen-gpu-burn-in.sh`](commissioning-scripts/99-nexgen-gpu-burn-in.sh) | `v1.7.0` | Sustained 1-hour load, optional. [Docs](docs/scripts/99-gpu-burn-in.md) |
-| 95 | [`95-nexgen-storage-sanitize.sh`](commissioning-scripts/95-nexgen-storage-sanitize.sh) | `v1.0.0` | **Decommission only.** Sanitise all media and emit the evidence. [Docs](docs/scripts/95-storage-sanitize.md) |
+| 70 | [`70-nexgen-storage-sanitize.sh`](commissioning-scripts/70-nexgen-storage-sanitize.sh) | `v1.0.0` | **Decommission only.** Sanitise all media and emit the evidence. [Docs](docs/scripts/70-storage-sanitize.md) |
 
-`95` is the exception and is **not part of the commissioning sequence**. It is the
+`70` is the exception and is **not part of the commissioning sequence**. It is the
 only destructive script here, it is uploaded on its own for a decommission, and it
 defaults to audit mode so that an unedited copy sitting in a commissioning set
 inventories the media and erases nothing. It is documented with the others because
@@ -99,7 +103,7 @@ Observed stage timings on an 8× H100 PCIe node (1-hour burn):
 | `90` driver install | 4 m 21 s |
 | `91` MIG / ECC | 3 s |
 | `92` inventory | 15 s |
-| `98` DCGM level 3 | 8 m 12 s |
+| `95` DCGM level 3 | 8 m 12 s |
 | `99` burn-in | 62 m 12 s |
 
 ## Reporting
@@ -132,13 +136,16 @@ Nexgen-MAAS-validation/
 ├── README.md
 ├── .env.example                             # MAAS credentials template
 ├── commissioning-scripts/        # MAAS commissioning scripts (run in order)
+│   ├── 70-nexgen-storage-sanitize.sh       # Decommission only: sanitise all media
 │   ├── 80-nexgen-network-cabling-verify.sh # Step 0: LLDP vs NetBox cabling
 │   ├── 89-nexgen-hw-inventory.sh           # Step 1: BMC, PSUs, drives, card serials
 │   ├── 90-nexgen-gpu-install-595-13.sh     # Step 2: Driver + CUDA + DCGM + Fabric Manager
 │   ├── 91-nexgen-gpu-mig-ecc-config.sh     # Step 3: Disable MIG, enable ECC
 │   ├── 92-nexgen-gpu-inventory.sh          # Step 4: GPU inventory & health check
-│   ├── 95-nexgen-storage-sanitize.sh       # Decommission only: sanitise all media
-│   ├── 98-nexgen-gpu-stress-test.sh        # Step 5: DCGM stress test
+│   ├── 93-nexgen-dcgm-level1.sh            # Step 5: DCGM ladder, one script per level,
+│   ├── 94-nexgen-dcgm-level2.sh            #         each gated on the rung below
+│   ├── 95-nexgen-dcgm-level3.sh            #         (one shared body, see tools/)
+│   ├── 96-nexgen-dcgm-level4.sh            #         level 4 runs for hours
 │   └── 99-nexgen-gpu-burn-in.sh            # Step 6: Sustained load (optional)
 ├── docs/                         # Documentation
 │   ├── scripts/                            # One document per commissioning script
@@ -159,7 +166,7 @@ Nexgen-MAAS-validation/
 │   ├── check-python-compat.py              # Generator still runs on the oldest Python we deploy to
 │   ├── stubs/                              # Fake nvidia-smi, dcgmi, dmesg, lspci, systemctl, gpu_burn, dcgmproftester13
 │   ├── stubs-hw/                           # Fake ipmitool, dmidecode, smartctl, lsblk, VPD-aware lspci (script 89 only)
-│   ├── stubs-decomm/                       # Fake nvme, hdparm, sg_*, lsblk -J, findmnt (script 95 only)
+│   ├── stubs-decomm/                       # Fake nvme, hdparm, sg_*, lsblk -J, findmnt (script 70 only)
 │   ├── stubs-raidcli/                      # Fake storcli64, on its own so its ABSENCE is testable
 │   └── fixtures/                           # Captured and synthetic evidence
 ├── reports/                      # Generated reports (git-ignored)

@@ -81,9 +81,50 @@ SCRIPT_ALIASES = {
     "install":   "90-nexgen-gpu-install-595-13.sh",
     "config":    "91-nexgen-gpu-mig-ecc-config.sh",
     "inventory": "92-nexgen-gpu-inventory.sh",
-    "stress":    "98-nexgen-gpu-stress-test.sh",
+    "stress":    "95-nexgen-dcgm-level3.sh",
     "burnin":    "99-nexgen-gpu-burn-in.sh",
 }
+
+# The DCGM diagnostic is a ladder of four scripts (stress test v3.0.0+), one
+# per level, each gated on the one below.  The certificate adjudicates the
+# highest rung that actually ran; a rung that was skipped because a lower one
+# failed is not a result, so the failing rung is the one that gets read.  The
+# single pre-split script is still recognised for machines commissioned
+# before it.  Highest level first.
+STRESS_LADDER = (
+    (4, "96-nexgen-dcgm-level4.sh"),
+    (3, "95-nexgen-dcgm-level3.sh"),
+    (2, "94-nexgen-dcgm-level2.sh"),
+    (1, "93-nexgen-dcgm-level1.sh"),
+    (None, "98-nexgen-gpu-stress-test.sh"),
+)
+
+
+def _ladder_summary(level, script_name, data) -> dict:
+    diag = (data or {}).get("dcgm_diagnostics") or {}
+    if level is None:
+        level = _as_int(diag.get("run_level"))
+    return {
+        "level": level,
+        "script": script_name,
+        "verdict": (data.get("verdict") or {}).get("overall", "?"),
+        "skipped": bool(data.get("skipped")),
+        "reason": data.get("skip_reason") or data.get("halt_reason") or "",
+        "duration": diag.get("duration_seconds", 0),
+        "exit_code": diag.get("exit_code", "?"),
+        "issues": [i.get("issue", "") for i in (data.get("verdict") or {}).get("issues", [])],
+    }
+
+
+def pick_stress_from_ladder(found: list) -> tuple:
+    """found: list of (level, script_name, data).  Returns (data, script, summaries)."""
+    rows = [(lvl, name, d) for lvl, name, d in found if d]
+    rows.sort(key=lambda r: _ladder_summary(r[0], r[1], r[2])["level"], reverse=True)
+    summaries = [_ladder_summary(*r) for r in rows]
+    chosen = next((r for r in rows if not r[2].get("skipped")), rows[0] if rows else None)
+    if chosen is None:
+        return None, SCRIPT_ALIASES["stress"], summaries
+    return chosen[2], chosen[1], summaries
 
 
 def _as_int(value) -> int:
@@ -2275,11 +2316,18 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
     else:
         log("  92-burn-in: not found (optional -- no sustained-load evidence)")
 
-    stress_data = client.get_script_json(system_id, SCRIPT_ALIASES["stress"])
+    ladder_found = []
+    for lvl, name in STRESS_LADDER:
+        d = client.get_script_json(system_id, name)
+        if d:
+            ladder_found.append((lvl, name, d))
+            log(f"  {_strip_sh(name)}: loaded ({d.get('verdict', {}).get('overall', '?')}"
+                f"{', skipped' if d.get('skipped') else ''})")
+    stress_data, stress_script, stress_levels = pick_stress_from_ladder(ladder_found)
     if stress_data:
-        log(f"  99-stress: loaded ({stress_data.get('verdict', {}).get('overall', '?')})")
+        log(f"  DCGM: adjudicating {_strip_sh(stress_script)}")
     else:
-        log("  99-stress: not found or no JSON output")
+        log("  DCGM: no ladder rung found or no JSON output")
 
     # Step 3: Fetch full machine hardware details
     log("Fetching machine hardware details...")
@@ -2439,6 +2487,8 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
     log("Fetching full commissioning logs for raw evidence...")
     script_logs: dict = {}
     for alias, script_name in SCRIPT_ALIASES.items():
+        if alias == "stress":
+            script_name = stress_script
         text = client.get_script_stdout_raw(system_id, script_name, output="all")
         if text:
             script_logs[alias] = text
@@ -2454,6 +2504,7 @@ def fetch_from_maas(hostname: str, maas_url: str, api_key: str) -> dict:
         "install": install_data,
         "inventory": inventory_data,
         "stress": stress_data,
+        "stress_levels": stress_levels,
         "config": config_data,
         "burnin": burnin_data,
         "machine": details,
@@ -3576,6 +3627,7 @@ def generate_report(
     config: dict | None = None,
     burnin: dict | None = None,
     hwinv: dict | None = None,
+    stress_levels: list | None = None,
 ) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -4089,6 +4141,24 @@ def generate_report(
 
     # --- Stress test matrix ---
     stress_section = ""
+    ladder_html = ""
+    if stress_levels:
+        lrows = ""
+        for r in stress_levels:
+            if r.get("skipped"):
+                note = escape(r.get("reason") or "skipped")
+            else:
+                note = escape("; ".join(r.get("issues") or [])[:300]) or "&mdash;"
+            lrows += (f'<tr><td>Level {escape(str(r.get("level", "?")))}</td>'
+                      f'<td class="mono tiny">{escape(_strip_sh(str(r.get("script", ""))))}</td>'
+                      f'<td>{badge(str(r.get("verdict", "?")))}</td>'
+                      f'<td class="mono tiny">{fmt_dur(r.get("duration", 0))}</td>'
+                      f'<td class="tiny">{note}</td></tr>')
+        ladder_html = (
+            '<div class="tbl-wrap"><table class="tbl gpu">'
+            '<thead><tr><th>DCGM rung</th><th>Script</th><th>Verdict</th>'
+            '<th>Diag time</th><th>Notes</th></tr></thead>'
+            f'<tbody>{lrows}</tbody></table></div>')
     if stress:
         level = diag.get("run_level", "?")
         dur = diag.get("duration_seconds", 0)
@@ -4101,11 +4171,11 @@ def generate_report(
         </div>'''
         matrix = render_test_matrix(diag, gpu_count)
         if matrix:
-            stress_section = stress_bar + matrix
+            stress_section = ladder_html + stress_bar + matrix
         else:
-            stress_section = stress_bar + '<div class="dim">No per-test results parsed</div>'
+            stress_section = ladder_html + stress_bar + '<div class="dim">No per-test results parsed</div>'
     else:
-        stress_section = '<div class="dim">Stress test data not available</div>'
+        stress_section = ladder_html + '<div class="dim">Stress test data not available</div>'
 
     # --- Commissioning scripts table ---
     scripts_html = render_commissioning_scripts_table(all_scripts or [])
@@ -4747,7 +4817,9 @@ Examples:
                           help="89-hw-inventory JSON file (chassis, PSUs, drives, BMC)")
     file_grp.add_argument("--burnin", metavar="FILE", help="92-burn-in JSON file")
     file_grp.add_argument("--inventory", metavar="FILE", help="98-inventory JSON file")
-    file_grp.add_argument("--stress", metavar="FILE", help="99-stress-test JSON file")
+    file_grp.add_argument("--stress", metavar="FILE", action="append",
+                          help="DCGM diagnostic JSON file; repeat for each ladder rung "
+                               "(93-96) -- the highest rung that ran is adjudicated")
 
     # Output
     p.add_argument("--output", "-o", metavar="FILE", help="Output HTML file (default: stdout)")
@@ -4803,6 +4875,7 @@ Examples:
             cpu_topology=data.get("cpu_topology"),
             script_logs=data.get("script_logs"),
             hostname_override=data["hostname"],
+            stress_levels=data.get("stress_levels"),
         )
 
     elif any([args.install, args.inventory, args.stress, args.config, args.burnin,
@@ -4811,7 +4884,12 @@ Examples:
         log("File-based mode (no MAAS API)")
         install = load_json_file(args.install)
         inventory = load_json_file(args.inventory)
-        stress = load_json_file(args.stress)
+        ladder_found = []
+        for path in (args.stress or []):
+            d = load_json_file(path)
+            if d:
+                ladder_found.append((None, path, d))
+        stress, _stress_src, stress_levels = pick_stress_from_ladder(ladder_found)
         config = load_json_file(args.config)
         burnin = load_json_file(args.burnin)
         hwinv = load_json_file(args.hwinv)
@@ -4828,6 +4906,7 @@ Examples:
             burnin=burnin,
             hwinv=hwinv,
             maas_url=args.maas_url,
+            stress_levels=stress_levels if len(stress_levels) > 1 else None,
         )
 
     else:

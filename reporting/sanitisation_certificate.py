@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Certificate of Sanitisation from 95-nexgen-storage-sanitize output.
+"""Certificate of Sanitisation from 70-nexgen-storage-sanitize output.
 
 A separate document from the GPU commissioning certificate, deliberately. A
 decommission is not a commissioning: the subject is the media rather than the
@@ -33,7 +33,7 @@ import device_certificate as dc  # noqa: E402
 
 __version__ = "1.0.0"
 
-SCRIPT_NAME = "95-nexgen-storage-sanitize.sh"
+SCRIPT_NAME = "70-nexgen-storage-sanitize.sh"
 
 # The runbook sections this document evidences, and the ones it does not.
 COVERS = "media sanitisation to NIST SP 800-88r1"
@@ -692,17 +692,17 @@ evidence from {script}</footer>
 def main() -> None:
     p = argparse.ArgumentParser(
         prog="sanitisation_certificate.py",
-        description="Certificate of Sanitisation from 95-nexgen-storage-sanitize output.",
+        description="Certificate of Sanitisation from 70-nexgen-storage-sanitize output.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
   # from a file, or from stdin with -
-  sanitisation_certificate.py --sanitize 95-output.json -o cert.html
+  sanitisation_certificate.py --sanitize 70-output.json -o cert.html
 
   # straight from MAAS
   sanitisation_certificate.py --host EXAMPLE-NODE-01 --maas-url $MAAS_URL
 """)
     p.add_argument("--sanitize", metavar="FILE",
-                   help="95-nexgen-storage-sanitize JSON file, or - for stdin")
+                   help="70-nexgen-storage-sanitize JSON file, or - for stdin")
     p.add_argument("--host", metavar="HOSTNAME", help="fetch the evidence from MAAS")
     p.add_argument("--maas-url", metavar="URL", help="MAAS URL (default: $MAAS_URL)")
     p.add_argument("--api-key", metavar="KEY", help="MAAS API key (default: $MAAS_API_KEY)")
