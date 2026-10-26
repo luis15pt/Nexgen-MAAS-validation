@@ -1,4 +1,4 @@
-# 92 - GPU Inventory (`v2.4.0`)
+# 92 - GPU Inventory (`v2.4.1`)
 
 [← Back to README](../../README.md)
 

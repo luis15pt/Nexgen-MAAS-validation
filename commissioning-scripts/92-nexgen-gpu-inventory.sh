@@ -22,7 +22,7 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 # CONFIG
 ###############################################################################
 WORK_DIR="/tmp/gpu-inventory-$$"
-SCRIPT_VERSION="2.4.0"
+SCRIPT_VERSION="2.4.1"
 
 ###############################################################################
 # LOGGING
@@ -141,6 +141,7 @@ guess_mem_type() {
         *B100*|*B200*|*B300*)  echo "HBM3e" ;;
         *A6000*|*A5000*|*A4000*|*A2000*|*A10*|*A16*|*A30*|*A40*) echo "GDDR6" ;;
         *L4*|*L40*)            echo "GDDR6" ;;
+        *RTX*PRO*)             echo "GDDR7" ;;   # RTX PRO 6000/5000/4500/4000 Blackwell
         *RTX*50*)              echo "GDDR7" ;;
         *RTX*40*|*RTX*Ada*)    echo "GDDR6X" ;;
         *RTX*60*|*RTX*30*|*RTX*20*) echo "GDDR6" ;;
