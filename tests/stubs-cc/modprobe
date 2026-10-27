@@ -1,0 +1,4 @@
+#!/bin/bash
+# Inert: the suite is not root and loads nothing. Records the call.
+echo "modprobe $*" >> "${STUB_MODPROBE_LOG:-/tmp/stub-modprobe-calls}"
+exit 0

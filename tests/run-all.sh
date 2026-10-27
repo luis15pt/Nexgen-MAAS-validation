@@ -42,6 +42,109 @@ for spec in "91-nexgen-gpu-mig-ecc-config.sh:" \
     fi
 done
 
+hdr "Confidential Computing mode is cleared before the driver loads (90)"
+# A GPU a previous tenant left in CC mode keeps it across reboots, power
+# cycles and the reimage, and the host driver refuses it: nvidia.ko loads,
+# /dev/nvidia0-7 appear, nvidia-smi exits 6 "No devices were found", and dmesg
+# says "CPU does not support confidential compute". 8 of 28 RTX PRO 6000 nodes
+# with identical BIOS. Only gpu-admin-tools can switch it, only with no nvidia
+# driver bound, so script 90 does it before modprobe. The functions are sourced
+# (main is guarded) and run against a stub of the tool.
+cc_run() { # extra env, shell snippet after sourcing
+    local envs="$1" snippet="$2"
+    rm -f /tmp/stub-* /tmp/stub-cc-state.json /tmp/stub-cc-halt
+    env PATH="$PWD/tests/stubs-cc:$PWD/tests/stubs:$PATH" STUB_GPU_COUNT=2 \
+        GPU_ADMIN_TOOLS_DIR="$PWD/tests/stubs-cc" NEXGEN_HALT_FILE=/tmp/stub-cc-halt \
+        STUB_CC_STATE=/tmp/stub-cc-state.json $envs \
+        bash -c "source commissioning-scripts/90-nexgen-gpu-install-595-13.sh; SCRIPT_START=\$(date +%s); $snippet; rm -rf \"\$WORK_DIR\"" 2>/dev/null
+}
+cc_case() { # label, extra env, jq filter, expected
+    local label="$1" envs="$2" filt="$3" want="$4" got
+    got=$(cc_run "$envs" 'reset_confidential_compute; output_report' | jq -r "$filt")
+    if [[ "$got" == "$want" ]]; then printf '  ok    %-58s -> %s\n' "$label" "$got"
+    else printf '  FAIL  %-58s -> got %s, want %s\n' "$label" "$got" "$want"; rc=1; fi
+}
+cc_case "every GPU already off: nothing switched, run proceeds" "STUB_CC_MODES=off,off" \
+    '"\(.install.confidential_compute.switched_off_count)/\(.revalidation_required)"' "0/false"
+cc_case "and the check is recorded as done, per BDF" "STUB_CC_MODES=off,off" \
+    '"\(.install.confidential_compute.checked)/\(.install.confidential_compute.gpus | length)/\(.install.confidential_compute.gpus[1].bdf)"' "true/2/0000:1c:00.0"
+cc_case "a GPU left ON by a tenant is switched off" "STUB_CC_MODES=on,off" \
+    '.install.confidential_compute.gpus[0] | "\(.mode_before)->\(.mode_after)/\(.switched_off)"' "on->off/true"
+cc_case "and the switch voids the run, like an ECC enable does" "STUB_CC_MODES=on,off" \
+    '"\(.verdict.overall)/\(.revalidation_required)"' "FAIL/true"
+cc_case "naming the GPU and the mode it was in" "STUB_CC_MODES=on,off" \
+    '[.verdict.issues[].issue | select(test("Confidential Computing mode was ON")) | test("0000:1b:00.0 was on")] | first' "true"
+cc_case "devtools is a CC mode too" "STUB_CC_MODES=off,devtools" \
+    '.install.confidential_compute.gpus[1] | "\(.mode_before)->\(.mode_after)"' "devtools->off"
+cc_case "a switch that does not take is reported, not assumed" "STUB_CC_MODES=on,off STUB_CC_STICKY=all" \
+    '"\(.install.confidential_compute.switched_off_count)/\(.install.confidential_compute.not_off_count)/\(.verdict.overall)"' "0/1/FAIL"
+cc_case "a GPU the tool cannot read is unknown, not off" "STUB_CC_MODES=off,off STUB_CC_BROKEN=0000:1c:00.0" \
+    '"\(.install.confidential_compute.gpus[1].mode_after)/\(.install.confidential_compute.unknown_count)/\(.verdict.overall)"' "unknown/1/WARN"
+cc_case "Secure Boot stops the tool and the report says so" "STUB_CC_MODES=on,off STUB_SB=enabled" \
+    '"\(.install.confidential_compute.checked)/\(.install.confidential_compute.skipped_reason | test("Secure Boot"))/\(.verdict.overall)"' "false/true/WARN"
+cc_case "an nvidia module already loaded is not fought with --ignore-nvidia-driver" "STUB_CC_MODES=on,off STUB_LSMOD=nvidia" \
+    '"\(.install.confidential_compute.checked)/\(.install.confidential_compute.skipped_reason | test("already loaded"))"' "false/true"
+# The halt marker is what stops 91-99 spending an hour on void evidence.
+cc_run "STUB_CC_MODES=on,off" 'reset_confidential_compute; output_report >/dev/null' >/dev/null
+if [[ -s /tmp/stub-cc-halt ]] && grep -q "Confidential Computing" /tmp/stub-cc-halt; then
+    printf '  ok    %-58s\n' "a switch writes the halt marker the later scripts honour"
+else printf '  FAIL  %-58s\n' "a switch writes the halt marker the later scripts honour"; rc=1; fi
+cc_run "STUB_CC_MODES=off,off" 'reset_confidential_compute; output_report >/dev/null' >/dev/null
+if [[ ! -e /tmp/stub-cc-halt ]]; then
+    printf '  ok    %-58s\n' "and a clean check writes none"
+else printf '  FAIL  %-58s\n' "and a clean check writes none"; rc=1; fi
+# Script 91 used to delete the marker on entry; it must now honour it.
+rm -f /tmp/stub-*
+echo "Confidential Computing mode was ON on 1 GPU(s) ... Re-run commissioning." > /tmp/stub-cc-halt
+got=$(env PATH="$PWD/tests/stubs:$PATH" STUB_GPU_COUNT=2 NEXGEN_HALT_FILE=/tmp/stub-cc-halt \
+      bash commissioning-scripts/91-nexgen-gpu-mig-ecc-config.sh 2>/dev/null | jq -r '"\(.skipped)/\(.verdict.overall)"')
+if [[ "$got" == "true/FAIL" && -e /tmp/stub-cc-halt ]]; then
+    printf '  ok    %-58s -> %s\n' "91 skips on the marker 90 wrote and leaves it in place" "$got"
+else printf '  FAIL  %-58s -> got %s\n' "91 skips on the marker 90 wrote and leaves it in place" "$got"; rc=1; fi
+rm -f /tmp/stub-cc-halt /tmp/stub-cc-state.json
+
+hdr "GPU BAR check reads the resource file by register, not by line (90)"
+# The sysfs resource file has one line per BAR register; a 64-bit BAR takes
+# two and its second line is zeros. On the RTX PRO 6000 BAR0 is 64-bit, so
+# reading line 2 as "BAR1" reported an unassigned BAR1 on every card while
+# lspci showed all regions assigned -- a false lead on every driver failure.
+bar_case() { # label, resource-file body, expected rc, expected substring in log
+    local label="$1" body="$2" want_rc="$3" want_txt="$4" d out got_rc
+    d=$(mktemp -d); mkdir -p "$d/0000:1b:00.0"
+    printf '%s\n' "$body" > "$d/0000:1b:00.0/resource"
+    out=$(env PATH="$PWD/tests/stubs:$PATH" STUB_GPU_COUNT=1 SYSFS_PCI_ROOT="$d" \
+          bash -c 'source commissioning-scripts/90-nexgen-gpu-install-595-13.sh; trap - ERR; log_gpu_bars; echo "rc=$?"; rm -rf "$WORK_DIR"' 2>&1)
+    rm -rf "$d"
+    got_rc=$(printf '%s\n' "$out" | grep -oP '^rc=\K[0-9]+')
+    if [[ "$got_rc" == "$want_rc" ]] && printf '%s' "$out" | grep -q -- "$want_txt"; then
+        printf '  ok    %-58s -> rc=%s\n' "$label" "$got_rc"
+    else printf '  FAIL  %-58s -> rc=%s, wanted %s with %q\n%s\n' "$label" "$got_rc" "$want_rc" "$want_txt" "$out"; rc=1; fi
+}
+BLACKWELL_OK='0x00000000b8000000 0x00000000bbffffff 0x0000000000140204
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000200000000000 0x0000201fffffffff 0x000000000014220c
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000202000000000 0x0000202001ffffff 0x000000000014220c
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000000 0x0000000000000000 0x0000000000000000'
+BLACKWELL_NO_FB='0x00000000b8000000 0x00000000bbffffff 0x0000000000140204
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000000 0x0000000000000000 0x000000002014220c
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000202000000000 0x0000202001ffffff 0x000000000014220c
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000000 0x0000000000000000 0x0000000000000000'
+CLASSIC_OK='0x00000000b8000000 0x00000000b8ffffff 0x0000000000040200
+0x0000200000000000 0x0000201fffffffff 0x000000000014220c
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000202000000000 0x0000202001ffffff 0x000000000014220c
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000006000 0x000000000000607f 0x0000000000040101
+0x0000000000000000 0x0000000000000000 0x0000000000000000'
+bar_case "64-bit BAR0: its upper half is not an unassigned BAR1" "$BLACKWELL_OK" 0 "BAR1\[reg2\]=0x0000200000000000(128G)"
+bar_case "a framebuffer BIOS left unassigned is still caught" "$BLACKWELL_NO_FB" 1 "unassigned: BAR1\[reg2\]"
+bar_case "32-bit BAR0 layout with an I/O BAR reads clean" "$CLASSIC_OK" 0 "BAR3\[reg3\]"
+
 hdr "Chassis telemetry separates a slow fan from a hot card"
 # GPU telemetry says a card got hot; it cannot say why. A fan slower than its
 # peers is serviceable, a warm inlet is the room's problem, and an even chassis

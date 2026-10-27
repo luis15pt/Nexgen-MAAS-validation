@@ -78,6 +78,43 @@ for d in /sys/bus/pci/devices/*; do grep -q 0x10de "$d/vendor" && { echo "$d"; s
 ls -la /dev/nvidia*; cat /proc/driver/nvidia/version
 ```
 
+## `NVRM: ... CPU does not support confidential compute` and `nvidia-smi` finds no devices
+
+Seen on 8 of 28 `eu1-hpe1-rtx6000pro-se` nodes (DL380a Gen12, 8× RTX PRO 6000
+Blackwell Server Edition). `modprobe nvidia` succeeds, `/dev/nvidia0-7` appear,
+`nvidia-smi` exits 6 with `No devices were found`, and `dmesg` has, for every
+GPU:
+
+```
+NVRM: GPU0 confComputeConstructEngine_IMPL: CPU does not support confidential compute.
+NVRM: RmInitAdapter failed! (0x22:0x38:894)
+```
+
+The previous tenant enabled NVIDIA Confidential Computing mode on the GPUs. It
+is a GPU-side setting, separate from CPU TDX, stored in the GPU, and it survives
+reboots, power cycles and reimaging. BIOS was identical across all 28 nodes
+(checked over Redfish), so it is purely GPU state. The host driver refuses a
+CC-mode GPU when the kernel presents no CPU TEE. The old "unassigned BAR1"
+warning that accompanied this was a false positive (see the BAR section of the
+[script 90 docs](scripts/90-gpu-driver-install.md)).
+
+From v2.2.0 script `90` queries the mode on every GPU before loading the driver
+and switches it off with NVIDIA gpu-admin-tools; the run is then voided and must
+be repeated, because NVIDIA requires a full reboot after the switch. By hand, on
+a box with **no nvidia module loaded** and Secure Boot off:
+
+```bash
+git clone https://github.com/NVIDIA/gpu-admin-tools && cd gpu-admin-tools
+sudo python3 ./nvidia_gpu_tools.py --devices gpus --query-cc-mode
+for bdf in $(lspci -Dn | awk '$2 ~ /^030[02]:/ && $3 ~ /^10de:/ {print $1}'); do
+  sudo python3 ./nvidia_gpu_tools.py --devices "$bdf" --set-cc-mode=off --reset-after-cc-mode-switch
+done
+sudo reboot
+```
+
+`nvidia-smi conf-compute -f` can confirm the mode once the driver is up, but
+cannot change it. Do not use `--ignore-nvidia-driver`: unload the driver instead.
+
 ## `NVRM: BAR0 is 0M @ 0x0` and the driver refuses to load
 
 Two distinct causes with *opposite* fixes, which is why script `90` checks both

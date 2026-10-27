@@ -4,9 +4,15 @@
 # title: NexGen GPU Driver 595 + CUDA 13 + DCGM 4.x Installation
 # description: Installs nvidia-driver-595-server-open, cuda-toolkit-12-8,
 #   DCGM 4.x (datacenter-gpu-manager-4-cuda13), and support tools.
+#   Before loading the driver, reads Confidential Computing mode on every GPU
+#   with NVIDIA gpu-admin-tools and switches it off where a previous tenant
+#   left it on (the mode persists in the GPU across reboots and reimages, and
+#   the host driver refuses a CC-mode GPU). A switch voids this run: the
+#   later scripts halt and commissioning must be repeated.
 #   Enables persistence mode, loads kernel modules, starts DCGM service.
 #   Must run before 92-inventory, 98-stress-test and 99-burn-in.
 #   Override at runtime: NVIDIA_DRIVER=... CUDA_TOOLKIT=... DCGM_CUDA_MAJOR=...
+#   GPU_ADMIN_TOOLS_REF=<commit> GPU_ADMIN_TOOLS_DIR=<checkout>
 # script_type: commissioning
 # hardware_type: gpu
 # timeout: 00:20:00
@@ -32,8 +38,21 @@ FABRIC_READY_TIMEOUT="${FABRIC_READY_TIMEOUT:-300}"
 # single call; NVSMI_READY_TIMEOUT bounds the retry window for fast failures.
 NVSMI_CALL_TIMEOUT="${NVSMI_CALL_TIMEOUT:-240}"
 NVSMI_READY_TIMEOUT="${NVSMI_READY_TIMEOUT:-180}"
+# NVIDIA gpu-admin-tools, used to read and clear Confidential Computing mode
+# before the driver loads (see reset_confidential_compute). Pinned to one of
+# NVIDIA's dated release tags so every node runs the same tool and the pin is
+# readable; a branch name or commit hash works in the same slot. The fetch
+# failing is a WARN with the reason, never a hard failure of the install.
+# GPU_ADMIN_TOOLS_DIR points at an existing checkout and skips the fetch.
+GPU_ADMIN_TOOLS_REF="${GPU_ADMIN_TOOLS_REF:-v2026.09.29}"
+GPU_ADMIN_TOOLS_URL="${GPU_ADMIN_TOOLS_URL:-https://github.com/NVIDIA/gpu-admin-tools/archive/${GPU_ADMIN_TOOLS_REF}.tar.gz}"
+GPU_ADMIN_TOOLS_DIR="${GPU_ADMIN_TOOLS_DIR:-}"
+CC_TOOL_TIMEOUT="${CC_TOOL_TIMEOUT:-300}"
+# Marker the later GPU scripts consult (same path as script 91 writes). Set
+# when this run cannot produce usable evidence and must be repeated.
+NEXGEN_HALT_FILE="${NEXGEN_HALT_FILE:-/run/nexgen-commissioning-halt}"
 WORK_DIR="/tmp/gpu-install-$$"
-SCRIPT_VERSION="2.1.7"
+SCRIPT_VERSION="2.2.0"
 
 ###############################################################################
 # LOGGING
@@ -493,25 +512,46 @@ install_packages() {
 # the one the BIOS runs out of room for: 128 GB per card on a 96 GB RTX PRO
 # 6000, 128 GB on H100/H200. The setpci BAR0 check reads only the low 32 bits,
 # which on a 64-bit BAR legitimately shows just the flag bits (0x0000000c), so
-# the sysfs resource file is the view to trust. One line per GPU; returns 1 if
-# any GPU has BAR0 or BAR1 unassigned.
+# the sysfs resource file is the view to trust.
+#
+# The resource file has one line per BAR *register* (six of them), not per
+# region: a 64-bit BAR occupies two registers and its second line is all
+# zeros. On the RTX PRO 6000 BAR0 itself is 64-bit, so reading line 2 as
+# "BAR1" found the upper half of BAR0 and reported a false "unassigned BAR1"
+# on every card while lspci showed all regions assigned. Each line's flags
+# column says what the register is: 0 means not implemented, bit 8 (0x100)
+# I/O, bit 9 (0x200) memory, bit 20 (0x100000) a 64-bit BAR whose next
+# register is its upper half. Memory regions are named BAR0/BAR1/BAR3 in
+# NVIDIA's order (registers, framebuffer, RAMIN) with the register index in
+# brackets. One line per GPU; returns 1 if any memory region is unassigned.
 log_gpu_bars() {
+    local root="${SYSFS_PCI_ROOT:-/sys/bus/pci/devices}"
     local pci_addr rc=0
     for pci_addr in $(lspci -Dn | awk '/10de:/{print $1}'); do
-        local res="/sys/bus/pci/devices/${pci_addr}/resource"
+        local res="${root}/${pci_addr}/resource"
         [[ -r "$res" ]] || continue
-        local line="" idx missing=""
-        for idx in 0 1 3; do
-            local start end size
-            read -r start end _ <<< "$(awk -v n=$((idx + 1)) 'NR == n {print $1, $2}' "$res")"
-            if [[ -z "$start" || $((start)) -eq 0 ]]; then
+        local line="" missing="" reg=0 nth=0 skip=false
+        local start end flags
+        while [[ $reg -lt 6 ]] && read -r start end flags; do
+            local r=$reg
+            reg=$((reg + 1))
+            if $skip; then skip=false; continue; fi
+            [[ -z "$flags" ]] && continue
+            local f=$((flags))
+            (( f == 0 )) && continue
+            (( f & 0x100 )) && continue
+            (( f & 0x100000 )) && skip=true
+            local name size
+            case $nth in 0) name="BAR0" ;; 1) name="BAR1" ;; *) name="BAR3" ;; esac
+            nth=$((nth + 1))
+            if [[ $((start)) -eq 0 ]]; then
                 size="unassigned"
-                [[ $idx -ne 3 ]] && missing+=" BAR${idx}"
+                missing+=" ${name}[reg${r}]"
             else
                 size=$(numfmt --to=iec $(( end - start + 1 )) 2>/dev/null || echo "$(( (end - start + 1) / 1048576 ))M")
             fi
-            line+=" BAR${idx}=${start:-0x0}(${size})"
-        done
+            line+=" ${name}[reg${r}]=${start}(${size})"
+        done < "$res"
         if [[ -n "$missing" ]]; then
             warn "  ${pci_addr}:${line} -- unassigned:${missing}"
             rc=1
@@ -552,7 +592,11 @@ dump_gpu_load_diagnostics() {
     log "--- /proc/driver/nvidia/gpus ---"
     cat /proc/driver/nvidia/gpus/*/information >&2 2>/dev/null || log "  (no GPUs registered with the driver)"
     log "--- dmesg: NVRM / nvidia / Xid / PCI resource lines (last 60) ---"
-    dmesg | grep -iE "NVRM|nvidia|nouveau|Xid|gsp|firmware|BAR [0-9]|can't assign|no space for|fallen off" | tail -60 >&2 || true
+    dmesg | grep -iE "NVRM|nvidia|nouveau|Xid|gsp|firmware|BAR [0-9]|can't assign|no space for|fallen off|confidential" | tail -60 >&2 || true
+    if [[ -s "$WORK_DIR/cc_tool.log" ]]; then
+        log "--- gpu-admin-tools output (Confidential Computing check, last 40) ---"
+        tail -40 "$WORK_DIR/cc_tool.log" >&2 || true
+    fi
     log "--- GSP firmware on disk ---"
     find /lib/firmware/nvidia/ -name "gsp_*" -ls 2>/dev/null >&2 || warn "  no GSP firmware found"
     log "--- DKMS status ---"
@@ -562,6 +606,211 @@ dump_gpu_load_diagnostics() {
     log "--- Secure Boot ---"
     mokutil --sb-state >&2 2>&1 || true
     err "--- end GPU driver diagnostics ---"
+}
+
+###############################################################################
+# CONFIDENTIAL COMPUTING MODE -- read and switch off BEFORE the driver loads
+###############################################################################
+# A GPU a previous tenant left in NVIDIA Confidential Computing (CC) mode
+# keeps that mode in its own non-volatile state. It survives reboots, power
+# cycles and the reimage, so nothing in the wipe clears it, and it is GPU
+# state, not platform state: 8 of 28 eu1-hpe1-rtx6000pro-se nodes had it with
+# BIOS settings identical to the 20 that did not. The host driver then refuses
+# every such GPU with
+#   NVRM: GPU0 confComputeConstructEngine_IMPL: CPU does not support confidential compute.
+#   NVRM: RmInitAdapter failed! (0x22:0x38:894)
+# nvidia.ko loads, /dev/nvidia0-7 appear, and nvidia-smi exits 6 "No devices
+# were found". Even where the driver did come up, a CC-mode GPU runs with bus
+# encryption on and performance counters off, which the next customer would
+# inherit.
+#
+# nvidia-smi conf-compute can only report the mode. Switching it needs
+# NVIDIA's gpu-admin-tools, which talks to the GPU's FSP through BAR0, so it
+# must run with no nvidia driver bound and no kernel lockdown (Secure Boot
+# off). Hence this runs after nouveau is gone and before modprobe nvidia, one
+# invocation per GPU by BDF so a card the tool cannot initialise is reported
+# on its own line instead of aborting the whole query. --ignore-nvidia-driver
+# is deliberately not used.
+#
+# NVIDIA's deployment guide wants a full host reboot after a CC switch, and
+# nvtrust issue 150 shows stale state on an RTX PRO 6000 until one. A reboot
+# here would lose the ephemeral environment and the driver this script just
+# installed, so the pipeline's existing mechanism stands in for it: a run
+# that had to switch a GPU is marked for revalidation, the later scripts skip
+# via the halt marker, and the second commissioning run is the clean boot.
+# Query first, switch only what is not off, and record before/after per BDF.
+cc_gpu_bdfs() {
+    # Display-class NVIDIA functions only: not the audio function, bridges or
+    # NVSwitches, none of which carry a CC mode.
+    lspci -Dn 2>/dev/null | awk '$2 ~ /^030[02]:/ && $3 ~ /^10de:/ {print $1}'
+}
+
+secure_boot_enabled() {
+    # Kernel lockdown is what actually blocks the tool's BAR0 mapping; Secure
+    # Boot is what turns lockdown on. Either answer is enough.
+    local ld="${LOCKDOWN_FILE:-/sys/kernel/security/lockdown}"
+    if [[ -r "$ld" ]] && ! grep -q '\[none\]' "$ld" 2>/dev/null; then
+        return 0
+    fi
+    if command -v mokutil &>/dev/null && mokutil --sb-state 2>/dev/null | grep -qi 'enabled'; then
+        return 0
+    fi
+    return 1
+}
+
+# Sets CC_TOOL to nvidia_gpu_tools.py, or CC_SKIP_REASON and returns 1.
+cc_fetch_tool() {
+    if [[ -n "$GPU_ADMIN_TOOLS_DIR" ]]; then
+        if [[ -f "$GPU_ADMIN_TOOLS_DIR/nvidia_gpu_tools.py" ]]; then
+            CC_TOOL="$GPU_ADMIN_TOOLS_DIR/nvidia_gpu_tools.py"
+            return 0
+        fi
+        CC_SKIP_REASON="GPU_ADMIN_TOOLS_DIR=$GPU_ADMIN_TOOLS_DIR has no nvidia_gpu_tools.py"
+        return 1
+    fi
+    if ! command -v python3 &>/dev/null; then
+        CC_SKIP_REASON="python3 is not available"
+        return 1
+    fi
+    local dest="$WORK_DIR/gpu-admin-tools"
+    mkdir -p "$dest"
+    log "Fetching gpu-admin-tools ${GPU_ADMIN_TOOLS_REF:0:12} from $GPU_ADMIN_TOOLS_URL"
+    if ! wget -q -O "$WORK_DIR/gpu-admin-tools.tar.gz" "$GPU_ADMIN_TOOLS_URL" \
+       || ! tar -xzf "$WORK_DIR/gpu-admin-tools.tar.gz" -C "$dest" --strip-components=1 \
+       || [[ ! -f "$dest/nvidia_gpu_tools.py" ]]; then
+        CC_SKIP_REASON="gpu-admin-tools could not be fetched from $GPU_ADMIN_TOOLS_URL"
+        return 1
+    fi
+    CC_TOOL="$dest/nvidia_gpu_tools.py"
+}
+
+# Runs the tool for one BDF. Everything it prints is appended to cc_tool.log
+# (it logs to stderr); the parsed mode (on/off/devtools) goes to stdout, or
+# "unknown" with CC_LAST_ERROR set and a non-zero return.
+cc_tool_run() {
+    local bdf="$1"; shift
+    local out rc=0
+    out=$(timeout "$CC_TOOL_TIMEOUT" python3 "$CC_TOOL" --devices "$bdf" "$@" 2>&1) || rc=$?
+    printf -- '--- %s %s (exit %s)\n%s\n' "$bdf" "$*" "$rc" "$out" >> "$WORK_DIR/cc_tool.log"
+    local mode
+    mode=$(printf '%s\n' "$out" | grep -oP 'CC mode is \K(on|off|devtools)' | tail -1)
+    if [[ $rc -ne 0 || -z "$mode" ]]; then
+        CC_LAST_ERROR=$(printf '%s\n' "$out" | grep -E 'ERROR|Error|error' | tail -1 | cut -c1-200)
+        [[ $rc -eq 124 ]] && CC_LAST_ERROR="timed out after ${CC_TOOL_TIMEOUT}s"
+        [[ -z "$CC_LAST_ERROR" ]] && CC_LAST_ERROR="exit $rc, no CC mode in output"
+        echo "unknown"
+        return 1
+    fi
+    echo "$mode"
+}
+
+cc_query()   { cc_tool_run "$1" --query-cc-mode; }
+cc_set_off() { cc_tool_run "$1" --set-cc-mode=off --reset-after-cc-mode-switch --query-cc-mode; }
+
+cc_write_json() {
+    jq -n \
+        --argjson checked "${CC_CHECKED:-false}" \
+        --arg reason "${CC_SKIP_REASON:-}" \
+        --arg tool "gpu-admin-tools@${GPU_ADMIN_TOOLS_REF:0:12}" \
+        --argjson gpus "${CC_GPUS:-[]}" \
+        --argjson switched "${CC_SWITCHED:-0}" \
+        --argjson not_off "${CC_NOT_OFF:-0}" \
+        --argjson unknown "${CC_UNKNOWN:-0}" \
+        '{
+            checked: $checked,
+            skipped_reason: (if $reason == "" then null else $reason end),
+            tool: $tool,
+            gpus: $gpus,
+            switched_off_count: $switched,
+            not_off_count: $not_off,
+            unknown_count: $unknown
+        }' > "$WORK_DIR/cc_mode.json"
+}
+
+reset_confidential_compute() {
+    log "=== Confidential Computing mode (must be off; checked before the driver loads) ==="
+    CC_CHECKED=false; CC_SKIP_REASON=""; CC_GPUS="[]"
+    CC_SWITCHED=0; CC_NOT_OFF=0; CC_UNKNOWN=0
+    cc_write_json
+
+    local bdfs
+    bdfs=$(cc_gpu_bdfs)
+    if [[ -z "$bdfs" ]]; then
+        CC_SKIP_REASON="no display-class NVIDIA function in lspci"
+        warn "CC check skipped: $CC_SKIP_REASON"
+        cc_write_json
+        return 0
+    fi
+
+    if lsmod 2>/dev/null | grep -qE '^nvidia '; then
+        warn "nvidia module is already loaded before the CC check -- unloading so gpu-admin-tools can reach the GPUs"
+        modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
+        if lsmod 2>/dev/null | grep -qE '^nvidia '; then
+            CC_SKIP_REASON="nvidia module already loaded and could not be unloaded"
+            warn "CC check skipped: $CC_SKIP_REASON"
+            cc_write_json
+            return 0
+        fi
+    fi
+
+    if secure_boot_enabled; then
+        CC_SKIP_REASON="Secure Boot / kernel lockdown is enabled, so gpu-admin-tools cannot map BAR0"
+        warn "CC check skipped: $CC_SKIP_REASON"
+        cc_write_json
+        return 0
+    fi
+
+    if ! cc_fetch_tool; then
+        warn "CC check skipped: $CC_SKIP_REASON"
+        cc_write_json
+        return 0
+    fi
+
+    CC_CHECKED=true
+    local bdf
+    for bdf in $bdfs; do
+        local before after switched=false error=""
+        if before=$(cc_query "$bdf"); then :; else error="$CC_LAST_ERROR"; fi
+        case "$before" in
+            off)
+                log "  ${bdf}: CC mode off"
+                after="off"
+                ;;
+            unknown)
+                warn "  ${bdf}: CC mode could not be read (${error})"
+                after="unknown"
+                ;;
+            *)
+                warn "  ${bdf}: CC mode is '${before}' (left by a previous tenant) -- switching off"
+                if after=$(cc_set_off "$bdf"); then :; else error="$CC_LAST_ERROR"; fi
+                if [[ "$after" == "off" ]]; then
+                    switched=true
+                    CC_SWITCHED=$((CC_SWITCHED + 1))
+                    log "  ${bdf}: CC mode now off (GPU reset by the tool)"
+                else
+                    # The switch call failed or did not take; re-read so the
+                    # record is the GPU's answer, not the failure's.
+                    if [[ "$after" == "unknown" ]]; then
+                        after=$(cc_query "$bdf") || true
+                    fi
+                    err "  ${bdf}: CC mode still '${after}' after switch + reset (${error:-no error text})"
+                fi
+                ;;
+        esac
+        case "$after" in
+            off)     ;;
+            unknown) CC_UNKNOWN=$((CC_UNKNOWN + 1)) ;;
+            *)       CC_NOT_OFF=$((CC_NOT_OFF + 1)) ;;
+        esac
+        CC_GPUS=$(printf '%s' "$CC_GPUS" | jq \
+            --arg bdf "$bdf" --arg b "$before" --arg a "$after" \
+            --argjson sw "$switched" --arg e "$error" \
+            '. + [{bdf: $bdf, mode_before: $b, mode_after: $a, switched_off: $sw,
+                   error: (if $e == "" then null else $e end)}]')
+    done
+    cc_write_json
+    log "CC mode: $(printf '%s' "$CC_GPUS" | jq length) GPU(s) checked, ${CC_SWITCHED} switched off, ${CC_NOT_OFF} still on, ${CC_UNKNOWN} unreadable"
+    return 0
 }
 
 ###############################################################################
@@ -841,6 +1090,10 @@ load_and_verify() {
         fi
     fi
 
+    # ── Confidential Computing mode: must be off, must be done now ───
+    # Needs the GPUs unbound from nvidia, so it cannot move later.
+    reset_confidential_compute
+
     # ── Load nvidia module (with retries) ─────────────────────────────
     local nvidia_loaded=false
     local attempt modprobe_err
@@ -945,6 +1198,21 @@ load_and_verify() {
     if [[ $smi_rc -ne 0 ]]; then
         err "nvidia-smi failed after module load (exit ${smi_rc} after ${smi_attempt} attempt(s)). Output:"
         printf '%s\n' "$smi_out" >&2
+        # The CC-mode signature is unambiguous and names the fix, so say it
+        # here rather than leave it in the middle of a 60-line dmesg dump.
+        local cc_rejects
+        cc_rejects=$(dmesg 2>/dev/null | grep -c 'does not support confidential compute' || true)
+        cc_rejects=$((${cc_rejects:-0} + 0))
+        echo "$cc_rejects" > "$WORK_DIR/cc_driver_rejected.txt"
+        if [[ $cc_rejects -gt 0 ]]; then
+            err "dmesg: the driver rejected ${cc_rejects} GPU init(s) with 'CPU does not support confidential compute'"
+            err "  The GPU is in Confidential Computing mode (GPU-side state from a previous tenant)."
+            if [[ "${CC_SWITCHED:-0}" -gt 0 ]]; then
+                err "  This script switched it off on ${CC_SWITCHED} GPU(s) this run; the GPU reset was not enough. Re-run commissioning after a full reboot."
+            elif [[ "${CC_CHECKED:-false}" != "true" ]]; then
+                err "  The CC reset was skipped (${CC_SKIP_REASON:-unknown reason}), so nothing cleared it."
+            fi
+        fi
         dump_gpu_load_diagnostics "nvidia module loaded but nvidia-smi exit ${smi_rc}"
         return 1
     fi
@@ -1180,11 +1448,87 @@ output_report() {
             '. + [{"issue":"NVSwitch fabric not initialized (Fabric Manager missing/failed, state=\($s)) -- CUDA/DCGM will fail","severity":"critical"}]')
     fi
 
+    # Confidential Computing mode. Written by reset_confidential_compute
+    # before the driver loaded, so it is present whether or not the load
+    # worked; the dmesg count is added if the load failed.
+    local cc_json cc_rejected
+    cc_json=$(cat "$WORK_DIR/cc_mode.json" 2>/dev/null) \
+        || cc_json='{"checked":false,"skipped_reason":"check did not run","tool":null,"gpus":[],"switched_off_count":0,"not_off_count":0,"unknown_count":0}'
+    cc_rejected=$(cat "$WORK_DIR/cc_driver_rejected.txt" 2>/dev/null || echo 0)
+    cc_rejected=$((${cc_rejected:-0} + 0))
+    cc_json=$(printf '%s' "$cc_json" | jq --argjson n "$cc_rejected" '. + {driver_rejected_count: $n}')
+
+    local cc_checked cc_reason cc_switched cc_not_off cc_unknown
+    cc_checked=$(printf '%s' "$cc_json" | jq -r '.checked')
+    cc_reason=$(printf '%s' "$cc_json" | jq -r '.skipped_reason // ""')
+    cc_switched=$(printf '%s' "$cc_json" | jq -r '.switched_off_count // 0')
+    cc_not_off=$(printf '%s' "$cc_json" | jq -r '.not_off_count // 0')
+    cc_unknown=$(printf '%s' "$cc_json" | jq -r '.unknown_count // 0')
+
+    local revalidate="false"
+    if [[ "$cc_not_off" -gt 0 ]]; then
+        overall="FAIL"
+        local still
+        still=$(printf '%s' "$cc_json" | jq -r '[.gpus[] | select(.mode_after != "off" and .mode_after != "unknown") | "\(.bdf)=\(.mode_after)"] | join(", ")')
+        issues=$(echo "$issues" | jq --arg s "$still" --argjson n "$cc_not_off" \
+            '. + [{"issue":"\($n) GPU(s) are in Confidential Computing mode and could not be switched off (\($s)) -- the host driver refuses to initialise a CC-mode GPU and the next tenant would inherit bus encryption and disabled performance counters","severity":"critical"}]')
+    fi
+    if [[ "$cc_rejected" -gt 0 ]]; then
+        overall="FAIL"
+        local why
+        if [[ "$cc_checked" != "true" ]]; then
+            why="the CC reset was skipped (${cc_reason:-unknown reason})"
+        elif [[ "$cc_switched" -gt 0 ]]; then
+            why="it was switched off on ${cc_switched} GPU(s) this run and the GPU reset was not enough -- a full reboot is required"
+        else
+            why="gpu-admin-tools read it as off"
+        fi
+        issues=$(echo "$issues" | jq --arg w "$why" --argjson n "$cc_rejected" \
+            '. + [{"issue":"Driver rejected \($n) GPU init(s): NVRM \"CPU does not support confidential compute\" -- the GPU is in Confidential Computing mode; \($w)","severity":"critical"}]')
+    fi
+    if [[ "$cc_switched" -gt 0 ]]; then
+        # Same reasoning as ECC in script 91: the fix persists, the evidence
+        # from this run does not count. NVIDIA wants a full reboot after a CC
+        # switch; the next commissioning run is that reboot.
+        revalidate="true"
+        overall="FAIL"
+        local which
+        which=$(printf '%s' "$cc_json" | jq -r '[.gpus[] | select(.switched_off) | "\(.bdf) was \(.mode_before)"] | join(", ")')
+        issues=$(echo "$issues" | jq --arg s "$which" --argjson n "$cc_switched" \
+            '. + [{"issue":"Confidential Computing mode was ON on \($n) GPU(s), left by a previous tenant, and has been switched off by this script (\($s)). NVIDIA requires a full reboot after a CC mode switch before the GPU state can be trusted, so no evidence from this run can characterise these cards. Re-run commissioning.","severity":"critical"}]')
+        err "=============================================================="
+        err "  ACTION REQUIRED -- RE-RUN COMMISSIONING"
+        err "=============================================================="
+        err "  Confidential Computing mode was ON on ${cc_switched} GPU(s) and"
+        err "  has now been switched off (${which})."
+        err ""
+        err "  The mode is GPU-side state from a previous tenant. It is now"
+        err "  off and persists across reboots. NVIDIA requires a full host"
+        err "  reboot after a CC mode switch, which a commissioning run"
+        err "  cannot do without losing the driver it installed, so the"
+        err "  later scripts are halted and this machine must simply be"
+        err "  commissioned a second time; that run will produce valid"
+        err "  evidence on cleanly booted GPUs."
+        err "=============================================================="
+        printf 'Confidential Computing mode was ON on %s GPU(s) and has been switched off by script 90 (%s). NVIDIA requires a full reboot after a CC mode switch, so no evidence from this run is usable. Re-run commissioning.\n' \
+            "$cc_switched" "$which" > "$NEXGEN_HALT_FILE" 2>/dev/null \
+            || warn "could not write halt marker $NEXGEN_HALT_FILE -- later scripts will still run"
+    elif [[ "$cc_checked" != "true" && "$cc_rejected" -eq 0 ]]; then
+        [[ "$overall" != "FAIL" ]] && overall="WARN"
+        issues=$(echo "$issues" | jq --arg r "$cc_reason" \
+            '. + [{"issue":"Confidential Computing mode was not verified: \($r). A CC-mode GPU left by a previous tenant would be inherited by the next one","severity":"warning"}]')
+    elif [[ "$cc_unknown" -gt 0 ]]; then
+        [[ "$overall" != "FAIL" ]] && overall="WARN"
+        issues=$(echo "$issues" | jq --argjson n "$cc_unknown" \
+            '. + [{"issue":"Confidential Computing mode could not be read on \($n) GPU(s) (see gpu-admin-tools output in the script log)","severity":"warning"}]')
+    fi
+
     jq -n \
         --arg ver "$SCRIPT_VERSION" --arg name "gpu-install" \
         --arg ts "$test_end" --argjson dur "$duration" \
         --arg verdict "$overall" --argjson issues "$issues" \
         --argjson expected "$expected_gpus" --argjson actual "$actual_gpus" \
+        --argjson cc "$cc_json" --argjson revalidate "$revalidate" \
         --slurpfile install "$WORK_DIR/install_result.json" \
         '{
             report_metadata: {
@@ -1193,7 +1537,8 @@ output_report() {
                 gpu_count_expected: $expected, gpu_count_visible: $actual
             },
             verdict: {overall: $verdict, issues: $issues},
-            install: $install[0]
+            install: ($install[0] + {confidential_compute: $cc}),
+            revalidation_required: $revalidate
         }'
 
     log "=== INSTALL COMPLETE -- Verdict: $overall ==="
@@ -1232,6 +1577,13 @@ main() {
         exit 1
     fi
 
+    # A CC-mode switch this run voids the evidence of everything after it;
+    # the verdict above already says so and the halt marker is written.
+    if [[ "${CC_SWITCHED:-0}" -gt 0 ]]; then
+        rm -rf "$WORK_DIR"
+        exit 1
+    fi
+
     rm -rf "$WORK_DIR"
 
     log "=========================================="
@@ -1239,4 +1591,8 @@ main() {
     log "=========================================="
 }
 
-main "$@"
+# Guarded so the test suite can source the functions without running an
+# install; MAAS executes the file, where $0 is this script.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

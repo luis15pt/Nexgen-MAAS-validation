@@ -5,7 +5,7 @@
 The whole suite runs offline against fixtures and stub tooling — no GPU, no MAAS:
 
 ```bash
-./tests/run-all.sh          # everything: 339 assertions
+./tests/run-all.sh          # everything: 355 assertions
 ```
 
 `run-all.sh` is the entry point and invokes the rest, so its count is the total.
@@ -27,7 +27,12 @@ Each can also be run on its own when iterating on one area:
 
 `tests/stubs/` holds fixture-driven fakes for `nvidia-smi`, `dcgmi`,
 `dcgmproftester13`, `gpu_burn`, `dmesg`, `systemctl` and `lspci`, so the
-commissioning scripts run end to end on a machine with no GPU. `tests/stubs-hw/`
+commissioning scripts run end to end on a machine with no GPU. `tests/stubs-cc/`
+fakes NVIDIA's `nvidia_gpu_tools.py` (one CC mode per GPU, a mode that refuses
+to switch, a GPU the tool cannot read) plus `mokutil`, `lsmod` and an inert
+`modprobe`, so script `90`'s Confidential Computing stage runs against it; `90`
+guards its `main`, so the suite sources its functions rather than running an
+install. `tests/stubs-hw/`
 does the same for script `89`, and `tests/stubs-decomm/` for script `70` — an
 `nvme` that models `SANICAP` and the sanitise log, an `lsblk` that answers `-J`
 with a `TRAN` column, and a `findmnt` that can claim root is on a drive about to

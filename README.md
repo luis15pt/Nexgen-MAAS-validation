@@ -29,8 +29,8 @@ is installed, GPU inventory (`92`) before any load, then the DCGM diagnostic
 |---|---|---|---|
 | 80 | [`80-nexgen-network-cabling-verify.sh`](commissioning-scripts/80-nexgen-network-cabling-verify.sh) | `v1.1.0` | LLDP neighbours vs NetBox cabling — catches a cable in the neighbour port. [Docs](docs/scripts/80-network-cabling-verify.md) |
 | 89 | [`89-nexgen-hw-inventory.sh`](commissioning-scripts/89-nexgen-hw-inventory.sh) | `v1.5.0` | Chassis inventory — BMC, PSUs, drives, card serials. No BMC credentials needed. [Docs](docs/scripts/89-hw-inventory.md) |
-| 90 | [`90-nexgen-gpu-install-595-13.sh`](commissioning-scripts/90-nexgen-gpu-install-595-13.sh) | `v2.1.7` | Driver + CUDA 12.8 + DCGM 4.x + Fabric Manager. [Docs](docs/scripts/90-gpu-driver-install.md) |
-| 91 | [`91-nexgen-gpu-mig-ecc-config.sh`](commissioning-scripts/91-nexgen-gpu-mig-ecc-config.sh) | `v1.3.0` | Disable MIG, enable ECC. [Docs](docs/scripts/91-mig-ecc-config.md) |
+| 90 | [`90-nexgen-gpu-install-595-13.sh`](commissioning-scripts/90-nexgen-gpu-install-595-13.sh) | `v2.2.0` | Confidential Computing mode off, then driver + CUDA 12.8 + DCGM 4.x + Fabric Manager. [Docs](docs/scripts/90-gpu-driver-install.md) |
+| 91 | [`91-nexgen-gpu-mig-ecc-config.sh`](commissioning-scripts/91-nexgen-gpu-mig-ecc-config.sh) | `v1.4.0` | Disable MIG, enable ECC. [Docs](docs/scripts/91-mig-ecc-config.md) |
 | 92 | [`92-nexgen-gpu-inventory.sh`](commissioning-scripts/92-nexgen-gpu-inventory.sh) | `v2.4.1` | GPU inventory and the pre-load delivery baseline. [Docs](docs/scripts/92-gpu-inventory.md) |
 | 93 | [`93-nexgen-dcgm-level1.sh`](commissioning-scripts/93-nexgen-dcgm-level1.sh) | `v3.0.0` | DCGM level 1, software checks, seconds. [Docs](docs/scripts/93-96-dcgm-ladder.md) |
 | 94 | [`94-nexgen-dcgm-level2.sh`](commissioning-scripts/94-nexgen-dcgm-level2.sh) | `v3.0.0` | DCGM level 2, adds memory and PCIe. Skips if 93 failed. |
@@ -51,7 +51,8 @@ it shares their idioms and their JSON contract, not because it runs with them.
 Commission Machine in MAAS
          │
          ▼
-   90 - Install Drivers ──► nvidia-driver-595 + CUDA 12.8 + DCGM 4.x
+   90 - Install Drivers ──► CC mode off (gpu-admin-tools, before modprobe),
+         │                  nvidia-driver-595 + CUDA 12.8 + DCGM 4.x
          │                  + Fabric Manager (NVSwitch/NVL nodes)
          ▼
    91 - MIG / ECC Config ─► MIG off, ECC on (via --gpu-reset)

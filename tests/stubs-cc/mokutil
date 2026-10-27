@@ -1,0 +1,3 @@
+#!/bin/bash
+# STUB_SB=enabled|disabled (default disabled)
+echo "SecureBoot ${STUB_SB:-disabled}"

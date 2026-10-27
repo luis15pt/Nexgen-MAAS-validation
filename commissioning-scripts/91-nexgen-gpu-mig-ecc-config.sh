@@ -5,7 +5,7 @@
 # description: Disables MIG mode and enables ECC on all NVIDIA GPUs.
 #   Changes are written to GPU NVRAM, then activated via nvidia-smi --gpu-reset
 #   (no full reboot needed). Falls back to "pending reboot" if reset fails.
-#   Requires 90-nexgen-gpu-install to run first.
+#   Requires 90-nexgen-gpu-install to run first; skips if 90 halted the run.
 # script_type: commissioning
 # hardware_type: gpu
 # timeout: 00:05:00
@@ -22,9 +22,10 @@ trap 'warn "Command failed at line $LINENO (exit code $?)"' ERR
 WORK_DIR="/tmp/gpu-mig-ecc-$$"
 # Marker consulted by the later GPU scripts.  On tmpfs, so it cannot survive
 # into the next commissioning run -- which is the point: the second run must
-# proceed normally.
+# proceed normally. Script 90 writes it too (a Confidential Computing mode
+# switch), so an existing marker is honoured here, never cleared.
 NEXGEN_HALT_FILE="${NEXGEN_HALT_FILE:-/run/nexgen-commissioning-halt}"
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.4.0"
 
 ###############################################################################
 # LOGGING
@@ -34,7 +35,33 @@ warn() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN]  $*" >&2; }
 err()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >&2; }
 
 mkdir -p "$WORK_DIR"
-rm -f "$NEXGEN_HALT_FILE" 2>/dev/null || true
+
+###############################################################################
+# HALT GATE -- script 90 may already have voided this run
+###############################################################################
+halt_gate() {
+    [[ -f "$NEXGEN_HALT_FILE" ]] || return 0
+    local reason
+    reason=$(head -c 800 "$NEXGEN_HALT_FILE" 2>/dev/null | tr '\n' ' ')
+    err "=============================================================="
+    err "  SKIPPED -- commissioning halted by an earlier script"
+    err "=============================================================="
+    err "  $reason"
+    err ""
+    err "  This script is not running: the evidence it would collect"
+    err "  cannot be used. Re-run commissioning."
+    err "=============================================================="
+    jq -n --arg v "$SCRIPT_VERSION" --arg name "gpu-mig-ecc-config" --arg r "$reason" \
+        --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+        '{
+            report_metadata:{script_version:$v, script_name:$name, generated_at:$ts, duration_seconds:0},
+            verdict:{overall:"FAIL", issues:[{"issue":("Skipped -- " + $r),"severity":"critical"}]},
+            skipped:true, halt_reason:$r,
+            gpu_config:[], reboot_required:false, gpu_reset_failed:false,
+            revalidation_required:false, ecc_enabled_this_run:0
+        }'
+    exit 1
+}
 
 ###############################################################################
 # HELPER: Parse driver + CUDA from nvidia-smi header
@@ -376,6 +403,8 @@ output_report() {
 ###############################################################################
 main() {
     SCRIPT_START=$(date +%s)
+
+    halt_gate
 
     log "=========================================="
     log "NexGen GPU MIG/ECC Config v${SCRIPT_VERSION}"

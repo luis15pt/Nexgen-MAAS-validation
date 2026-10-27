@@ -1,4 +1,4 @@
-# 91 - MIG Disable & ECC Enable (`v1.3.0`)
+# 91 - MIG Disable & ECC Enable (`v1.4.0`)
 
 [← Back to README](../../README.md)
 
@@ -8,7 +8,12 @@ NVRAM, so the script writes them and then activates them with
 fails, the change is reported as *pending reboot* instead of being treated as
 an error.
 
-Requires script `90` to have run first.
+Requires script `90` to have run first. If `90` wrote the halt marker (it had
+to switch a GPU out of Confidential Computing mode, see
+[90-gpu-driver-install.md](90-gpu-driver-install.md)), this script skips with
+`skipped: true` exactly as `92`–`99` do, and leaves the marker in place. Earlier
+versions deleted the marker on entry, which would have let the rest of a voided
+run proceed.
 
 ## If ECC was disabled, this run is void
 

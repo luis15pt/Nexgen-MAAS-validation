@@ -3605,6 +3605,41 @@ def _acc_pcie_str(pcie, gpu):
     return s
 
 
+def describe_cc_mode(cc):
+    """One line on the GPU Confidential Computing check script 90 performs.
+
+    The mode is GPU-held state a previous tenant can leave behind; the host
+    driver refuses such a GPU and the next tenant would otherwise inherit bus
+    encryption and disabled performance counters. Reports from before v2.2.0
+    of script 90 carry no block at all, and that is said rather than shown as
+    off.
+    """
+    if not cc:
+        return "not checked (script 90 predates the check)"
+    if not cc.get("checked"):
+        return "not checked: " + str(cc.get("skipped_reason") or "unknown reason")
+    gpus = cc.get("gpus") or []
+    n = len(gpus)
+    switched = int_or_none(cc.get("switched_off_count")) or 0
+    not_off = int_or_none(cc.get("not_off_count")) or 0
+    unknown = int_or_none(cc.get("unknown_count")) or 0
+    rejected = int_or_none(cc.get("driver_rejected_count")) or 0
+    parts = []
+    if not_off:
+        still = ", ".join(f'{g.get("bdf")}={g.get("mode_after")}' for g in gpus
+                          if g.get("mode_after") not in ("off", "unknown", None))
+        parts.append(f"STILL ON for {not_off} of {n} GPU(s) ({still})")
+    if switched:
+        parts.append(f"switched off on {switched} of {n} GPU(s) this run (was on; run voided)")
+    if unknown:
+        parts.append(f"unreadable on {unknown} of {n} GPU(s)")
+    if rejected:
+        parts.append(f"driver rejected {rejected} GPU init(s) as CC-mode")
+    if not parts:
+        return f"off on all {n} GPU(s), verified before the driver loaded"
+    return "; ".join(parts)
+
+
 def generate_report(
     install: dict | None,
     inventory: dict | None,
@@ -3941,6 +3976,8 @@ def generate_report(
             ("CUDA", f'{escape(inst.get("cuda_package",""))} (reports {escape(inst.get("cuda_version","?"))})'),
             ("DCGM", f'v{escape(inst.get("dcgm_version","--"))}'),
         ]
+        sw_fields.append(("Confidential Computing", escape(describe_cc_mode(
+            inst.get("confidential_compute")))))
     else:
         drv = sys_info.get("nvidia_driver_version")
         cuda = sys_info.get("cuda_version")
@@ -4019,9 +4056,26 @@ def generate_report(
     # discovered inside a per-GPU detail block.
     action_html = ""
     revalidate = bool((config or {}).get("revalidation_required"))
+    # Script 90 voids a run the same way when it had to switch a GPU out of
+    # Confidential Computing mode: the fix persists, the evidence does not.
+    cc = inst.get("confidential_compute") or {}
+    cc_revalidate = bool((install or {}).get("revalidation_required")) \
+        or int_or_none(cc.get("switched_off_count")) not in (None, 0)
     skipped = [label for label, d in stages if d and d.get("skipped")]
-    if revalidate or skipped:
+    if revalidate or cc_revalidate or skipped:
         reasons = []
+        if cc_revalidate:
+            n_cc = cc.get("switched_off_count") or "one or more"
+            which = ", ".join(
+                f'{escape(str(g.get("bdf")))} was {escape(str(g.get("mode_before")))}'
+                for g in (cc.get("gpus") or []) if g.get("switched_off"))
+            reasons.append(
+                f"Confidential Computing mode was <strong>on</strong> on {escape(str(n_cc))} "
+                "GPU(s), left by a previous tenant, and was switched off during this run"
+                + (f" ({which})" if which else "") + ". The mode is held in the GPU and "
+                "survives reboots and reimaging. NVIDIA requires a full host reboot after a "
+                "CC mode switch before the GPU state can be trusted, so no evidence from "
+                "this run can characterise these cards.")
         if revalidate:
             n_ecc = (config or {}).get("ecc_enabled_this_run") or "one or more"
             reasons.append(
@@ -4034,8 +4088,11 @@ def generate_report(
             reasons.append(
                 "Skipped to save time: " + escape(", ".join(skipped))
                 + ". These stages did not run because their output could not have been used.")
+        fixed = "ECC is now enabled" if revalidate and not cc_revalidate else (
+            "CC mode is now off" if cc_revalidate and not revalidate else
+            "CC mode is now off and ECC is now enabled")
         reasons.append(
-            "ECC is now enabled and persists across reboots. Commission this machine a "
+            f"{fixed}, and the setting persists across reboots. Commission this machine a "
             "second time; that run will produce valid evidence. <strong>This report must "
             "not be used as an acceptance certificate.</strong>")
         body = "".join(f"<p>{r}</p>" for r in reasons)

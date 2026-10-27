@@ -1,0 +1,4 @@
+#!/bin/bash
+# STUB_LSMOD lists module names to report loaded (space-separated).
+echo "Module                  Size  Used by"
+for m in ${STUB_LSMOD:-}; do printf '%-24s 1234  0\n' "$m"; done
